@@ -1,6 +1,7 @@
 import os
 import queue
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from tkinter import *
@@ -16,12 +17,20 @@ from .bad_image_viewer import BadImageViewer
 class LotteImageTab(Frame):
     def __init__(self, master, root):
         super().__init__(master, bg=BG)
-        self.root    = root
+        self.root     = root
         self._worker  = None
         self._thread  = None
         self._log_q   = queue.Queue()
         self._stat_q  = queue.Queue()
-        self._running = False   # True chỉ khi worker đang chạy
+        self._running = False
+        self._paused  = False
+        self._pause_event = threading.Event()
+        self._pause_event.set()
+        self._failed_items = []
+        self._run_start_time = None
+        self._done_count = 0
+        self._total_estimate = 0
+        self._last_stat = {}
         self._build()
         self._poll()
 
@@ -44,6 +53,7 @@ class LotteImageTab(Frame):
         self._build_settings(body)
         self._build_controls(body)
         self._build_progress(body)
+        self._build_dashboard(body)
         self._build_log(body)
 
     def _sep(self, parent, text):
@@ -130,7 +140,6 @@ class LotteImageTab(Frame):
                     activebackground=BG, font=F_MAIN).grid(
             row=0, column=6, padx=(14, 0))
 
-        # Row 1 — giới hạn lưu ảnh
         Label(f, text="Max ảnh/làn:", bg=BG, fg=TEXT, font=F_MAIN).grid(
             row=1, column=0, padx=(0, 4), sticky=W, pady=(6, 0))
         self.max_per_lane_var = IntVar(value=1000)
@@ -165,7 +174,6 @@ class LotteImageTab(Frame):
               font=("Segoe UI", 7), fg=DIM, bg=BG).grid(
             row=2, column=0, columnspan=7, sticky=W, pady=(3, 0))
 
-        # Phân loại phương tiện
         self._sep(p, "Phân loại phương tiện")
         fv = Frame(p, bg=BG)
         fv.pack(fill=X)
@@ -188,15 +196,17 @@ class LotteImageTab(Frame):
         Label(p, text="Nhiều từ khóa cách nhau bởi dấu phẩy  •  Ô tô = mặc định nếu không khớp từ khóa nào",
               font=("Segoe UI", 8), fg=DIM, bg=BG, anchor=W).pack(fill=X, pady=(2, 6))
 
-        adv_bar = Frame(p, bg=BG)
-        adv_bar.pack(fill=X, pady=(5, 0))
+        adv_wrapper = Frame(p, bg=BG)
+        adv_wrapper.pack(fill=X, pady=(5, 0))
         self._adv_open = False
+        adv_bar = Frame(adv_wrapper, bg=BG)
+        adv_bar.pack(fill=X)
         self._adv_lbl  = Label(adv_bar, text="▶ Nâng cao (API / MinIO)",
                                font=("Segoe UI", 8, "underline"),
                                fg=ACCENT2, bg=BG, cursor="hand2")
         self._adv_lbl.pack(anchor=W)
         self._adv_lbl.bind("<Button-1>", self._toggle_adv)
-        self._adv_frame = Frame(p, bg=CARD, bd=1, relief="flat", padx=8, pady=6)
+        self._adv_frame = Frame(adv_wrapper, bg=CARD, bd=1, relief="flat", padx=8, pady=6)
         self._build_adv(self._adv_frame)
 
     def _build_adv(self, p):
@@ -250,13 +260,27 @@ class LotteImageTab(Frame):
             bg=DIM, fg=BG, font=F_BOLD,
             relief="flat", padx=22, pady=7,
             state=DISABLED, cursor="hand2")
-        self.stop_btn.pack(side=LEFT)
+        self.stop_btn.pack(side=LEFT, padx=(0, 8))
+        self.pause_btn = Button(
+            f, text="⏸  Tạm dừng", command=self._toggle_pause,
+            bg=CARD, fg=TEXT, font=F_BOLD,
+            activebackground=ACCENT2, activeforeground="white",
+            relief="flat", padx=16, pady=7,
+            state=DISABLED, cursor="hand2")
+        self.pause_btn.pack(side=LEFT, padx=(0, 8))
+        self.retry_btn = Button(
+            f, text="↺  Thử lại lỗi", command=self._retry_failed,
+            bg=CARD, fg=TEXT, font=F_BOLD,
+            activebackground=ACCENT, activeforeground="white",
+            relief="flat", padx=16, pady=7,
+            state=DISABLED, cursor="hand2")
+        self.retry_btn.pack(side=LEFT, padx=(0, 8))
         Button(
             f, text="Thống kê", command=self._show_stats,
             bg=ACCENT2, fg="white", font=F_BOLD,
             activebackground="#5a4fa0", activeforeground="white",
             relief="flat", padx=18, pady=7, cursor="hand2",
-        ).pack(side=LEFT, padx=(8, 0))
+        ).pack(side=LEFT, padx=(0, 0))
         self.collect_bad_var = BooleanVar(value=False)
         _bind_cfg("lotte.collect_bad", self.collect_bad_var)
         Checkbutton(
@@ -271,6 +295,13 @@ class LotteImageTab(Frame):
             activebackground="#5a4fa0", activeforeground="white",
             relief="flat", padx=12, pady=4, cursor="hand2",
         ).pack(side=LEFT, padx=(8, 0))
+        self.merge_btn = Button(
+            f, text="Tổng hợp", command=self._consolidate,
+            bg="#251C53", fg="white", font=F_MAIN,
+            activebackground=ACCENT2, activeforeground="white",
+            relief="flat", padx=12, pady=4, cursor="hand2",
+        )
+        self.merge_btn.pack(side=LEFT, padx=(8, 0))
         self.status_lbl = Label(f, text="Sẵn sàng",
                                 font=F_MAIN, fg=ACCENT2, bg=BG)
         self.status_lbl.pack(side=RIGHT)
@@ -278,15 +309,71 @@ class LotteImageTab(Frame):
     def _build_progress(self, p):
         self._sep(p, "Tiến độ")
         f = Frame(p, bg=BG)
-        f.pack(fill=X, pady=(0, 4))
-        self.pbar = ttk.Progressbar(f, mode="indeterminate",
-                                    style="K.Horizontal.TProgressbar")
-        self.pbar.pack(side=LEFT, fill=X, expand=True, padx=(0, 12))
+        f.pack(fill=X, pady=(0, 2))
+
+        pbar_frame = Frame(f, bg=BG)
+        pbar_frame.pack(fill=X)
+        self.pbar = ttk.Progressbar(pbar_frame, mode="determinate",
+                                    style="K.Horizontal.TProgressbar",
+                                    maximum=100)
+        self.pbar.pack(side=LEFT, fill=X, expand=True, padx=(0, 8))
+        self.pct_lbl = Label(pbar_frame, text="0%", font=F_MONO,
+                             fg=ACCENT, bg=BG, width=5, anchor=E)
+        self.pct_lbl.pack(side=LEFT)
+        self.eta_lbl = Label(pbar_frame, text="ETA: --:--", font=F_MONO,
+                             fg=DIM, bg=BG, width=12, anchor=W)
+        self.eta_lbl.pack(side=LEFT, padx=(6, 0))
+
+        detail_row = Frame(f, bg=BG)
+        detail_row.pack(fill=X, pady=(2, 0))
+        self.item_lbl = Label(detail_row, text="", font=F_MONO,
+                              fg=DIM, bg=BG, anchor=W)
+        self.item_lbl.pack(side=LEFT)
+
         self.stat_lbl = Label(
             f,
             text="Trang: 0  |  SK: 0  |  Tìm: 0  |  Lưu: 0  |  Bỏ qua: 0  |  Lỗi: 0",
             font=F_MONO, fg=TEXT, bg=BG)
-        self.stat_lbl.pack(side=LEFT)
+        self.stat_lbl.pack(anchor=W, pady=(2, 0))
+
+    def _build_dashboard(self, p):
+        self._dash_frame = Frame(p, bg=CARD, padx=10, pady=6)
+        self._dash_visible = False
+
+    def _show_dashboard(self, s):
+        if not self._dash_visible:
+            self._dash_frame.pack(fill=X, pady=(4, 2))
+            self._dash_visible = True
+        for w in self._dash_frame.winfo_children():
+            w.destroy()
+        Label(self._dash_frame, text="Kết quả lần chạy",
+              font=("Segoe UI", 9, "bold"), fg=ACCENT2, bg=CARD).pack(anchor=W)
+        row = Frame(self._dash_frame, bg=CARD)
+        row.pack(fill=X, pady=(4, 0))
+        items = [
+            ("Tổng SK",    s.get("event", 0),   TEXT),
+            ("Tìm thấy",   s.get("found", 0),   TEXT),
+            ("Đã lưu",     s.get("saved", 0),   "#4caf50"),
+            ("Bỏ qua",     s.get("skipped", 0), DIM),
+            ("Lỗi",        s.get("error", 0),   "#ff8844"),
+            ("Ảnh xấu",    s.get("bad_saved", 0), ACCENT2),
+        ]
+        for label, val, color in items:
+            cell = Frame(row, bg="#251C53", padx=8, pady=4)
+            cell.pack(side=LEFT, padx=(0, 6))
+            Label(cell, text=str(val), font=("Segoe UI Semibold", 13),
+                  fg=color, bg="#251C53").pack()
+            Label(cell, text=label, font=("Segoe UI", 8),
+                  fg=DIM, bg="#251C53").pack()
+        if self._failed_items:
+            Label(self._dash_frame,
+                  text=f"{len(self._failed_items)} ảnh lỗi — nhấn 'Thử lại lỗi' để tải lại",
+                  font=("Segoe UI", 8), fg="#ff8844", bg=CARD).pack(anchor=W, pady=(4, 0))
+
+    def _hide_dashboard(self):
+        if self._dash_visible:
+            self._dash_frame.pack_forget()
+            self._dash_visible = False
 
     def _build_log(self, p):
         self._sep(p, "Nhật ký")
@@ -316,6 +403,61 @@ class LotteImageTab(Frame):
                                     initialdir=_cfg_dir("lotte.out"))
         if d:
             self.out_var.set(d)
+
+    # ── pause/resume ──────────────────────────────────────────────────────────
+
+    def _toggle_pause(self):
+        if not self._running:
+            return
+        if self._paused:
+            self._paused = False
+            self._pause_event.set()
+            self.pause_btn.config(text="⏸  Tạm dừng", fg=TEXT)
+            self.status_lbl.config(text="Đang chạy...", fg=ACCENT)
+            self._log("Tiếp tục...")
+        else:
+            self._paused = True
+            self._pause_event.clear()
+            self.pause_btn.config(text="▶  Tiếp tục", fg=ACCENT)
+            self.status_lbl.config(text="Tạm dừng", fg="#ffaa00")
+            self._log("Tạm dừng — đang chờ item hiện tại hoàn tất...")
+
+    # ── retry failed ──────────────────────────────────────────────────────────
+
+    def _retry_failed(self):
+        if not self._failed_items:
+            return
+        if self._running:
+            messagebox.showwarning("Đang chạy", "Vui lòng chờ lần chạy hiện tại kết thúc.")
+            return
+        items = list(self._failed_items)
+        self._failed_items.clear()
+        self.retry_btn.config(state=DISABLED)
+        self._hide_dashboard()
+        cfg = self._last_cfg.copy() if hasattr(self, "_last_cfg") else {}
+        cfg["retry_items"] = items
+        for _q in (self._log_q, self._stat_q):
+            while True:
+                try: _q.get_nowait()
+                except queue.Empty: break
+        self._running = True
+        self._paused  = False
+        self._pause_event.set()
+        self._run_start_time = time.monotonic()
+        self._done_count = 0
+        self._total_estimate = len(items)
+        self.start_btn.config(state=DISABLED)
+        self.stop_btn.config(state=NORMAL)
+        self.pause_btn.config(state=NORMAL, text="⏸  Tạm dừng", fg=TEXT)
+        self.pbar.config(value=0)
+        self.pct_lbl.config(text="0%")
+        self.eta_lbl.config(text="ETA: --:--")
+        self.status_lbl.config(text="Thử lại lỗi...", fg=ACCENT)
+        self._log(f"Thử lại {len(items)} ảnh lỗi...")
+        self._worker = LotteWorker(cfg, self._log_q, self._stat_q,
+                                   pause_event=self._pause_event)
+        self._thread = threading.Thread(target=self._run_worker, daemon=True)
+        self._thread.start()
 
     # ── Thống kê ─────────────────────────────────────────────────────────────
 
@@ -351,7 +493,6 @@ class LotteImageTab(Frame):
         self._stats_out  = out
         self._stats_view = StringVar(value="table")
 
-        # ── toolbar ──
         tb = Frame(win, bg=CARD, padx=10, pady=6)
         tb.pack(fill=X)
         Button(tb, text="Làm mới", command=self._stats_rebuild,
@@ -446,7 +587,6 @@ class LotteImageTab(Frame):
         return tree
 
     def _make_chart(self, parent, draw_fn):
-        """Embed matplotlib figure. Falls back to message if not installed."""
         try:
             from matplotlib.figure import Figure
             from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -467,8 +607,6 @@ class LotteImageTab(Frame):
             Label(parent,
                   text="Cần cài matplotlib:\n  pip install matplotlib",
                   bg=BG, fg=DIM, font=F_MAIN, justify=CENTER).pack(expand=True)
-
-    # ── Tab 1: Làn × Loại xe ─────────────────────────────────────────────────
 
     def _stats_tab_summary(self, nb, data, is_chart):
         VTYPES = ["toan_canh", "xe_may", "xe_dap", "o_to"]
@@ -511,8 +649,6 @@ class LotteImageTab(Frame):
                              color="#d4d4d4", fontsize=10)
             self._make_chart(tab, draw)
 
-    # ── Tab 2: Theo ngày ─────────────────────────────────────────────────────
-
     def _stats_tab_date(self, nb, data, is_chart):
         lanes = sorted({l for d in data["date"].values() for l in d})
         dates = sorted(data["date"])
@@ -551,8 +687,6 @@ class LotteImageTab(Frame):
                                    fontsize=7, color="#d4d4d4")
                 ax.set_title("Số ảnh theo ngày", color="#d4d4d4", fontsize=10)
             self._make_chart(tab, draw)
-
-    # ── Tab 3: Theo giờ ──────────────────────────────────────────────────────
 
     def _stats_tab_hour(self, nb, data, is_chart):
         lanes = sorted({l for h in data["hour"].values() for l in h})
@@ -596,13 +730,12 @@ class LotteImageTab(Frame):
 
     # ─────────────────────────────────────────────────────────────────────────
 
-    _LOG_MAX = 1000  # số dòng tối đa
+    _LOG_MAX = 1000
 
     def _log(self, msg):
         self.log_txt.configure(state=NORMAL)
         ts = datetime.now().strftime("%H:%M:%S")
         self.log_txt.insert(END, f"[{ts}] {msg}\n")
-        # xoá dòng cũ nếu vượt giới hạn
         lines = int(self.log_txt.index("end-1c").split(".")[0])
         if lines > self._LOG_MAX:
             self.log_txt.delete("1.0", f"{lines - self._LOG_MAX}.0")
@@ -651,20 +784,34 @@ class LotteImageTab(Frame):
             "kw_xe_dap":    self.kw_xe_dap.get().strip(),
             "kw_o_to":      self.kw_o_to.get().strip(),
         }
-        # xoá message cũ còn sót từ lần chạy trước
+        self._last_cfg = cfg
+        self._failed_items.clear()
+        self.retry_btn.config(state=DISABLED)
+        self._hide_dashboard()
+
         for _q in (self._log_q, self._stat_q):
             while True:
                 try: _q.get_nowait()
                 except queue.Empty: break
 
         self._running = True
+        self._paused  = False
+        self._pause_event.set()
+        self._run_start_time = time.monotonic()
+        self._done_count = 0
+        self._total_estimate = 0
         self.start_btn.config(state=DISABLED)
         self.stop_btn.config(state=NORMAL)
-        self.pbar.start(12)
+        self.pause_btn.config(state=NORMAL, text="⏸  Tạm dừng", fg=TEXT)
+        self.pbar.config(value=0)
+        self.pct_lbl.config(text="0%")
+        self.eta_lbl.config(text="ETA: --:--")
+        self.item_lbl.config(text="")
         self.status_lbl.config(text="Đang chạy...", fg=ACCENT)
         self._log(f"Bắt đầu: {from_d}  →  {to_d}")
         self._log(f"Lưu vào: {out}")
-        self._worker = LotteWorker(cfg, self._log_q, self._stat_q)
+        self._worker = LotteWorker(cfg, self._log_q, self._stat_q,
+                                   pause_event=self._pause_event)
         self._thread = threading.Thread(target=self._run_worker, daemon=True)
         self._thread.start()
 
@@ -679,19 +826,83 @@ class LotteImageTab(Frame):
         if self._worker:
             self._worker.stop()
         self._running = False
+        self._paused  = False
+        self._pause_event.set()
         self.stop_btn.config(state=DISABLED)
+        self.pause_btn.config(state=DISABLED, text="⏸  Tạm dừng", fg=TEXT)
         self.start_btn.config(state=NORMAL)
         self.pbar.stop()
+        self.pbar.config(value=0)
+        self.pct_lbl.config(text="0%")
+        self.eta_lbl.config(text="ETA: --:--")
+        self.item_lbl.config(text="")
         self.status_lbl.config(text="Đã dừng", fg=DIM)
 
     def _on_done(self):
-        if not self._running:   # user đã bấm Dừng → đã reset rồi
+        if not self._running:
             return
         self._running = False
-        self.pbar.stop()
+        self._paused  = False
+        self._pause_event.set()
+        self.pbar.config(value=100)
+        self.pct_lbl.config(text="100%")
+        self.eta_lbl.config(text="ETA: 00:00")
+        self.item_lbl.config(text="")
         self.start_btn.config(state=NORMAL)
         self.stop_btn.config(state=DISABLED)
+        self.pause_btn.config(state=DISABLED, text="⏸  Tạm dừng", fg=TEXT)
         self.status_lbl.config(text="Hoàn thành", fg=ACCENT2)
+        if self._failed_items:
+            self.retry_btn.config(
+                state=NORMAL,
+                text=f"↺  Thử lại {len(self._failed_items)} lỗi")
+        self._show_dashboard(self._last_stat)
+
+    def _update_progress(self, s):
+        saved   = s.get("saved", 0)
+        found   = s.get("found", 0)
+        total   = s.get("total_found", found) or found
+        self._last_stat = s
+
+        current = s.get("current_item", "")
+        if current:
+            self.item_lbl.config(text=f"Đang xử lý: {current}")
+
+        failed = s.get("failed_items")
+        if failed:
+            for item in failed:
+                if item not in self._failed_items:
+                    self._failed_items.append(item)
+
+        if total > 0:
+            pct = min(int(saved * 100 / total), 99)
+            self.pbar.config(value=pct)
+            self.pct_lbl.config(text=f"{pct}%")
+            elapsed = time.monotonic() - self._run_start_time
+            if saved > 0:
+                eta_sec = int(elapsed / saved * (total - saved))
+                m, sec = divmod(eta_sec, 60)
+                self.eta_lbl.config(text=f"ETA: {m:02d}:{sec:02d}")
+        else:
+            page = s.get("page", 0)
+            if page > 0:
+                pct = min(page % 100, 99)
+                self.pbar.config(value=pct)
+                self.pct_lbl.config(text=f"~{pct}%")
+
+    # ── Tổng hợp ảnh ─────────────────────────────────────────────────────────
+
+    def _consolidate(self):
+        from .lotte_consolidate import ConsolidateWindow
+        out = Path(self.out_var.get().strip())
+        if not out.exists():
+            messagebox.showerror("Lỗi", "Thư mục không tồn tại."); return
+        if hasattr(self, "_consolidate_win") and self._consolidate_win.winfo_exists():
+            self._consolidate_win.lift()
+            return
+        self._consolidate_win = ConsolidateWindow(self.root, out)
+
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _poll(self):
         try:
@@ -706,6 +917,7 @@ class LotteImageTab(Frame):
         try:
             while True:
                 s = self._stat_q.get_nowait()
+                self._update_progress(s)
                 day_info = (
                     f"Ngày: {s['day_label']} ({s['day_idx']}/{s['total_days']})  |  "
                     if s.get("total_days") else "")

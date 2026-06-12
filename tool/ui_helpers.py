@@ -13,10 +13,10 @@ def _style_all():
     s.configure("K.Horizontal.TProgressbar",
                 troughcolor=CARD, background=ACCENT,
                 bordercolor=BG, lightcolor=ACCENT, darkcolor=ACCENT)
-    s.configure("Dark.TNotebook",       background=BG, borderwidth=0)
-    s.configure("Dark.TNotebook.Tab",   background=CARD, foreground=DIM,
-                padding=[18, 8], font=F_BOLD)
-    s.map("Dark.TNotebook.Tab",
+    s.configure("TNotebook",       background=BG, borderwidth=0)
+    s.configure("TNotebook.Tab",   background=CARD, foreground=DIM,
+                padding=[6, 6], font=F_BOLD)
+    s.map("TNotebook.Tab",
           background=[("selected", ACCENT2)],
           foreground=[("selected", "white")])
     s.configure("Dark.Treeview",

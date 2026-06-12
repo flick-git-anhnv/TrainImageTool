@@ -1,3 +1,4 @@
+import csv
 import threading
 from pathlib import Path
 from tkinter import *
@@ -19,15 +20,19 @@ class OcrTab(Frame):
         self.root = root
         self._files   = []
         self._results = []
+        self._raw_detections = []
         self._ocr_engine = None
         self._running = False
         self._cur_preview = None
+        self._roi = None
 
-        self.v_lang    = StringVar(value="vi")
-        self.v_use_gpu = BooleanVar(value=False)
-        self.v_angle   = BooleanVar(value=True)
-        self.v_clean   = BooleanVar(value=True)
-        self.v_out_dir = StringVar()
+        self.v_lang       = StringVar(value="vi")
+        self.v_use_gpu    = BooleanVar(value=False)
+        self.v_angle      = BooleanVar(value=True)
+        self.v_clean      = BooleanVar(value=True)
+        self.v_out_dir    = StringVar()
+        self.v_gt_dir     = StringVar()
+        self.v_conf_thresh = DoubleVar(value=0.0)
         _bind_cfg("ocr.out_dir", self.v_out_dir)
 
         self._build()
@@ -126,6 +131,27 @@ class OcrTab(Frame):
 
         Frame(parent, bg=ACCENT2, height=1).pack(fill=X, pady=8)
 
+        conf_row = Frame(parent, bg=BG)
+        conf_row.pack(fill=X, pady=3)
+        Label(conf_row, text="Ngưỡng confidence:", bg=BG, fg=TEXT,
+              font=F_MAIN, anchor=W).pack(side=LEFT)
+        self.lbl_conf_val = Label(conf_row, text="0.00", bg=BG, fg=ACCENT,
+                                  font=F_MONO, width=5)
+        self.lbl_conf_val.pack(side=RIGHT)
+        self.scale_conf = Scale(
+            parent, variable=self.v_conf_thresh,
+            from_=0.0, to=1.0, resolution=0.01,
+            orient=HORIZONTAL, bg=BG, fg=TEXT,
+            troughcolor=CARD, highlightthickness=0,
+            activebackground=ACCENT, showvalue=False,
+            command=self._on_conf_change)
+        self.scale_conf.pack(fill=X, pady=(0, 2))
+        self.lbl_filtered = Label(parent, text="", bg=BG, fg=DIM,
+                                  font=("Segoe UI", 9), anchor=W)
+        self.lbl_filtered.pack(fill=X)
+
+        Frame(parent, bg=ACCENT2, height=1).pack(fill=X, pady=8)
+
         Label(parent, text="Output folder (để trống = ghi cạnh ảnh):",
               bg=BG, fg=TEXT, font=F_MAIN, anchor=W).pack(fill=X)
         orw = Frame(parent, bg=BG)
@@ -139,6 +165,29 @@ class OcrTab(Frame):
         Button(orw, text="✕", command=lambda: self.v_out_dir.set(""),
                bg=CARD, fg=DIM, relief="flat", padx=6, pady=3,
                cursor="hand2").pack(side=LEFT)
+
+        Frame(parent, bg=ACCENT2, height=1).pack(fill=X, pady=8)
+
+        Label(parent, text="So sánh GT — folder chứa .txt GT:",
+              bg=BG, fg=TEXT, font=F_MAIN, anchor=W).pack(fill=X)
+        grw = Frame(parent, bg=BG)
+        grw.pack(fill=X, pady=2)
+        Button(grw, text="📁", command=self._browse_gt,
+               bg=CARD, fg=TEXT, relief="flat", padx=6, pady=3,
+               cursor="hand2").pack(side=LEFT)
+        Entry(grw, textvariable=self.v_gt_dir, bg="#16162a", fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).pack(
+              side=LEFT, fill=X, expand=True, padx=4)
+        Button(grw, text="✕", command=lambda: self.v_gt_dir.set(""),
+               bg=CARD, fg=DIM, relief="flat", padx=6, pady=3,
+               cursor="hand2").pack(side=LEFT)
+        self.btn_compare = Button(parent, text="📊  So sánh GT",
+                                  command=self._compare_gt,
+                                  bg=ACCENT2, fg="white",
+                                  activebackground=ACCENT, activeforeground="white",
+                                  font=F_BOLD, relief="flat", padx=10, pady=5,
+                                  cursor="hand2")
+        self.btn_compare.pack(fill=X, pady=(4, 0))
 
         Frame(parent, bg=ACCENT2, height=1).pack(fill=X, pady=8)
 
@@ -219,6 +268,14 @@ class OcrTab(Frame):
         self.lbl_prev_text = Label(prev_hdr, text="", bg="#0d0d1e",
                                    fg=ACCENT, font=("Consolas", 11, "bold"))
         self.lbl_prev_text.pack(side=LEFT, padx=12)
+        self.btn_roi = Button(prev_hdr, text="✂  Chọn vùng ROI",
+                              command=self._open_roi_selector,
+                              bg=CARD, fg=TEXT, font=F_MAIN, relief="flat",
+                              padx=8, pady=2, cursor="hand2")
+        self.btn_roi.pack(side=RIGHT, padx=4)
+        self.lbl_roi = Label(prev_hdr, text="", bg="#0d0d1e", fg=DIM,
+                             font=("Segoe UI", 9))
+        self.lbl_roi.pack(side=RIGHT, padx=4)
         self.canvas_prev = Canvas(pf, bg="#0a0a18", height=155, highlightthickness=0)
         self.canvas_prev.pack(fill=X, padx=6, pady=(2, 6))
 
@@ -233,10 +290,15 @@ class OcrTab(Frame):
                command=self._copy_results,
                bg=CARD, fg=TEXT, font=F_MAIN, relief="flat",
                padx=10, pady=6, cursor="hand2").pack(side=LEFT, padx=6)
+        Button(brw, text="📊  Xuất CSV",
+               command=self._export_csv,
+               bg=ACCENT2, fg="white",
+               activebackground=ACCENT, activeforeground="white",
+               font=F_BOLD, relief="flat", padx=10, pady=6, cursor="hand2").pack(side=LEFT)
         Button(brw, text="🗑  Xóa kết quả",
                command=self._clear_results,
                bg=CARD, fg=DIM, font=F_MAIN, relief="flat",
-               padx=10, pady=6, cursor="hand2").pack(side=LEFT)
+               padx=10, pady=6, cursor="hand2").pack(side=LEFT, padx=6)
 
         self.lbl_status = Label(parent, text="", bg=BG, fg=DIM,
                                 font=("Segoe UI", 9), anchor=W)
@@ -378,11 +440,33 @@ class OcrTab(Frame):
 
         total   = len(self._files)
         results = []
+        raw_detections = []
         for i, img_path in enumerate(self._files):
             self.after(0, self._update_prog, i, total, img_path.name)
             try:
-                raw  = ocr.predict(str(img_path))
-                text, conf = self._extract_text(raw)
+                roi = self._roi
+                if roi is not None:
+                    try:
+                        from PIL import Image as _PILImage
+                        import numpy as _np
+                        import cv2 as _cv2
+                        orig = _PILImage.open(str(img_path)).convert("RGB")
+                        rx1, ry1, rx2, ry2 = roi
+                        cropped = orig.crop((rx1, ry1, rx2, ry2))
+                        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as _f:
+                            tmp_roi = _f.name
+                        cropped.save(tmp_roi)
+                        raw = ocr.predict(tmp_roi)
+                        try: _os.unlink(tmp_roi)
+                        except Exception: pass
+                        text, conf, dets = self._extract_text_full(raw, offset=(rx1, ry1))
+                    except Exception as _roi_err:
+                        raw = ocr.predict(str(img_path))
+                        text, conf, dets = self._extract_text_full(raw)
+                else:
+                    raw  = ocr.predict(str(img_path))
+                    text, conf, dets = self._extract_text_full(raw)
+
                 if conf < 0.75 or not text.strip():
                     enhanced = self._auto_enhance(str(img_path))
                     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as _f:
@@ -390,9 +474,9 @@ class OcrTab(Frame):
                     try:
                         enhanced.save(tmp)
                         raw2 = ocr.predict(tmp)
-                        text2, conf2 = self._extract_text(raw2)
+                        text2, conf2, dets2 = self._extract_text_full(raw2)
                         if conf2 > conf or (not text.strip() and text2.strip()):
-                            text, conf = text2, conf2
+                            text, conf, dets = text2, conf2, dets2
                     finally:
                         try: _os.unlink(tmp)
                         except Exception: pass
@@ -401,10 +485,12 @@ class OcrTab(Frame):
                 if self.v_clean.get() and not text.startswith("["):
                     text = self._clean_text(text)
             except Exception as e:
-                text, conf = f"[Lỗi: {e}]", 0.0
+                text, conf, dets = f"[Lỗi: {e}]", 0.0, []
             results.append((img_path, text, conf))
+            raw_detections.append((img_path, dets))
 
         self._results = results
+        self._raw_detections = raw_detections
         self.after(0, self._populate_tree)
         self.after(0, self._done)
 
@@ -444,9 +530,15 @@ class OcrTab(Frame):
 
     @staticmethod
     def _extract_text(ocr_result):
-        lines, confs = [], []
+        text, conf, _ = OcrTab._extract_text_full(ocr_result)
+        return text, conf
+
+    @staticmethod
+    def _extract_text_full(ocr_result, offset=(0, 0)):
+        lines, confs, dets = [], [], []
+        ox, oy = offset
         if not ocr_result:
-            return "", 0.0
+            return "", 0.0, []
         for page in ocr_result:
             if page is None: continue
             try:
@@ -460,10 +552,22 @@ class OcrTab(Frame):
                     except Exception:
                         return 0.0
                 items = sorted(zip(polys, texts, scores), key=lambda x: _min_y(x[0]))
-                for _, t, c in items:
+                for poly, t, c in items:
                     s = str(t).strip()
                     if s:
-                        lines.append(s); confs.append(float(c))
+                        lines.append(s)
+                        confs.append(float(c))
+                        try:
+                            import numpy as np
+                            arr = np.asarray(poly)
+                            x1 = int(arr[:, 0].min()) + ox
+                            y1 = int(arr[:, 1].min()) + oy
+                            x2 = int(arr[:, 0].max()) + ox
+                            y2 = int(arr[:, 1].max()) + oy
+                        except Exception:
+                            x1 = y1 = x2 = y2 = 0
+                        dets.append({"text": s, "conf": float(c),
+                                     "x1": x1, "y1": y1, "x2": x2, "y2": y2})
                 continue
             except (KeyError, TypeError):
                 pass
@@ -474,9 +578,17 @@ class OcrTab(Frame):
                     s = str(t).strip()
                     if s:
                         lines.append(s); confs.append(float(c))
+                        dets.append({"text": s, "conf": float(c),
+                                     "x1": 0, "y1": 0, "x2": 0, "y2": 0})
         text     = " ".join(lines)
         avg_conf = sum(confs) / len(confs) if confs else 0.0
-        return text, avg_conf
+        return text, avg_conf, dets
+
+    def _on_conf_change(self, val=None):
+        v = self.v_conf_thresh.get()
+        self.lbl_conf_val.config(text=f"{v:.2f}")
+        if self._results:
+            self._populate_tree()
 
     def _update_prog(self, i, total, name):
         self.pb["value"] = int(i / total * 100)
@@ -489,10 +601,15 @@ class OcrTab(Frame):
         self.lbl_prog.config(text=f"Hoàn thành — {len(self._results)} ảnh")
 
     def _populate_tree(self):
+        thresh = self.v_conf_thresh.get()
         self.tree.delete(*self.tree.get_children())
         has_text   = 0
         total_conf = 0.0
+        filtered   = 0
         for img_path, text, conf in self._results:
+            if conf > 0 and conf < thresh and not text.startswith("["):
+                filtered += 1
+                continue
             if conf >= 0.90:   tag = "hi"
             elif conf >= 0.70: tag = "mid"
             elif conf > 0:     tag = "lo"
@@ -507,6 +624,11 @@ class OcrTab(Frame):
         self.lbl_count.config(text=f"  {n} ảnh")
         self.lbl_stats.config(
             text=f"│  {has_text} có text  │  avg {avg:.0%}" if has_text else "")
+        if filtered > 0:
+            self.lbl_filtered.config(
+                text=f"Đã lọc {filtered} kết quả dưới ngưỡng {thresh:.2f}", fg=ACCENT)
+        else:
+            self.lbl_filtered.config(text="")
 
     def _on_select(self, event):
         sel = self.tree.selection()
@@ -597,6 +719,38 @@ class OcrTab(Frame):
                                 f"Đã ghi gt.txt vào {n_f} folder.\nTổng {n_i} ảnh.",
                                 parent=self)
 
+    def _export_csv(self):
+        if not self._raw_detections:
+            messagebox.showinfo("Chưa có kết quả",
+                                "Hãy chạy nhận dạng trước.", parent=self); return
+        save_path = filedialog.asksaveasfilename(
+            title="Lưu CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
+        if not save_path:
+            return
+        thresh = self.v_conf_thresh.get()
+        rows_written = 0
+        with open(save_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(["filename", "text", "confidence", "x1", "y1", "x2", "y2"])
+            for img_path, dets in self._raw_detections:
+                for d in dets:
+                    if d["conf"] < thresh:
+                        continue
+                    writer.writerow([
+                        img_path.name,
+                        d["text"],
+                        f"{d['conf']:.4f}",
+                        d["x1"], d["y1"], d["x2"], d["y2"],
+                    ])
+                    rows_written += 1
+        self.lbl_status.config(
+            text=f"✅  Đã xuất {rows_written} dòng → {save_path}", fg=SUCCESS)
+        messagebox.showinfo("Xuất CSV thành công",
+                            f"Đã ghi {rows_written} dòng vào:\n{save_path}",
+                            parent=self)
+
     def _copy_results(self):
         if not self._results: return
         lines = [f"{p.name}\t{t}" for p, t, _ in self._results]
@@ -607,9 +761,292 @@ class OcrTab(Frame):
 
     def _clear_results(self):
         self._results.clear()
+        self._raw_detections.clear()
         self.tree.delete(*self.tree.get_children())
-        for w in (self.lbl_count, self.lbl_stats, self.lbl_prev_text, self.lbl_status):
+        for w in (self.lbl_count, self.lbl_stats, self.lbl_prev_text,
+                  self.lbl_status, self.lbl_filtered):
             w.config(text="")
         self.pb["value"] = 0
         self.lbl_prog.config(text="")
         self.canvas_prev.delete("all")
+
+    def _browse_gt(self):
+        folder = filedialog.askdirectory(title="Chọn folder GT")
+        if folder:
+            self.v_gt_dir.set(folder)
+
+    def _compare_gt(self):
+        if not self._results:
+            messagebox.showinfo("Chưa có kết quả",
+                                "Hãy chạy nhận dạng trước.", parent=self); return
+        gt_dir = self.v_gt_dir.get().strip()
+        if not gt_dir or not Path(gt_dir).is_dir():
+            messagebox.showwarning("Chưa chọn folder GT",
+                                   "Hãy chọn folder chứa file GT (.txt).",
+                                   parent=self); return
+        gt_map = {}
+        for txt_file in Path(gt_dir).glob("*.txt"):
+            try:
+                with open(txt_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.rstrip("\n")
+                        if "\t" in line:
+                            fname, gt_text = line.split("\t", 1)
+                            gt_map[fname.strip()] = gt_text.strip()
+            except Exception:
+                pass
+
+        if not gt_map:
+            messagebox.showwarning("GT trống",
+                                   "Không tìm thấy dữ liệu GT trong folder đã chọn.",
+                                   parent=self); return
+
+        rows = []
+        total_cer_num = 0
+        total_cer_den = 0
+        total_wer_num = 0
+        total_wer_den = 0
+        matched = 0
+
+        for img_path, pred_text, conf in self._results:
+            fname = img_path.name
+            if fname not in gt_map:
+                rows.append((fname, pred_text, "—", "N/A", "N/A"))
+                continue
+            gt_text = gt_map[fname]
+            char_acc = self._char_accuracy(pred_text, gt_text)
+            word_acc = self._word_accuracy(pred_text, gt_text)
+            rows.append((fname, pred_text, gt_text, f"{char_acc:.1%}", f"{word_acc:.1%}"))
+            cer_ed = self._edit_distance(pred_text, gt_text)
+            total_cer_num += cer_ed
+            total_cer_den += max(len(gt_text), 1)
+            wer_ed = self._word_edit_distance(pred_text, gt_text)
+            gt_words = gt_text.split()
+            total_wer_num += wer_ed
+            total_wer_den += max(len(gt_words), 1)
+            matched += 1
+
+        overall_char_acc = (1 - total_cer_num / total_cer_den) if total_cer_den > 0 else 0.0
+        overall_word_acc = (1 - total_wer_num / total_wer_den) if total_wer_den > 0 else 0.0
+
+        self._show_compare_popup(rows, overall_char_acc, overall_word_acc, matched)
+
+    def _show_compare_popup(self, rows, overall_char_acc, overall_word_acc, matched):
+        dlg = Toplevel(self)
+        dlg.title("So sánh GT — Kết quả")
+        dlg.configure(bg=BG)
+        dlg.geometry("900x540")
+        dlg.grab_set()
+
+        hf = Frame(dlg, bg=CARD, padx=12, pady=8)
+        hf.pack(fill=X)
+        Label(hf, text="So sánh GT", bg=CARD, fg=TEXT, font=F_BOLD).pack(side=LEFT)
+        Label(hf,
+              text=f"  {matched} ảnh khớp  │  Char Acc: {overall_char_acc:.1%}  │  Word Acc: {overall_word_acc:.1%}",
+              bg=CARD, fg=ACCENT, font=("Segoe UI Semibold", 10)).pack(side=LEFT, padx=12)
+
+        tbl = Frame(dlg, bg="#111122")
+        tbl.pack(fill=BOTH, expand=True, padx=6, pady=6)
+
+        cols = ("file", "pred", "gt", "char_acc", "word_acc")
+        tree = ttk.Treeview(tbl, columns=cols, show="headings",
+                            style="OCR.Treeview", selectmode="browse")
+        tree.heading("file",      text="Tên file",   anchor=W)
+        tree.heading("pred",      text="OCR",        anchor=W)
+        tree.heading("gt",        text="GT",         anchor=W)
+        tree.heading("char_acc",  text="Char Acc",   anchor=CENTER)
+        tree.heading("word_acc",  text="Word Acc",   anchor=CENTER)
+        tree.column("file",      width=160, minwidth=90,  stretch=False)
+        tree.column("pred",      width=220, minwidth=100, stretch=True)
+        tree.column("gt",        width=220, minwidth=100, stretch=True)
+        tree.column("char_acc",  width=90,  minwidth=70,  stretch=False, anchor=CENTER)
+        tree.column("word_acc",  width=90,  minwidth=70,  stretch=False, anchor=CENTER)
+        tree.tag_configure("hi",  background="#0e2a0e", foreground="#7ddd7d")
+        tree.tag_configure("mid", background="#2e2600", foreground="#ddbb44")
+        tree.tag_configure("lo",  background="#2e0e0e", foreground="#dd7070")
+        tree.tag_configure("na",  background="#1e1e2e", foreground="#9090b0")
+
+        vsb = ttk.Scrollbar(tbl, orient=VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=RIGHT, fill=Y)
+        tree.pack(fill=BOTH, expand=True)
+
+        for fname, pred, gt, char_acc, word_acc in rows:
+            if char_acc == "N/A":
+                tag = "na"
+            else:
+                try:
+                    v = float(char_acc.strip("%")) / 100
+                    tag = "hi" if v >= 0.9 else ("mid" if v >= 0.7 else "lo")
+                except Exception:
+                    tag = "na"
+            tree.insert("", END, values=(fname, pred, gt, char_acc, word_acc), tags=(tag,))
+
+        bf = Frame(dlg, bg=BG)
+        bf.pack(fill=X, padx=6, pady=4)
+        Button(bf, text="Đóng", command=dlg.destroy,
+               bg=ACCENT2, fg="white", relief="flat",
+               padx=14, pady=5, cursor="hand2", font=F_BOLD).pack(side=RIGHT)
+
+    @staticmethod
+    def _edit_distance(a, b):
+        a, b = list(a), list(b)
+        m, n = len(a), len(b)
+        dp = list(range(n + 1))
+        for i in range(1, m + 1):
+            prev = dp[:]
+            dp[0] = i
+            for j in range(1, n + 1):
+                if a[i - 1] == b[j - 1]:
+                    dp[j] = prev[j - 1]
+                else:
+                    dp[j] = 1 + min(prev[j], dp[j - 1], prev[j - 1])
+        return dp[n]
+
+    @staticmethod
+    def _word_edit_distance(a, b):
+        a_w, b_w = a.split(), b.split()
+        m, n = len(a_w), len(b_w)
+        dp = list(range(n + 1))
+        for i in range(1, m + 1):
+            prev = dp[:]
+            dp[0] = i
+            for j in range(1, n + 1):
+                if a_w[i - 1] == b_w[j - 1]:
+                    dp[j] = prev[j - 1]
+                else:
+                    dp[j] = 1 + min(prev[j], dp[j - 1], prev[j - 1])
+        return dp[n]
+
+    @staticmethod
+    def _char_accuracy(pred, gt):
+        if not gt:
+            return 1.0 if not pred else 0.0
+        ed = OcrTab._edit_distance(pred, gt)
+        return max(0.0, 1.0 - ed / len(gt))
+
+    @staticmethod
+    def _word_accuracy(pred, gt):
+        gt_words = gt.split()
+        if not gt_words:
+            return 1.0 if not pred.strip() else 0.0
+        ed = OcrTab._word_edit_distance(pred, gt)
+        return max(0.0, 1.0 - ed / len(gt_words))
+
+    def _open_roi_selector(self):
+        sel = self.tree.selection()
+        if sel:
+            img_path = Path(sel[0])
+        elif self._files:
+            img_path = self._files[0]
+        else:
+            messagebox.showinfo("Chưa có ảnh",
+                                "Hãy chọn ảnh trước rồi mới chọn ROI.", parent=self)
+            return
+        try:
+            from PIL import Image, ImageTk
+        except ImportError:
+            messagebox.showerror("Thiếu Pillow",
+                                 "Cài Pillow: pip install pillow", parent=self)
+            return
+
+        dlg = Toplevel(self)
+        dlg.title(f"Chọn vùng ROI — {img_path.name}")
+        dlg.configure(bg=BG)
+        dlg.grab_set()
+
+        orig = Image.open(img_path).convert("RGB")
+        disp_w, disp_h = min(orig.width, 900), min(orig.height, 620)
+        scale_x = orig.width  / disp_w
+        scale_y = orig.height / disp_h
+        thumb = orig.resize((disp_w, disp_h), Image.LANCZOS)
+        photo = ImageTk.PhotoImage(thumb)
+
+        info_lbl = Label(dlg, text="Kéo để vẽ hình chữ nhật. Nhấn Xác nhận để lưu ROI.",
+                         bg=CARD, fg=TEXT, font=F_MAIN)
+        info_lbl.pack(fill=X, padx=8, pady=4)
+
+        canvas = Canvas(dlg, width=disp_w, height=disp_h,
+                        bg="#0a0a18", highlightthickness=0, cursor="crosshair")
+        canvas.pack(padx=8, pady=4)
+        canvas.create_image(0, 0, anchor=NW, image=photo)
+        canvas._photo = photo
+
+        rect_id = [None]
+        start    = [None, None]
+        cur_roi  = [None]
+
+        if self._roi is not None:
+            rx1, ry1, rx2, ry2 = self._roi
+            dx1 = int(rx1 / scale_x)
+            dy1 = int(ry1 / scale_y)
+            dx2 = int(rx2 / scale_x)
+            dy2 = int(ry2 / scale_y)
+            rect_id[0] = canvas.create_rectangle(
+                dx1, dy1, dx2, dy2,
+                outline=ACCENT, width=2, dash=(4, 2))
+            cur_roi[0] = self._roi
+
+        coord_lbl = Label(dlg, text="", bg=BG, fg=DIM, font=F_MONO)
+        coord_lbl.pack(fill=X, padx=8)
+
+        def _on_press(e):
+            start[0], start[1] = e.x, e.y
+            if rect_id[0]:
+                canvas.delete(rect_id[0])
+                rect_id[0] = None
+
+        def _on_drag(e):
+            if rect_id[0]:
+                canvas.delete(rect_id[0])
+            rect_id[0] = canvas.create_rectangle(
+                start[0], start[1], e.x, e.y,
+                outline=ACCENT, width=2, dash=(4, 2))
+            rx1 = int(min(start[0], e.x) * scale_x)
+            ry1 = int(min(start[1], e.y) * scale_y)
+            rx2 = int(max(start[0], e.x) * scale_x)
+            ry2 = int(max(start[1], e.y) * scale_y)
+            coord_lbl.config(text=f"ROI: ({rx1}, {ry1}) → ({rx2}, {ry2})")
+            cur_roi[0] = (rx1, ry1, rx2, ry2)
+
+        def _on_release(e):
+            if start[0] is None: return
+            rx1 = int(min(start[0], e.x) * scale_x)
+            ry1 = int(min(start[1], e.y) * scale_y)
+            rx2 = int(max(start[0], e.x) * scale_x)
+            ry2 = int(max(start[1], e.y) * scale_y)
+            if rx2 - rx1 < 4 or ry2 - ry1 < 4:
+                cur_roi[0] = None
+                coord_lbl.config(text="ROI quá nhỏ, hãy vẽ lại.")
+            else:
+                cur_roi[0] = (rx1, ry1, rx2, ry2)
+                coord_lbl.config(text=f"ROI: ({rx1}, {ry1}) → ({rx2}, {ry2})")
+
+        canvas.bind("<ButtonPress-1>",   _on_press)
+        canvas.bind("<B1-Motion>",       _on_drag)
+        canvas.bind("<ButtonRelease-1>", _on_release)
+
+        def _confirm():
+            if cur_roi[0]:
+                self._roi = cur_roi[0]
+                rx1, ry1, rx2, ry2 = self._roi
+                self.lbl_roi.config(
+                    text=f"ROI ({rx1},{ry1})→({rx2},{ry2})", fg=ACCENT)
+            dlg.destroy()
+
+        def _clear_roi():
+            self._roi = None
+            self.lbl_roi.config(text="")
+            dlg.destroy()
+
+        bf = Frame(dlg, bg=BG)
+        bf.pack(fill=X, padx=8, pady=6)
+        Button(bf, text="✅  Xác nhận ROI", command=_confirm,
+               bg=SUCCESS, fg="white", relief="flat",
+               padx=14, pady=5, cursor="hand2", font=F_BOLD).pack(side=LEFT)
+        Button(bf, text="🗑  Xóa ROI", command=_clear_roi,
+               bg=CARD, fg=DIM, relief="flat",
+               padx=10, pady=5, cursor="hand2", font=F_MAIN).pack(side=LEFT, padx=8)
+        Button(bf, text="Hủy", command=dlg.destroy,
+               bg=BG, fg=DIM, relief="flat",
+               padx=10, pady=5, cursor="hand2", font=F_MAIN).pack(side=LEFT)

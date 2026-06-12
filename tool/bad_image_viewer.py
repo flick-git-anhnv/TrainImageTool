@@ -261,11 +261,12 @@ class BadImageViewer(Toplevel):
         self._save_dir_var = StringVar(value="")
         _bind_cfg("bad_viewer.save_dir", self._save_dir_var)
 
-        self._var_plate       = StringVar(value="")
-        self._var_date_from   = StringVar(value="")
-        self._var_date_to     = StringVar(value="")
-        self._var_gt_filter   = StringVar(value="Tất cả")
-        self._var_status_filter = StringVar(value="Tất cả")
+        self._var_plate          = StringVar(value="")
+        self._var_date_from      = StringVar(value="")
+        self._var_date_to        = StringVar(value="")
+        self._var_gt_filter      = StringVar(value="Tất cả")
+        self._var_status_filter  = StringVar(value="Tất cả")
+        self._var_det_filter     = StringVar(value="Tất cả")
 
         # auto-save after detect
         self._auto_save_var = IntVar(value=0)
@@ -404,6 +405,14 @@ class BadImageViewer(Toplevel):
         self._cb_status.pack(side=LEFT, padx=(4, 8))
         self._cb_status.bind("<<ComboboxSelected>>", lambda _: self._apply_filter())
 
+        # NĐ lại filter
+        Label(tb2, text="NĐ lại:", bg="#1a1a2e", fg=TEXT, font=F_MAIN).pack(side=LEFT)
+        self._cb_det = ttk.Combobox(tb2, textvariable=self._var_det_filter,
+                                     state="readonly", width=14, font=F_MAIN)
+        self._cb_det["values"] = ["Tất cả", "Vào ≠ Ra", "Thiếu NĐ lại"]
+        self._cb_det.pack(side=LEFT, padx=(4, 8))
+        self._cb_det.bind("<<ComboboxSelected>>", lambda _: self._apply_filter())
+
         Frame(tb2, bg=DIM, width=1).pack(side=LEFT, fill=Y, padx=8, pady=2)
 
         # Done / Skip mark buttons
@@ -467,19 +476,22 @@ class BadImageViewer(Toplevel):
         s.map("Bad.Treeview", background=[("selected", "#4A3F8C")])
 
         cols = ("status", "lane", "reason", "date", "time",
-                "plate_in", "plate_out", "plate_reg", "fname")
+                "plate_in", "plate_out", "plate_reg",
+                "det_in", "det_out", "fname")
         self._tree = ttk.Treeview(f, columns=cols, show="headings",
                                    style="Bad.Treeview", selectmode="extended")
         spec = [
-            ("status",    "",          30, "center"),
-            ("lane",      "Làn",      110, "w"),
-            ("reason",    "Lý do",    130, "w"),
-            ("date",      "Ngày",      88, "center"),
-            ("time",      "Giờ",       60, "center"),
-            ("plate_in",  "Biển vào", 100, "center"),
-            ("plate_out", "Biển ra",  100, "center"),
-            ("plate_reg", "Đăng ký",  100, "center"),
-            ("fname",     "Tên file", 200, "w"),
+            ("status",    "",             30, "center"),
+            ("lane",      "Làn",         110, "w"),
+            ("reason",    "Lý do",       130, "w"),
+            ("date",      "Ngày",         88, "center"),
+            ("time",      "Giờ",          60, "center"),
+            ("plate_in",  "Biển vào",    100, "center"),
+            ("plate_out", "Biển ra",     100, "center"),
+            ("plate_reg", "Đăng ký",     100, "center"),
+            ("det_in",    "NĐ lại vào",  100, "center"),
+            ("det_out",   "NĐ lại ra",   100, "center"),
+            ("fname",     "Tên file",    200, "w"),
         ]
         for col, hdr, w, anchor in spec:
             self._tree.heading(col, text=hdr)
@@ -487,10 +499,11 @@ class BadImageViewer(Toplevel):
 
         for reason, color in _REASON_COLOR.items():
             self._tree.tag_configure(reason, foreground=color)
-        self._tree.tag_configure("odd",  background="#16162a")
-        self._tree.tag_configure("even", background="#1e1e2e")
-        self._tree.tag_configure("done", foreground="#7fffaa")
-        self._tree.tag_configure("skip", foreground="#888888")
+        self._tree.tag_configure("odd",          background="#16162a")
+        self._tree.tag_configure("even",         background="#1e1e2e")
+        self._tree.tag_configure("done",         foreground="#7fffaa")
+        self._tree.tag_configure("skip",         foreground="#888888")
+        self._tree.tag_configure("det_mismatch", background="#2a1510")
 
         vsb = ttk.Scrollbar(f, orient=VERTICAL,   command=self._tree.yview)
         hsb = ttk.Scrollbar(f, orient=HORIZONTAL, command=self._tree.xview)
@@ -713,39 +726,52 @@ class BadImageViewer(Toplevel):
         date_to     = self._var_date_to.get().strip()
         gt_filter   = self._var_gt_filter.get()
         st_filter   = self._var_status_filter.get()
+        det_filter  = self._var_det_filter.get()
         self._tree.delete(*self._tree.get_children())
         shown = 0
         for i, r in enumerate(self._records):
             rl  = _REASON_LABEL.get(r["reason"], r["reason"])
             ek  = self._event_key(r)
             rst = self._state.get(ek, {})
-            status = rst.get("status", "")
+            status  = rst.get("status", "")
+            det_in  = rst.get("plate_in",  "")
+            det_out = rst.get("plate_out", "")
 
             if sel_r != "Tất cả" and rl != sel_r:             continue
             if sel_l != "Tất cả" and r["lane"] != sel_l:      continue
             if plate_kw:
-                plates = [r.get("plate_in",""), r.get("plate_out",""), r.get("plate_reg","")]
+                plates = [r.get("plate_in",""), r.get("plate_out",""), r.get("plate_reg",""),
+                          det_in, det_out]
                 if not any(plate_kw in p.upper() for p in plates if p): continue
             if date_from and r["date"] < date_from:            continue
             if date_to   and r["date"] > date_to:              continue
             # GT filter
-            has_gt = bool(rst.get("plate_in") or rst.get("plate_out"))
-            if gt_filter == "Đã lưu"  and not has_gt:         continue
+            has_gt = bool(det_in or det_out)
+            if gt_filter == "Đã lưu"   and not has_gt:        continue
             if gt_filter == "Chưa lưu" and has_gt:            continue
             # status filter
-            if st_filter == "Chưa xử lý" and status:          continue
+            if st_filter == "Chưa xử lý" and status:           continue
             if st_filter == "Done"        and status != "done": continue
             if st_filter == "Skip"        and status != "skip": continue
+            # NĐ lại filter
+            _ni = _norm_plate(det_in)
+            _no = _norm_plate(det_out)
+            if det_filter == "Vào ≠ Ra":
+                if not (_ni and _no and _ni != _no):           continue
+            elif det_filter == "Thiếu NĐ lại":
+                if _ni and _no:                                 continue
 
             status_sym = {"done": "✓", "skip": "⊘"}.get(status, "")
             row_tag    = "odd" if shown % 2 else "even"
             tags       = (row_tag, r["reason"])
             if status in ("done", "skip"):
                 tags = tags + (status,)
+            if _ni and _no and _ni != _no:
+                tags = tags + ("det_mismatch",)
             self._tree.insert("", END, iid=str(i), tags=tags,
                               values=(status_sym, r["lane"], rl, r["date"], r["time"],
                                       r["plate_in"], r["plate_out"], r["plate_reg"],
-                                      r["fname"]))
+                                      det_in, det_out, r["fname"]))
             shown += 1
         self._lbl_count.config(text=f"{shown} ảnh")
 

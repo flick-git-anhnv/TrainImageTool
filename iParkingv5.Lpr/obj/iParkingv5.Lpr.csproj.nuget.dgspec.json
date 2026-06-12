@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj": {}
+    "H:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj": {}
   },
   "projects": {
-    "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj": {
+    "H:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj": {
       "version": "1.0.0.3",
       "restore": {
-        "projectUniqueName": "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj",
+        "projectUniqueName": "H:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj",
         "projectName": "iParkingv5.Lpr",
-        "projectPath": "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj",
+        "projectPath": "H:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj",
         "packagesPath": "C:\\Users\\nguye\\.nuget\\packages\\",
-        "outputPath": "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\obj\\",
+        "outputPath": "H:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\nguye\\AppData\\Roaming\\NuGet\\NuGet.Config",

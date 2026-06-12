@@ -4,6 +4,7 @@ import queue
 import shutil
 import tempfile
 import threading
+from collections import Counter
 from tkinter import *
 from tkinter import filedialog, messagebox, ttk
 
@@ -28,6 +29,8 @@ class CheckerTab(Frame):
         self.nb   = nb
 
         self.data_list       = []
+        self._filtered_list  = []
+        self._search_active  = False
         self.current_idx     = 0
         self.img_dir         = ""
         self.gt_path         = ""
@@ -37,16 +40,19 @@ class CheckerTab(Frame):
         self.history         = []
         self.corrections     = {}
         self.corrections_path = ""
+        self._session_corrections = []  # list of (original_gt, corrected) tuples
 
-        self.var_audio  = BooleanVar(value=True)
-        self.var_lang   = StringVar(value="gtts_vi" if _GTTS_OK else "sapi_vi")
-        self.var_speed  = IntVar(value=15)
-        self.var_n_show = IntVar(value=1)
+        self.var_audio    = BooleanVar(value=True)
+        self.var_lang     = StringVar(value="gtts_vi" if _GTTS_OK else "sapi_vi")
+        self.var_speed    = IntVar(value=15)
+        self.var_n_show   = IntVar(value=1)
+        self.var_bulk_n   = IntVar(value=10)
+        self.var_search   = StringVar()
 
         self._n_show    = 1
-        self._cells     = []   # list of cell dicts
+        self._cells     = []
         self._focus_idx = 0
-        self._photos    = {}   # cell_idx → PhotoImage (prevent GC)
+        self._photos    = {}
 
         self._tts_q         = queue.Queue(maxsize=1)
         self._prefetch_q    = queue.Queue(maxsize=10)
@@ -56,6 +62,7 @@ class CheckerTab(Frame):
         self._build()
         self._init_tts()
         root.bind("<Delete>", self._global_delete)
+        self.var_search.trace_add("write", self._on_search_change)
 
     # ── Layout ────────────────────────────────────────────────────────────
 
@@ -79,6 +86,35 @@ class CheckerTab(Frame):
                 width=3, bg=CARD, fg=TEXT, insertbackground=TEXT,
                 buttonbackground=ACCENT2, relief="flat", font=F_MAIN,
                 command=self._on_n_show_change).pack(side=RIGHT)
+
+        # ── Search bar ────────────────────────────────────────────────────
+        search_row = Frame(self, bg=CARD, padx=14, pady=5)
+        search_row.pack(fill=X)
+        Label(search_row, text="Tìm BSX:", bg=CARD, fg=TEXT, font=F_MAIN).pack(side=LEFT, padx=(0, 4))
+        Entry(search_row, textvariable=self.var_search,
+              width=20, bg="#0a0a18", fg=_LABEL_COLOR,
+              insertbackground=_LABEL_COLOR, relief="flat", bd=4,
+              font=F_MONO).pack(side=LEFT)
+        Button(search_row, text="Xóa lọc",
+               command=self._clear_search,
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", font=F_MAIN,
+               relief="flat", padx=8, pady=2, cursor="hand2").pack(side=LEFT, padx=(6, 0))
+        self.lbl_search_result = Label(search_row, text="", bg=CARD, fg=DIM, font=F_MAIN)
+        self.lbl_search_result.pack(side=LEFT, padx=12)
+
+        # ── Session progress bar ──────────────────────────────────────────
+        prog_row = Frame(self, bg=BG, padx=14, pady=4)
+        prog_row.pack(fill=X)
+        self.lbl_session_prog = Label(prog_row, text="0/0 đã xử lý (0%)",
+                                      bg=BG, fg=TEXT, font=F_MAIN)
+        self.lbl_session_prog.pack(side=LEFT, padx=(0, 10))
+        self.lbl_corrected_count = Label(prog_row, text="Đã sửa: 0",
+                                         bg=BG, fg=ACCENT, font=F_MAIN)
+        self.lbl_corrected_count.pack(side=LEFT, padx=(0, 10))
+        self._session_prog_bar = ttk.Progressbar(prog_row, orient=HORIZONTAL,
+                                                  length=300, mode="determinate")
+        self._session_prog_bar.pack(side=LEFT, fill=X, expand=True)
 
         # Grid container (scrollable)
         self._grid_outer = Frame(self, bg=BG)
@@ -127,6 +163,30 @@ class CheckerTab(Frame):
                activebackground=ACCENT, activeforeground="white",
                font=F_BOLD, relief="flat",
                cursor="hand2", command=self._sort_gt).pack(side=LEFT, padx=8)
+
+        # ── Bulk approve row ──────────────────────────────────────────────
+        bulk_row = Frame(self, bg=BG, padx=14, pady=4)
+        bulk_row.pack(fill=X)
+        Label(bulk_row, text="Duyệt nhanh:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(0, 4))
+        Spinbox(bulk_row, from_=1, to=50, textvariable=self.var_bulk_n,
+                width=4, bg=CARD, fg=TEXT, insertbackground=TEXT,
+                buttonbackground=ACCENT2, relief="flat", font=F_MAIN).pack(side=LEFT)
+        Label(bulk_row, text="ảnh", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(2, 6))
+        self.btn_bulk = Button(bulk_row, text="Duyệt N ảnh tiếp theo",
+                               command=self._bulk_approve,
+                               bg="#1565C0", fg="white",
+                               activebackground="#0D47A1", activeforeground="white",
+                               font=F_BOLD, relief="flat", padx=10, pady=4,
+                               cursor="hand2")
+        self.btn_bulk.pack(side=LEFT, padx=(0, 8))
+        self.lbl_bulk_prog = Label(bulk_row, text="", bg=BG, fg=SUCCESS, font=F_MAIN)
+        self.lbl_bulk_prog.pack(side=LEFT, padx=6)
+        Button(bulk_row, text="📊 Thống kê lỗi",
+               command=self._show_confusion_stats,
+               bg=ACCENT2, fg="white",
+               activebackground=ACCENT, activeforeground="white",
+               font=F_BOLD, relief="flat", padx=10, pady=4,
+               cursor="hand2").pack(side=LEFT, padx=8)
 
         # Audio row
         audio_row = Frame(self, bg=BG, padx=14, pady=4)
@@ -178,11 +238,9 @@ class CheckerTab(Frame):
             self.show_batch()
 
     def _cell_img_size(self):
-        """Return (img_w, img_h) for thumbnail based on n_show."""
         n = self._n_show
         if n == 1:
             return 560, 300
-        # try to fit in ~1100px wide
         cell_w = max(100, min(480, (1100 - n * 14) // n))
         cell_h = max(70,  int(cell_w * 0.62))
         return cell_w, cell_h
@@ -208,25 +266,21 @@ class CheckerTab(Frame):
             inner = Frame(outer, bg=_CELL_BG, padx=4, pady=4)
             inner.pack(padx=2, pady=2)
 
-            # Image label
             img_lbl = Label(inner, bg=_CELL_BG,
                             width=img_w, height=img_h, anchor="center")
             img_lbl.config(image="")
             img_lbl.pack()
 
-            # Filename label
             fn_lbl = Label(inner, text="", bg=_CELL_BG, fg="#555577",
                            font=("Consolas", 7), width=entry_w, anchor=W)
             fn_lbl.pack(fill=X)
 
-            # Entry
             entry = Entry(inner, font=entry_font, width=entry_w,
                           bg="#0a0a18", fg=_LABEL_COLOR,
                           insertbackground=_LABEL_COLOR,
                           relief="flat", bd=4, state=DISABLED)
             entry.pack(fill=X, pady=(2, 0))
 
-            # Result label (only show for n=1 or n<=2)
             res_lbl = None
             if n <= 2:
                 res_lbl = Label(inner, text="",
@@ -248,7 +302,6 @@ class CheckerTab(Frame):
             }
             self._cells.append(cell)
 
-            # Bind events
             idx = i
             entry.bind("<Return>",    lambda e, x=idx: self._on_entry_enter(x))
             entry.bind("<Right>",     lambda e, x=idx: self._on_entry_right(e, x))
@@ -275,7 +328,6 @@ class CheckerTab(Frame):
         cell = self._cells[i]
         if cell["entry"]["state"] != DISABLED:
             cell["entry"].focus_set()
-        # Show correction hint
         gt = cell.get("gt_label", "")
         display = cell["entry"].get() if cell["entry"]["state"] != DISABLED else gt
         self.lbl_correction.config(
@@ -318,6 +370,41 @@ class CheckerTab(Frame):
             self._set_focus(i - 1)
             return "break"
 
+    # ── Search / filter ───────────────────────────────────────────────────
+
+    def _on_search_change(self, *_):
+        if not self.data_list:
+            return
+        term = self.var_search.get().strip().lower()
+        if term:
+            self._filtered_list = [
+                (fn, gt) for fn, gt in self.data_list
+                if term in gt.lower()
+            ]
+            self._search_active = True
+            self.lbl_search_result.config(
+                text=f"Tìm thấy {len(self._filtered_list)} ảnh")
+        else:
+            self._filtered_list = []
+            self._search_active = False
+            self.lbl_search_result.config(text="")
+        self.current_idx = 0
+        self.history = []
+        self.show_batch()
+
+    def _clear_search(self):
+        self.var_search.set("")
+        self._search_active = False
+        self._filtered_list = []
+        self.lbl_search_result.config(text="")
+        self.current_idx = 0
+        self.history = []
+        if self.data_list:
+            self.show_batch()
+
+    def _active_list(self):
+        return self._filtered_list if self._search_active else self.data_list
+
     # ── Dataset loading ───────────────────────────────────────────────────
 
     def load_dataset(self):
@@ -354,6 +441,12 @@ class CheckerTab(Frame):
 
         self.current_idx = 0
         self.history     = []
+        self._session_corrections = []
+        self._search_active = False
+        self._filtered_list = []
+        self.var_search.set("")
+        self.lbl_search_result.config(text="")
+
         if not self.data_list:
             messagebox.showinfo("Thông báo", "File gt.txt trống hoặc đã duyệt xong!")
             return
@@ -369,7 +462,8 @@ class CheckerTab(Frame):
     def show_batch(self):
         from PIL import Image, ImageTk
 
-        total    = len(self.data_list)
+        src_list = self._active_list()
+        total    = len(src_list)
         rem      = total - self.current_idx
         img_w, img_h = self._cell_img_size()
 
@@ -383,7 +477,9 @@ class CheckerTab(Frame):
                 cell["entry"].delete(0, END)
                 if cell["res_lbl"]: cell["res_lbl"].config(text="")
                 cell["filename"] = ""; cell["gt_label"] = ""
-            messagebox.showinfo("Thành công", "Đã xử lý xong toàn bộ ảnh!")
+            if not self._search_active:
+                messagebox.showinfo("Thành công", "Đã xử lý xong toàn bộ ảnh!")
+            self._update_session_progress()
             return
 
         n_active = min(self._n_show, rem)
@@ -395,7 +491,7 @@ class CheckerTab(Frame):
         for i, cell in enumerate(self._cells):
             idx = self.current_idx + i
             if idx < total:
-                filename, gt_label = self.data_list[idx]
+                filename, gt_label = src_list[idx]
                 cell["filename"]  = filename
                 cell["gt_label"]  = gt_label
                 cell["fn_lbl"].config(text=filename)
@@ -429,32 +525,60 @@ class CheckerTab(Frame):
 
         self.btn_back.config(state=NORMAL if self.history else DISABLED)
         self._set_focus(0)
+        self._update_session_progress()
 
-        # Prefetch TTS for upcoming batch
         for off in range(self._n_show, min(self._n_show + 5, rem)):
-            self._prefetch_gtts(self.data_list[self.current_idx + off][1])
+            next_idx = self.current_idx + off
+            if next_idx < total:
+                self._prefetch_gtts(src_list[next_idx][1])
+
+    # ── Session progress ──────────────────────────────────────────────────
+
+    def _update_session_progress(self):
+        total_orig = len(self.data_list)
+        if total_orig == 0:
+            self.lbl_session_prog.config(text="0/0 đã xử lý (0%)")
+            self._session_prog_bar["value"] = 0
+            self.lbl_corrected_count.config(text="Đã sửa: 0")
+            return
+        processed = 0
+        if os.path.exists(getattr(self, "checked_gt_path", "")):
+            try:
+                with open(self.checked_gt_path, encoding="utf-8") as f:
+                    processed = sum(1 for ln in f if ln.strip())
+            except Exception:
+                processed = 0
+        pct = (processed / total_orig * 100) if total_orig else 0
+        self.lbl_session_prog.config(
+            text=f"{processed}/{total_orig} đã xử lý ({pct:.1f}%)")
+        self._session_prog_bar["maximum"] = total_orig
+        self._session_prog_bar["value"] = processed
+        n_fixed = len(self._session_corrections)
+        self.lbl_corrected_count.config(text=f"Đã sửa: {n_fixed}")
 
     # ── Save / Delete ─────────────────────────────────────────────────────
 
     def save_all_and_next(self, _=None):
-        if not self.data_list or self.current_idx >= len(self.data_list):
+        src_list = self._active_list()
+        if not src_list or self.current_idx >= len(src_list):
             return
-        n_active = min(self._n_show,
-                       len(self.data_list) - self.current_idx)
+        n_active = min(self._n_show, len(src_list) - self.current_idx)
         batch_actions = []
         for i in range(n_active):
             cell = self._cells[i]
             if not cell["filename"]:
                 continue
             new_label = cell["entry"].get().strip()
-            _, gt_label = self.data_list[self.current_idx + i]
+            _, gt_label = src_list[self.current_idx + i]
             if gt_label and new_label != gt_label:
                 self._save_correction(gt_label, new_label)
+                self._session_corrections.append((gt_label, new_label))
             batch_actions.append(("save", cell["filename"], new_label))
         self._process_batch(batch_actions)
 
     def delete_focused(self, _=None):
-        if not self.data_list or self.current_idx >= len(self.data_list):
+        src_list = self._active_list()
+        if not src_list or self.current_idx >= len(src_list):
             return
         if not messagebox.askyesno("Xác nhận xóa", "Xóa ảnh đang focus khỏi dataset?"):
             return
@@ -462,9 +586,7 @@ class CheckerTab(Frame):
         cell = self._cells[i] if i < len(self._cells) else None
         if not cell or not cell["filename"]:
             return
-        # Build batch: delete focused, save rest
-        n_active = min(self._n_show,
-                       len(self.data_list) - self.current_idx)
+        n_active = min(self._n_show, len(src_list) - self.current_idx)
         batch_actions = []
         for j in range(n_active):
             c = self._cells[j]
@@ -490,9 +612,24 @@ class CheckerTab(Frame):
 
         self.history.append(("batch", len(actions), list(actions)))
         self.current_idx += len(actions)
-        with open(self.gt_path, "w", encoding="utf-8") as f:
-            for fn, lbl in self.data_list[self.current_idx:]:
-                f.write(f"{fn}\t{lbl}\n")
+
+        # Update data_list to remove processed entries
+        processed_fns = {fn for _, fn, _ in actions}
+        if self._search_active:
+            self._filtered_list = [
+                item for item in self._filtered_list
+                if item[0] not in processed_fns
+            ]
+            self.data_list = [
+                item for item in self.data_list
+                if item[0] not in processed_fns
+            ]
+            self.current_idx -= len(actions)
+        else:
+            with open(self.gt_path, "w", encoding="utf-8") as f:
+                for fn, lbl in self.data_list[self.current_idx:]:
+                    f.write(f"{fn}\t{lbl}\n")
+
         self.show_batch()
         self.root.after(80, self._refresh_stats)
 
@@ -511,18 +648,16 @@ class CheckerTab(Frame):
                     with open(self.checked_gt_path, encoding="utf-8") as f:
                         lines = f.readlines()
                     with open(self.checked_gt_path, "w", encoding="utf-8") as f:
-                        # Remove matching line
                         removed = False
                         for ln in reversed(lines):
                             if not removed and ln.startswith(filename + "\t"):
                                 removed = True; continue
-                            f.write(ln)  # ← bug: writes in wrong order, fix below
+                            f.write(ln)
             elif action == "delete":
                 src = os.path.join(self.trash_img_dir, filename)
                 dst = os.path.join(self.img_dir, filename)
                 if os.path.exists(src): shutil.move(src, dst)
 
-        # Properly rewrite checked gt (remove last `count` save entries)
         if os.path.exists(self.checked_gt_path):
             save_count = sum(1 for a, _, _ in actions if a == "save")
             if save_count:
@@ -537,6 +672,137 @@ class CheckerTab(Frame):
         self.show_batch()
         self.root.after(80, self._refresh_stats)
 
+    # ── Bulk approve ──────────────────────────────────────────────────────
+
+    def _bulk_approve(self):
+        src_list = self._active_list()
+        if not src_list or self.current_idx >= len(src_list):
+            messagebox.showinfo("Thông báo", "Không có ảnh nào để duyệt.")
+            return
+        try:
+            n = max(1, min(50, int(self.var_bulk_n.get())))
+        except (ValueError, TclError):
+            n = 10
+
+        remaining = len(src_list) - self.current_idx
+        n = min(n, remaining)
+
+        approved = 0
+        batch_actions = []
+        for i in range(n):
+            idx = self.current_idx + i
+            filename, gt_label = src_list[idx]
+            display = self.corrections.get(gt_label, gt_label)
+            batch_actions.append(("save", filename, display))
+            approved += 1
+
+        self.lbl_bulk_prog.config(text=f"Đang duyệt {approved} ảnh...")
+        self.root.update_idletasks()
+
+        for action, filename, new_label in batch_actions:
+            src = os.path.join(self.img_dir,         filename)
+            dst = os.path.join(self.checked_img_dir, filename)
+            if os.path.exists(src): shutil.move(src, dst)
+            with open(self.checked_gt_path, "a", encoding="utf-8") as f:
+                f.write(f"{filename}\t{new_label}\n")
+
+        self.history.append(("batch", len(batch_actions), list(batch_actions)))
+        self.current_idx += len(batch_actions)
+
+        processed_fns = {fn for _, fn, _ in batch_actions}
+        if self._search_active:
+            self._filtered_list = [
+                item for item in self._filtered_list
+                if item[0] not in processed_fns
+            ]
+            self.data_list = [
+                item for item in self.data_list
+                if item[0] not in processed_fns
+            ]
+            self.current_idx -= len(batch_actions)
+        else:
+            with open(self.gt_path, "w", encoding="utf-8") as f:
+                for fn, lbl in self.data_list[self.current_idx:]:
+                    f.write(f"{fn}\t{lbl}\n")
+
+        self.lbl_bulk_prog.config(text=f"Đã duyệt {approved} ảnh")
+        self.show_batch()
+        self.root.after(80, self._refresh_stats)
+        self.root.after(3000, lambda: self.lbl_bulk_prog.config(text=""))
+
+    # ── Confusion / error stats ───────────────────────────────────────────
+
+    def _show_confusion_stats(self):
+        if not self._session_corrections:
+            messagebox.showinfo("Thống kê lỗi",
+                                "Chưa có lần sửa nào trong phiên này.")
+            return
+
+        char_subs = Counter()
+        for orig, corrected in self._session_corrections:
+            o = orig.upper()
+            c = corrected.upper()
+            if len(o) == len(c):
+                for co, cc in zip(o, c):
+                    if co != cc:
+                        char_subs[(co, cc)] += 1
+            else:
+                for co in o:
+                    if co not in c:
+                        char_subs[(co, "∅")] += 1
+                for cc in c:
+                    if cc not in o:
+                        char_subs[("∅", cc)] += 1
+
+        popup = Toplevel(self)
+        popup.title("Thống kê lỗi thường gặp")
+        popup.configure(bg=BG)
+        popup.geometry("480x400")
+        popup.resizable(True, True)
+
+        Label(popup, text="Phân tích lỗi ký tự (phiên làm việc)",
+              bg=BG, fg=TEXT, font=F_BOLD, pady=10).pack(fill=X, padx=16)
+
+        Label(popup, text=f"Tổng số lần sửa: {len(self._session_corrections)}",
+              bg=BG, fg=DIM, font=F_MAIN).pack(anchor=W, padx=16)
+
+        frame = Frame(popup, bg=BG)
+        frame.pack(fill=BOTH, expand=True, padx=16, pady=8)
+
+        vsb = ttk.Scrollbar(frame, orient=VERTICAL)
+        cols = ("substitution", "count")
+        tree = ttk.Treeview(frame, columns=cols, show="headings",
+                            yscrollcommand=vsb.set, height=12)
+        vsb.config(command=tree.yview)
+        vsb.pack(side=RIGHT, fill=Y)
+        tree.pack(side=LEFT, fill=BOTH, expand=True)
+
+        style = ttk.Style()
+        style.configure("Treeview",
+                        background=CARD, foreground=TEXT,
+                        fieldbackground=CARD, rowheight=24,
+                        font=F_MONO)
+        style.configure("Treeview.Heading",
+                        background=ACCENT2, foreground="white",
+                        font=F_BOLD)
+        style.map("Treeview", background=[("selected", ACCENT)])
+
+        tree.heading("substitution", text="Thay thế (GT → Sửa)")
+        tree.heading("count",        text="Số lần")
+        tree.column("substitution",  width=260, anchor=CENTER)
+        tree.column("count",         width=100, anchor=CENTER)
+
+        if char_subs:
+            for (orig_c, corr_c), cnt in sorted(char_subs.items(),
+                                                 key=lambda x: -x[1]):
+                tree.insert("", END, values=(f"{orig_c}  →  {corr_c}", cnt))
+        else:
+            tree.insert("", END, values=("(Không có thay thế ký tự khớp độ dài)", ""))
+
+        Button(popup, text="Đóng", command=popup.destroy,
+               bg=ACCENT2, fg="white", font=F_BOLD,
+               relief="flat", padx=14, pady=6, cursor="hand2").pack(pady=8)
+
     # ── Other actions ─────────────────────────────────────────────────────
 
     def _sort_gt(self):
@@ -548,6 +814,9 @@ class CheckerTab(Frame):
                 f.write(f"{fn}\t{lbl}\n")
         self.current_idx = 0
         self.history = []
+        self._search_active = False
+        self._filtered_list = []
+        self.var_search.set("")
         self.show_batch()
         self.root.after(80, self._refresh_stats)
         self.lbl_info.config(
@@ -757,7 +1026,6 @@ class CheckerTab(Frame):
 
     def _refresh_stats(self):
         if not self.gt_path: return
-        from collections import Counter
         n_rem = n_chk = 0
         rem_chars: dict = {}; chk_chars: dict = {}
         if os.path.exists(self.gt_path):
@@ -784,3 +1052,4 @@ class CheckerTab(Frame):
             cell.config(bg=bg)
             lbl_ch.config(bg=bg, fg=fg)
             lbl_cnt.config(bg=bg, fg=fgn, text=f"{cnt:,}" if cnt else "")
+        self._update_session_progress()

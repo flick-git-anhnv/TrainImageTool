@@ -1,6 +1,7 @@
 import os
 import queue
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from tkinter import *
@@ -20,12 +21,18 @@ from .bad_image_viewer import BadImageViewer
 class Parkingv8ImageTab(Frame):
     def __init__(self, master, root):
         super().__init__(master, bg=BG)
-        self.root    = root
+        self.root     = root
         self._worker  = None
         self._thread  = None
         self._log_q   = queue.Queue()
         self._stat_q  = queue.Queue()
         self._running = False
+        self._paused  = False
+        self._pause_event = threading.Event()
+        self._pause_event.set()
+        self._failed_items = []
+        self._run_start_time = None
+        self._last_stat = {}
         self._build()
         self._poll()
 
@@ -50,6 +57,7 @@ class Parkingv8ImageTab(Frame):
         self._build_settings(body)
         self._build_controls(body)
         self._build_progress(body)
+        self._build_dashboard(body)
         self._build_log(body)
 
     def _sep(self, parent, text):
@@ -108,7 +116,6 @@ class Parkingv8ImageTab(Frame):
         f = Frame(p, bg=BG)
         f.pack(fill=X)
 
-        # Row 0 — page + limits
         Label(f, text="Page size:", bg=BG, fg=TEXT, font=F_MAIN).grid(
             row=0, column=0, padx=(0, 4), sticky=W)
         self.page_size_var = IntVar(value=100)
@@ -135,7 +142,6 @@ class Parkingv8ImageTab(Frame):
               bg=CARD, fg=TEXT, insertbackground=TEXT,
               relief="flat", font=F_MAIN, bd=4).grid(row=0, column=5, padx=4)
 
-        # Event source
         Label(f, text="Nguồn:", bg=BG, fg=TEXT, font=F_MAIN).grid(
             row=0, column=6, padx=(14, 4))
         self.source_var = StringVar(value="exits")
@@ -145,7 +151,6 @@ class Parkingv8ImageTab(Frame):
                               width=9, state="readonly", font=F_MAIN)
         src_cb.grid(row=0, column=7, padx=4)
 
-        # Row 1 — image limits
         Label(f, text="Max ảnh/làn:", bg=BG, fg=TEXT, font=F_MAIN).grid(
             row=1, column=0, padx=(0, 4), sticky=W, pady=(6, 0))
         self.max_per_lane_var = IntVar(value=1000)
@@ -182,7 +187,6 @@ class Parkingv8ImageTab(Frame):
               font=("Segoe UI", 7), fg=DIM, bg=BG).grid(
             row=2, column=0, columnspan=8, sticky=W, pady=(3, 0))
 
-        # Phân loại phương tiện
         self._sep(p, "Phân loại phương tiện")
         fv = Frame(p, bg=BG)
         fv.pack(fill=X)
@@ -206,20 +210,20 @@ class Parkingv8ImageTab(Frame):
                       "•  Ảnh xấu bỏ qua: xe đạp + ảnh toàn cảnh (fi/fo/full)",
               font=("Segoe UI", 8), fg=DIM, bg=BG, anchor=W).pack(fill=X, pady=(2, 6))
 
-        # Advanced section (API credentials)
-        adv_bar = Frame(p, bg=BG)
-        adv_bar.pack(fill=X, pady=(5, 0))
+        adv_wrapper = Frame(p, bg=BG)
+        adv_wrapper.pack(fill=X, pady=(5, 0))
         self._adv_open = False
+        adv_bar = Frame(adv_wrapper, bg=BG)
+        adv_bar.pack(fill=X)
         self._adv_lbl  = Label(adv_bar, text="▶ Nâng cao (API / Xác thực)",
                                font=("Segoe UI", 8, "underline"),
                                fg=ACCENT2, bg=BG, cursor="hand2")
         self._adv_lbl.pack(anchor=W)
         self._adv_lbl.bind("<Button-1>", self._toggle_adv)
-        self._adv_frame = Frame(p, bg=CARD, bd=1, relief="flat", padx=8, pady=6)
+        self._adv_frame = Frame(adv_wrapper, bg=CARD, bd=1, relief="flat", padx=8, pady=6)
         self._build_adv(self._adv_frame)
 
     def _build_adv(self, p):
-        # Grant type selector
         gt_row = Frame(p, bg=CARD)
         gt_row.grid(row=0, column=0, columnspan=4, sticky=W, pady=(0, 6))
         Label(gt_row, text="Grant type:", font=("Segoe UI", 8),
@@ -243,7 +247,7 @@ class Parkingv8ImageTab(Frame):
         ]
         for i, (lbl, attr, default, width, show) in enumerate(fields):
             r, c = divmod(i, 2)
-            r += 1   # offset for grant type row
+            r += 1
             Label(p, text=lbl, font=("Segoe UI", 8),
                   bg=CARD, fg=DIM).grid(
                 row=r, column=c * 2,
@@ -279,13 +283,27 @@ class Parkingv8ImageTab(Frame):
             bg=DIM, fg=BG, font=F_BOLD,
             relief="flat", padx=22, pady=7,
             state=DISABLED, cursor="hand2")
-        self.stop_btn.pack(side=LEFT)
+        self.stop_btn.pack(side=LEFT, padx=(0, 8))
+        self.pause_btn = Button(
+            f, text="⏸  Tạm dừng", command=self._toggle_pause,
+            bg=CARD, fg=TEXT, font=F_BOLD,
+            activebackground=ACCENT2, activeforeground="white",
+            relief="flat", padx=16, pady=7,
+            state=DISABLED, cursor="hand2")
+        self.pause_btn.pack(side=LEFT, padx=(0, 8))
+        self.retry_btn = Button(
+            f, text="↺  Thử lại lỗi", command=self._retry_failed,
+            bg=CARD, fg=TEXT, font=F_BOLD,
+            activebackground=ACCENT, activeforeground="white",
+            relief="flat", padx=16, pady=7,
+            state=DISABLED, cursor="hand2")
+        self.retry_btn.pack(side=LEFT, padx=(0, 8))
         Button(
             f, text="Thống kê", command=self._show_stats,
             bg=ACCENT2, fg="white", font=F_BOLD,
             activebackground="#5a4fa0", activeforeground="white",
             relief="flat", padx=18, pady=7, cursor="hand2",
-        ).pack(side=LEFT, padx=(8, 0))
+        ).pack(side=LEFT)
         self.collect_bad_var = BooleanVar(value=False)
         _bind_cfg("p8.collect_bad", self.collect_bad_var)
         Checkbutton(
@@ -307,15 +325,71 @@ class Parkingv8ImageTab(Frame):
     def _build_progress(self, p):
         self._sep(p, "Tiến độ")
         f = Frame(p, bg=BG)
-        f.pack(fill=X, pady=(0, 4))
-        self.pbar = ttk.Progressbar(f, mode="indeterminate",
-                                    style="K.Horizontal.TProgressbar")
-        self.pbar.pack(side=LEFT, fill=X, expand=True, padx=(0, 12))
+        f.pack(fill=X, pady=(0, 2))
+
+        pbar_frame = Frame(f, bg=BG)
+        pbar_frame.pack(fill=X)
+        self.pbar = ttk.Progressbar(pbar_frame, mode="determinate",
+                                    style="K.Horizontal.TProgressbar",
+                                    maximum=100)
+        self.pbar.pack(side=LEFT, fill=X, expand=True, padx=(0, 8))
+        self.pct_lbl = Label(pbar_frame, text="0%", font=F_MONO,
+                             fg=ACCENT, bg=BG, width=5, anchor=E)
+        self.pct_lbl.pack(side=LEFT)
+        self.eta_lbl = Label(pbar_frame, text="ETA: --:--", font=F_MONO,
+                             fg=DIM, bg=BG, width=12, anchor=W)
+        self.eta_lbl.pack(side=LEFT, padx=(6, 0))
+
+        detail_row = Frame(f, bg=BG)
+        detail_row.pack(fill=X, pady=(2, 0))
+        self.item_lbl = Label(detail_row, text="", font=F_MONO,
+                              fg=DIM, bg=BG, anchor=W)
+        self.item_lbl.pack(side=LEFT)
+
         self.stat_lbl = Label(
             f,
             text="Trang: 0  |  SK: 0  |  Tìm: 0  |  Lưu: 0  |  Bỏ qua: 0  |  Lỗi: 0",
             font=F_MONO, fg=TEXT, bg=BG)
-        self.stat_lbl.pack(side=LEFT)
+        self.stat_lbl.pack(anchor=W, pady=(2, 0))
+
+    def _build_dashboard(self, p):
+        self._dash_frame = Frame(p, bg=CARD, padx=10, pady=6)
+        self._dash_visible = False
+
+    def _show_dashboard(self, s):
+        if not self._dash_visible:
+            self._dash_frame.pack(fill=X, pady=(4, 2))
+            self._dash_visible = True
+        for w in self._dash_frame.winfo_children():
+            w.destroy()
+        Label(self._dash_frame, text="Kết quả lần chạy",
+              font=("Segoe UI", 9, "bold"), fg=ACCENT2, bg=CARD).pack(anchor=W)
+        row = Frame(self._dash_frame, bg=CARD)
+        row.pack(fill=X, pady=(4, 0))
+        items = [
+            ("Tổng SK",    s.get("event", 0),   TEXT),
+            ("Tìm thấy",   s.get("found", 0),   TEXT),
+            ("Đã lưu",     s.get("saved", 0),   "#4caf50"),
+            ("Bỏ qua",     s.get("skipped", 0), DIM),
+            ("Lỗi",        s.get("error", 0),   "#ff8844"),
+            ("Ảnh xấu",    s.get("bad_saved", 0), ACCENT2),
+        ]
+        for label, val, color in items:
+            cell = Frame(row, bg="#251C53", padx=8, pady=4)
+            cell.pack(side=LEFT, padx=(0, 6))
+            Label(cell, text=str(val), font=("Segoe UI Semibold", 13),
+                  fg=color, bg="#251C53").pack()
+            Label(cell, text=label, font=("Segoe UI", 8),
+                  fg=DIM, bg="#251C53").pack()
+        if self._failed_items:
+            Label(self._dash_frame,
+                  text=f"{len(self._failed_items)} ảnh lỗi — nhấn 'Thử lại lỗi' để tải lại",
+                  font=("Segoe UI", 8), fg="#ff8844", bg=CARD).pack(anchor=W, pady=(4, 0))
+
+    def _hide_dashboard(self):
+        if self._dash_visible:
+            self._dash_frame.pack_forget()
+            self._dash_visible = False
 
     def _build_log(self, p):
         self._sep(p, "Nhật ký")
@@ -347,6 +421,59 @@ class Parkingv8ImageTab(Frame):
                                     initialdir=_cfg_dir("p8.out"))
         if d:
             self.out_var.set(d)
+
+    # ── pause/resume ──────────────────────────────────────────────────────────
+
+    def _toggle_pause(self):
+        if not self._running:
+            return
+        if self._paused:
+            self._paused = False
+            self._pause_event.set()
+            self.pause_btn.config(text="⏸  Tạm dừng", fg=TEXT)
+            self.status_lbl.config(text="Đang chạy...", fg=ACCENT)
+            self._log("Tiếp tục...")
+        else:
+            self._paused = True
+            self._pause_event.clear()
+            self.pause_btn.config(text="▶  Tiếp tục", fg=ACCENT)
+            self.status_lbl.config(text="Tạm dừng", fg="#ffaa00")
+            self._log("Tạm dừng — đang chờ item hiện tại hoàn tất...")
+
+    # ── retry failed ──────────────────────────────────────────────────────────
+
+    def _retry_failed(self):
+        if not self._failed_items:
+            return
+        if self._running:
+            messagebox.showwarning("Đang chạy", "Vui lòng chờ lần chạy hiện tại kết thúc.")
+            return
+        items = list(self._failed_items)
+        self._failed_items.clear()
+        self.retry_btn.config(state=DISABLED)
+        self._hide_dashboard()
+        cfg = self._last_cfg.copy() if hasattr(self, "_last_cfg") else {}
+        cfg["retry_items"] = items
+        for _q in (self._log_q, self._stat_q):
+            while True:
+                try: _q.get_nowait()
+                except queue.Empty: break
+        self._running = True
+        self._paused  = False
+        self._pause_event.set()
+        self._run_start_time = time.monotonic()
+        self.start_btn.config(state=DISABLED)
+        self.stop_btn.config(state=NORMAL)
+        self.pause_btn.config(state=NORMAL, text="⏸  Tạm dừng", fg=TEXT)
+        self.pbar.config(value=0)
+        self.pct_lbl.config(text="0%")
+        self.eta_lbl.config(text="ETA: --:--")
+        self.status_lbl.config(text="Thử lại lỗi...", fg=ACCENT)
+        self._log(f"Thử lại {len(items)} ảnh lỗi...")
+        self._worker = Parkingv8Worker(cfg, self._log_q, self._stat_q,
+                                       pause_event=self._pause_event)
+        self._thread = threading.Thread(target=self._run_worker, daemon=True)
+        self._thread.start()
 
     _LOG_MAX = 1000
 
@@ -402,20 +529,33 @@ class Parkingv8ImageTab(Frame):
             "kw_xe_tai":     self.kw_xe_tai.get().strip(),
             "kw_o_to":       self.kw_o_to.get().strip(),
         }
+        self._last_cfg = cfg
+        self._failed_items.clear()
+        self.retry_btn.config(state=DISABLED)
+        self._hide_dashboard()
+
         for _q in (self._log_q, self._stat_q):
             while True:
                 try: _q.get_nowait()
                 except queue.Empty: break
 
         self._running = True
+        self._paused  = False
+        self._pause_event.set()
+        self._run_start_time = time.monotonic()
         self.start_btn.config(state=DISABLED)
         self.stop_btn.config(state=NORMAL)
-        self.pbar.start(12)
+        self.pause_btn.config(state=NORMAL, text="⏸  Tạm dừng", fg=TEXT)
+        self.pbar.config(value=0)
+        self.pct_lbl.config(text="0%")
+        self.eta_lbl.config(text="ETA: --:--")
+        self.item_lbl.config(text="")
         self.status_lbl.config(text="Đang chạy...", fg=ACCENT)
         self._log(f"Bắt đầu: {from_d}  →  {to_d}")
         self._log(f"Lưu vào: {out}")
         self._log(f"Nguồn: {cfg['event_source']} | Grant: {cfg['grant_type']}")
-        self._worker = Parkingv8Worker(cfg, self._log_q, self._stat_q)
+        self._worker = Parkingv8Worker(cfg, self._log_q, self._stat_q,
+                                       pause_event=self._pause_event)
         self._thread = threading.Thread(target=self._run_worker, daemon=True)
         self._thread.start()
 
@@ -430,19 +570,68 @@ class Parkingv8ImageTab(Frame):
         if self._worker:
             self._worker.stop()
         self._running = False
+        self._paused  = False
+        self._pause_event.set()
         self.stop_btn.config(state=DISABLED)
+        self.pause_btn.config(state=DISABLED, text="⏸  Tạm dừng", fg=TEXT)
         self.start_btn.config(state=NORMAL)
-        self.pbar.stop()
+        self.pbar.config(value=0)
+        self.pct_lbl.config(text="0%")
+        self.eta_lbl.config(text="ETA: --:--")
+        self.item_lbl.config(text="")
         self.status_lbl.config(text="Đã dừng", fg=DIM)
 
     def _on_done(self):
         if not self._running:
             return
         self._running = False
-        self.pbar.stop()
+        self._paused  = False
+        self._pause_event.set()
+        self.pbar.config(value=100)
+        self.pct_lbl.config(text="100%")
+        self.eta_lbl.config(text="ETA: 00:00")
+        self.item_lbl.config(text="")
         self.start_btn.config(state=NORMAL)
         self.stop_btn.config(state=DISABLED)
+        self.pause_btn.config(state=DISABLED, text="⏸  Tạm dừng", fg=TEXT)
         self.status_lbl.config(text="Hoàn thành", fg=ACCENT2)
+        if self._failed_items:
+            self.retry_btn.config(
+                state=NORMAL,
+                text=f"↺  Thử lại {len(self._failed_items)} lỗi")
+        self._show_dashboard(self._last_stat)
+
+    def _update_progress(self, s):
+        saved  = s.get("saved", 0)
+        found  = s.get("found", 0)
+        total  = s.get("total_found", found) or found
+        self._last_stat = s
+
+        current = s.get("current_item", "")
+        if current:
+            self.item_lbl.config(text=f"Đang xử lý: {current}")
+
+        failed = s.get("failed_items")
+        if failed:
+            for item in failed:
+                if item not in self._failed_items:
+                    self._failed_items.append(item)
+
+        if total > 0:
+            pct = min(int(saved * 100 / total), 99)
+            self.pbar.config(value=pct)
+            self.pct_lbl.config(text=f"{pct}%")
+            elapsed = time.monotonic() - self._run_start_time
+            if saved > 0:
+                eta_sec = int(elapsed / saved * (total - saved))
+                m, sec = divmod(eta_sec, 60)
+                self.eta_lbl.config(text=f"ETA: {m:02d}:{sec:02d}")
+        else:
+            page = s.get("page", 0)
+            if page > 0:
+                pct = min(page % 100, 99)
+                self.pbar.config(value=pct)
+                self.pct_lbl.config(text=f"~{pct}%")
 
     def _poll(self):
         try:
@@ -457,6 +646,7 @@ class Parkingv8ImageTab(Frame):
         try:
             while True:
                 s = self._stat_q.get_nowait()
+                self._update_progress(s)
                 day_info = (
                     f"Ngày: {s['day_label']} ({s['day_idx']}/{s['total_days']})  |  "
                     if s.get("total_days") else "")
@@ -555,9 +745,9 @@ class Parkingv8ImageTab(Frame):
     @staticmethod
     def _scan_stats(out_path: Path) -> dict:
         from collections import defaultdict
-        lt  = defaultdict(lambda: defaultdict(int))   # [lane][vtype]
-        bd  = defaultdict(lambda: defaultdict(int))   # [date][lane]
-        bhl = defaultdict(lambda: defaultdict(int))   # [hour][lane]
+        lt  = defaultdict(lambda: defaultdict(int))
+        bd  = defaultdict(lambda: defaultdict(int))
+        bhl = defaultdict(lambda: defaultdict(int))
         if out_path.exists():
             for img in out_path.rglob("*.jpg"):
                 try:

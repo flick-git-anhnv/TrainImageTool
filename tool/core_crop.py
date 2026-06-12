@@ -118,7 +118,8 @@ def run_crop_by_label(cfg, log, progress, stop_event):
     if recursive:
         log(f"🔍  Quét đệ quy toàn bộ subfolder")
 
-    saved = skipped = no_label = 0
+    saved = skipped = no_label = size_skipped = 0
+    class_stats = {}
 
     for i, fp in enumerate(images, 1):
         if stop_event.is_set():
@@ -160,6 +161,7 @@ def run_crop_by_label(cfg, log, progress, stop_event):
 
             cw, ch = x2 - x1, y2 - y1
             if cw < max(min_w, 1) or ch < max(min_h, 1):
+                size_skipped += 1
                 continue
 
             dest = (out_dir / cname) if by_class else out_dir
@@ -173,6 +175,12 @@ def run_crop_by_label(cfg, log, progress, stop_event):
                 out_path = dest / f"{out_name[:-4]}_{_col:02d}.jpg"
             img.crop((x1, y1, x2, y2)).save(out_path, "JPEG", quality=quality)
             n_crop += 1
+
+            if cname not in class_stats:
+                class_stats[cname] = {"count": 0, "total_w": 0, "total_h": 0}
+            class_stats[cname]["count"]   += 1
+            class_stats[cname]["total_w"] += cw
+            class_stats[cname]["total_h"] += ch
 
         if n_crop:
             saved += n_crop
@@ -188,5 +196,16 @@ def run_crop_by_label(cfg, log, progress, stop_event):
     log(f"Tổng ảnh       : {total}")
     log(f"Bỏ qua (đã có) : {skipped}")
     log(f"Thiếu label    : {no_label}")
+    if size_skipped:
+        log(f"Bỏ qua (nhỏ)   : {size_skipped}")
     log(f"Crops đã lưu   : {saved}")
     log(f"Thư mục output : {out_dir.resolve()}")
+
+    return {
+        "total": total,
+        "skipped": skipped,
+        "no_label": no_label,
+        "size_skipped": size_skipped,
+        "saved": saved,
+        "class_stats": class_stats,
+    }

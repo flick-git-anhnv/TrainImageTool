@@ -4,13 +4,26 @@ from pathlib import Path
 from tkinter import *
 from tkinter import messagebox
 
-from .constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD
+from .constants import (
+    BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD, IMAGE_EXTENSIONS,
+)
 from .settings import _bind_cfg
 from .core_label_norm import run_label_norm
 from .ui_helpers import (
     _folder_row, _pb_row, _make_logbox, _append_log,
     _set_progress, _action_btn,
 )
+
+try:
+    from PIL import Image, ImageTk
+    _PIL_OK = True
+except ImportError:
+    _PIL_OK = False
+
+_BOX_COLORS = [
+    "#F05922", "#4A3F8C", "#4caf50", "#f0c040", "#00bcd4",
+    "#e91e63", "#9c27b0", "#ff9800", "#8bc34a", "#03a9f4",
+]
 
 
 class LabelNormTab(Frame):
@@ -19,6 +32,7 @@ class LabelNormTab(Frame):
         self.root = root
         self._stop_event = threading.Event()
         self._class_vars = {}
+        self._preview_photo = None
         self._build()
 
     def _build(self):
@@ -62,6 +76,12 @@ class LabelNormTab(Frame):
         out_f.grid(row=0, column=1, sticky=NSEW, pady=4)
         self._build_split_opts(out_f)
 
+        tools_f = LabelFrame(self, text=" Công cụ nhãn ",
+                             bg=BG, fg=TEXT, font=F_BOLD, bd=1, relief="groove",
+                             padx=12, pady=8)
+        tools_f.pack(fill=BOTH, expand=True, padx=20, pady=(0, 4))
+        self._build_tools(tools_f)
+
         btn_row = Frame(self, bg=BG, padx=20, pady=6)
         self.btn_run = _action_btn(btn_row, "▶  Bắt đầu", self._run, ACCENT,
                                    padx=20, pady=7)
@@ -91,6 +111,108 @@ class LabelNormTab(Frame):
         btn_row.pack(fill=X, side=BOTTOM)
         pb_f.pack(fill=X, side=BOTTOM)
         log_outer.pack(fill=BOTH, expand=True)
+
+    def _build_tools(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.columnconfigure(1, weight=1)
+        parent.columnconfigure(2, weight=2)
+
+        remap_f = LabelFrame(parent, text=" Đổi class ",
+                             bg=BG, fg=DIM, font=F_MAIN, bd=1, relief="groove",
+                             padx=8, pady=6)
+        remap_f.grid(row=0, column=0, sticky=NSEW, padx=(0, 6))
+
+        rf = Frame(remap_f, bg=BG)
+        rf.pack(fill=X)
+        Label(rf, text="Class cũ:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        self.v_remap_old = StringVar()
+        Entry(rf, textvariable=self.v_remap_old, width=6, bg=CARD, fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).pack(
+              side=LEFT, padx=(4, 12))
+        Label(rf, text="Class mới:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        self.v_remap_new = StringVar()
+        Entry(rf, textvariable=self.v_remap_new, width=6, bg=CARD, fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).pack(
+              side=LEFT, padx=(4, 8))
+        Button(rf, text="Áp dụng", command=self._remap_class,
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", font=F_MAIN, relief="flat",
+               padx=10, cursor="hand2").pack(side=LEFT)
+
+        del_f = LabelFrame(parent, text=" Xóa class ",
+                           bg=BG, fg=DIM, font=F_MAIN, bd=1, relief="groove",
+                           padx=8, pady=6)
+        del_f.grid(row=0, column=1, sticky=NSEW, padx=(0, 6))
+
+        df = Frame(del_f, bg=BG)
+        df.pack(fill=X)
+        Label(df, text="Xóa class:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        self.v_del_class = StringVar()
+        Entry(df, textvariable=self.v_del_class, width=6, bg=CARD, fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).pack(
+              side=LEFT, padx=(4, 8))
+        Button(df, text="Xóa nhãn", command=self._delete_class,
+               bg="#c0392b", fg="white", activebackground="#e74c3c",
+               activeforeground="white", font=F_MAIN, relief="flat",
+               padx=10, cursor="hand2").pack(side=LEFT)
+
+        check_f = LabelFrame(parent, text=" Phát hiện nhãn bất thường ",
+                             bg=BG, fg=DIM, font=F_MAIN, bd=1, relief="groove",
+                             padx=8, pady=6)
+        check_f.grid(row=0, column=2, sticky=NSEW)
+
+        cf = Frame(check_f, bg=BG)
+        cf.pack(fill=X)
+        Button(cf, text="🔍  Kiểm tra", command=self._check_anomalies,
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", font=F_MAIN, relief="flat",
+               padx=12, cursor="hand2").pack(side=LEFT)
+        Label(cf, text="Quét tất cả label — bbox ngoài [0,1], quá nhỏ, trùng lặp",
+              bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(side=LEFT, padx=(10, 0))
+
+        preview_f = LabelFrame(parent, text=" Xem trước bbox ",
+                               bg=BG, fg=DIM, font=F_MAIN, bd=1, relief="groove",
+                               padx=8, pady=6)
+        preview_f.grid(row=1, column=0, columnspan=3, sticky=NSEW, pady=(8, 0))
+        parent.rowconfigure(1, weight=1)
+
+        pv_top = Frame(preview_f, bg=BG)
+        pv_top.pack(fill=X, pady=(0, 6))
+        Label(pv_top, text="Chọn file label:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Button(pv_top, text="Tải danh sách ↺", command=self._load_file_list,
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", font=F_MAIN, relief="flat",
+               padx=10, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+
+        pv_body = Frame(preview_f, bg=BG)
+        pv_body.pack(fill=BOTH, expand=True)
+        pv_body.columnconfigure(0, weight=0)
+        pv_body.columnconfigure(1, weight=1)
+
+        list_f = Frame(pv_body, bg=BG)
+        list_f.grid(row=0, column=0, sticky=NS, padx=(0, 8))
+
+        self.file_listbox = Listbox(
+            list_f, bg=CARD, fg=TEXT, font=("Consolas", 9),
+            selectbackground=ACCENT2, selectforeground="white",
+            relief="flat", bd=0, width=30, height=7,
+        )
+        lb_sb = Scrollbar(list_f, command=self.file_listbox.yview)
+        self.file_listbox.configure(yscrollcommand=lb_sb.set)
+        lb_sb.pack(side=RIGHT, fill=Y)
+        self.file_listbox.pack(side=LEFT, fill=BOTH, expand=True)
+        self.file_listbox.bind("<<ListboxSelect>>", self._on_file_select)
+
+        canvas_f = Frame(pv_body, bg=CARD, bd=0)
+        canvas_f.grid(row=0, column=1, sticky=NSEW)
+
+        self.preview_canvas = Canvas(
+            canvas_f, bg=CARD, bd=0, highlightthickness=0,
+            width=520, height=180,
+        )
+        self.preview_canvas.pack(fill=BOTH, expand=True)
+        self.preview_canvas.bind("<Configure>", self._on_canvas_resize)
+        self._pending_preview_file = None
 
     def _build_filters(self, p):
         def _cb(text, var, row, col=0, span=1):
@@ -336,3 +458,324 @@ class LabelNormTab(Frame):
             os.startfile(p)
         else:
             messagebox.showwarning("Chưa có output", "Chọn hoặc chạy xong để mở thư mục.")
+
+    def _get_label_dir(self):
+        return self.v_lbl.get().strip()
+
+    def _collect_label_files(self):
+        lbl_dir = self._get_label_dir()
+        if not lbl_dir or not Path(lbl_dir).is_dir():
+            return []
+        result = []
+        for p in sorted(Path(lbl_dir).rglob("*.txt")):
+            result.append(p)
+        return result
+
+    def _remap_class(self):
+        old_s = self.v_remap_old.get().strip()
+        new_s = self.v_remap_new.get().strip()
+        if not old_s or not new_s:
+            messagebox.showwarning("Thiếu dữ liệu", "Nhập cả Class cũ và Class mới."); return
+        try:
+            old_id = int(old_s)
+            new_id = int(new_s)
+        except ValueError:
+            messagebox.showerror("Lỗi", "Class ID phải là số nguyên."); return
+
+        files = self._collect_label_files()
+        if not files:
+            messagebox.showwarning("Không tìm thấy", "Chưa chọn thư mục label hoặc không có file .txt."); return
+
+        total_changed = 0
+        for fp in files:
+            try:
+                lines = fp.read_text(encoding="utf-8").splitlines()
+            except Exception:
+                continue
+            new_lines = []
+            changed = False
+            for line in lines:
+                parts = line.strip().split()
+                if parts and parts[0] == str(old_id):
+                    parts[0] = str(new_id)
+                    new_lines.append(" ".join(parts))
+                    changed = True
+                    total_changed += 1
+                else:
+                    new_lines.append(line)
+            if changed:
+                fp.write_text("\n".join(new_lines) + ("\n" if new_lines else ""),
+                              encoding="utf-8")
+
+        _append_log(self.log,
+                    f"✔  Đổi class {old_id}→{new_id}: {total_changed} dòng trong {len(files)} file.")
+
+    def _delete_class(self):
+        cls_s = self.v_del_class.get().strip()
+        if not cls_s:
+            messagebox.showwarning("Thiếu dữ liệu", "Nhập Class ID cần xóa."); return
+        try:
+            del_id = int(cls_s)
+        except ValueError:
+            messagebox.showerror("Lỗi", "Class ID phải là số nguyên."); return
+
+        if not messagebox.askyesno("Xác nhận", f"Xóa tất cả nhãn class {del_id} khỏi mọi file?\nHành động không thể hoàn tác."):
+            return
+
+        files = self._collect_label_files()
+        if not files:
+            messagebox.showwarning("Không tìm thấy", "Chưa chọn thư mục label hoặc không có file .txt."); return
+
+        total_removed = 0
+        for fp in files:
+            try:
+                lines = fp.read_text(encoding="utf-8").splitlines()
+            except Exception:
+                continue
+            kept = []
+            removed = 0
+            for line in lines:
+                parts = line.strip().split()
+                if parts and parts[0] == str(del_id):
+                    removed += 1
+                else:
+                    kept.append(line)
+            if removed:
+                fp.write_text("\n".join(kept) + ("\n" if kept else ""),
+                              encoding="utf-8")
+                total_removed += removed
+
+        _append_log(self.log,
+                    f"✔  Xóa class {del_id}: đã loại bỏ {total_removed} dòng trong {len(files)} file.")
+
+    def _check_anomalies(self):
+        files = self._collect_label_files()
+        if not files:
+            messagebox.showwarning("Không tìm thấy", "Chưa chọn thư mục label hoặc không có file .txt."); return
+
+        win = Toplevel(self.root)
+        win.title("Kết quả kiểm tra nhãn bất thường")
+        win.configure(bg=BG)
+        win.geometry("780x500")
+
+        hdr = Frame(win, bg=BG, padx=12, pady=8)
+        hdr.pack(fill=X)
+        Label(hdr, text="Phát hiện nhãn bất thường", bg=BG, fg=TEXT,
+              font=F_BOLD).pack(side=LEFT)
+
+        body = Frame(win, bg=BG, padx=12, pady=(0, 12))
+        body.pack(fill=BOTH, expand=True)
+
+        txt = Text(body, bg=CARD, fg=TEXT, font=("Consolas", 9),
+                   relief="flat", bd=0, wrap=NONE, state=NORMAL,
+                   insertbackground=TEXT)
+        sb_y = Scrollbar(body, command=txt.yview)
+        sb_x = Scrollbar(body, orient=HORIZONTAL, command=txt.xview)
+        txt.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+        sb_y.pack(side=RIGHT, fill=Y)
+        sb_x.pack(side=BOTTOM, fill=X)
+        txt.pack(fill=BOTH, expand=True)
+
+        for tag, color in [("warn", "#f0c040"), ("err", "#f05050"),
+                           ("ok", "#4caf50"), ("dim", DIM)]:
+            txt.tag_config(tag, foreground=color)
+
+        issue_count = 0
+
+        def _emit(line, tag="dim"):
+            nonlocal issue_count
+            txt.insert(END, line + "\n", tag)
+
+        _emit(f"Quét {len(files)} file...", "dim")
+
+        for fp in files:
+            try:
+                lines = fp.read_text(encoding="utf-8").splitlines()
+            except Exception as e:
+                _emit(f"[LỖI đọc] {fp.name}: {e}", "err")
+                issue_count += 1
+                continue
+
+            seen = set()
+            for lineno, line in enumerate(lines, 1):
+                parts = line.strip().split()
+                if not parts:
+                    continue
+                if len(parts) < 5:
+                    _emit(f"  {fp.name}:{lineno}  → thiếu cột ({len(parts)} cột)", "warn")
+                    issue_count += 1
+                    continue
+                try:
+                    cx, cy, bw, bh = (float(parts[i]) for i in (1, 2, 3, 4))
+                except ValueError:
+                    _emit(f"  {fp.name}:{lineno}  → giá trị không hợp lệ: {line.strip()}", "err")
+                    issue_count += 1
+                    continue
+
+                if not (0.0 <= cx <= 1.0 and 0.0 <= cy <= 1.0 and
+                        0.0 <= bw <= 1.0 and 0.0 <= bh <= 1.0):
+                    _emit(f"  {fp.name}:{lineno}  → tọa độ ngoài [0,1]: cx={cx:.4f} cy={cy:.4f} w={bw:.4f} h={bh:.4f}", "err")
+                    issue_count += 1
+
+                if bw < 0.01 or bh < 0.01:
+                    _emit(f"  {fp.name}:{lineno}  → bbox quá nhỏ: w={bw:.4f} h={bh:.4f}", "warn")
+                    issue_count += 1
+
+                key = (parts[0], f"{cx:.6f}", f"{cy:.6f}", f"{bw:.6f}", f"{bh:.6f}")
+                if key in seen:
+                    _emit(f"  {fp.name}:{lineno}  → trùng lặp: class={parts[0]} cx={cx:.4f} cy={cy:.4f} w={bw:.4f} h={bh:.4f}", "warn")
+                    issue_count += 1
+                else:
+                    seen.add(key)
+
+        if issue_count == 0:
+            _emit(f"\n✔  Không phát hiện vấn đề nào trong {len(files)} file.", "ok")
+        else:
+            _emit(f"\n⚠  Tổng cộng {issue_count} vấn đề phát hiện.", "warn")
+
+        txt.configure(state=DISABLED)
+
+    def _load_file_list(self):
+        files = self._collect_label_files()
+        self.file_listbox.delete(0, END)
+        lbl_dir = self._get_label_dir()
+        base = Path(lbl_dir) if lbl_dir else None
+        for fp in files:
+            try:
+                display = str(fp.relative_to(base)) if base else fp.name
+            except ValueError:
+                display = fp.name
+            self.file_listbox.insert(END, display)
+        self._label_file_paths = files
+        if files:
+            self.file_listbox.selection_set(0)
+            self._show_preview(files[0])
+
+    def _on_file_select(self, event):
+        sel = self.file_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        if not hasattr(self, "_label_file_paths") or idx >= len(self._label_file_paths):
+            return
+        fp = self._label_file_paths[idx]
+        self._show_preview(fp)
+
+    def _find_image_for_label(self, label_path):
+        stem = label_path.stem
+        img_dir = self.v_img.get().strip()
+        candidates = []
+        if img_dir and Path(img_dir).is_dir():
+            for ext in IMAGE_EXTENSIONS:
+                p = Path(img_dir) / (stem + ext)
+                if p.exists():
+                    candidates.append(p)
+                p2 = Path(img_dir) / (stem + ext.upper())
+                if p2.exists():
+                    candidates.append(p2)
+        if not candidates:
+            for ext in IMAGE_EXTENSIONS:
+                p = label_path.parent / (stem + ext)
+                if p.exists():
+                    candidates.append(p)
+        return candidates[0] if candidates else None
+
+    def _parse_label_boxes(self, label_path):
+        boxes = []
+        try:
+            for line in label_path.read_text(encoding="utf-8").splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    try:
+                        cls = int(parts[0])
+                        cx, cy, bw, bh = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
+                        boxes.append((cls, cx, cy, bw, bh))
+                    except ValueError:
+                        pass
+        except Exception:
+            pass
+        return boxes
+
+    def _show_preview(self, label_path):
+        self._pending_preview_file = label_path
+        self.preview_canvas.delete("all")
+        self._preview_photo = None
+
+        boxes = self._parse_label_boxes(label_path)
+        img_path = self._find_image_for_label(label_path)
+
+        cw = self.preview_canvas.winfo_width() or 520
+        ch = self.preview_canvas.winfo_height() or 300
+
+        if img_path and _PIL_OK:
+            self._draw_preview_pil(img_path, boxes, cw, ch)
+        else:
+            self._draw_preview_fallback(boxes, cw, ch, label_path.name,
+                                        no_pil=not _PIL_OK, no_img=img_path is None)
+
+    def _draw_preview_pil(self, img_path, boxes, cw, ch):
+        try:
+            img = Image.open(img_path).convert("RGB")
+        except Exception:
+            self._draw_preview_fallback(boxes, cw, ch, img_path.name, no_img=True)
+            return
+
+        iw, ih = img.size
+        scale = min(cw / iw, ch / ih, 1.0)
+        nw, nh = max(1, int(iw * scale)), max(1, int(ih * scale))
+        img = img.resize((nw, nh), Image.LANCZOS if hasattr(Image, "LANCZOS") else Image.ANTIALIAS)
+
+        photo = ImageTk.PhotoImage(img)
+        self._preview_photo = photo
+
+        ox = (cw - nw) // 2
+        oy = (ch - nh) // 2
+        self.preview_canvas.create_image(ox, oy, anchor=NW, image=photo)
+
+        for cls, cx, cy, bw, bh in boxes:
+            color = _BOX_COLORS[cls % len(_BOX_COLORS)]
+            x1 = ox + int((cx - bw / 2) * nw)
+            y1 = oy + int((cy - bh / 2) * nh)
+            x2 = ox + int((cx + bw / 2) * nw)
+            y2 = oy + int((cy + bh / 2) * nh)
+            self.preview_canvas.create_rectangle(x1, y1, x2, y2,
+                                                  outline=color, width=2)
+            self.preview_canvas.create_text(x1 + 3, y1 + 2,
+                                             text=str(cls), anchor=NW,
+                                             fill=color,
+                                             font=("Consolas", 9, "bold"))
+
+    def _draw_preview_fallback(self, boxes, cw, ch, name="", no_pil=False, no_img=False):
+        self.preview_canvas.create_rectangle(2, 2, cw - 2, ch - 2,
+                                              outline=DIM, dash=(4, 4))
+        if no_pil:
+            msg = "Cài Pillow để xem ảnh: pip install Pillow"
+        elif no_img:
+            msg = f"Không tìm thấy ảnh cho: {name}"
+        else:
+            msg = f"Không thể tải ảnh: {name}"
+        self.preview_canvas.create_text(cw // 2, ch // 2 - 20,
+                                         text=msg, fill=DIM,
+                                         font=F_MAIN, anchor=CENTER)
+        if boxes:
+            self.preview_canvas.create_text(
+                cw // 2, ch // 2 + 10,
+                text=f"{len(boxes)} bbox(es) trong file label",
+                fill=TEXT, font=F_MAIN, anchor=CENTER,
+            )
+            for i, (cls, cx, cy, bw, bh) in enumerate(boxes):
+                color = _BOX_COLORS[cls % len(_BOX_COLORS)]
+                x1 = int((cx - bw / 2) * cw)
+                y1 = int((cy - bh / 2) * ch)
+                x2 = int((cx + bw / 2) * cw)
+                y2 = int((cy + bh / 2) * ch)
+                self.preview_canvas.create_rectangle(x1, y1, x2, y2,
+                                                      outline=color, width=2)
+                self.preview_canvas.create_text(x1 + 3, y1 + 2,
+                                                 text=str(cls), anchor=NW,
+                                                 fill=color,
+                                                 font=("Consolas", 9, "bold"))
+
+    def _on_canvas_resize(self, event):
+        if self._pending_preview_file:
+            self._show_preview(self._pending_preview_file)

@@ -37,7 +37,7 @@ class App(_AppBase):
 
         _style_all()
 
-        nb = ttk.Notebook(self, style="TNotebook")
+        nb = ttk.Notebook(self)
         nb.pack(fill=BOTH, expand=True, padx=6, pady=6)
 
         # ── Dữ liệu ──────────────────────────────────────────────────────────

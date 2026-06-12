@@ -1,5 +1,7 @@
 import os
+import re
 import threading
+from datetime import datetime
 from pathlib import Path
 from tkinter import *
 from tkinter import filedialog, messagebox, ttk
@@ -10,11 +12,32 @@ from .core_rename import build_rename_plan, execute_rename_plan
 from .ui_helpers import _pb_row
 
 
+def _apply_template(template, stem, ext, seq, mtime):
+    result = template
+    fmt_seq = re.search(r'\{seq:([^}]+)\}', result)
+    if fmt_seq:
+        try:
+            result = result[:fmt_seq.start()] + format(seq, fmt_seq.group(1)) + result[fmt_seq.end():]
+        except (ValueError, TypeError):
+            result = result[:fmt_seq.start()] + str(seq) + result[fmt_seq.end():]
+    else:
+        result = result.replace("{seq}", str(seq))
+    result = result.replace("{stem}", stem)
+    result = result.replace("{ext}", ext.lstrip("."))
+    try:
+        date_str = datetime.fromtimestamp(mtime).strftime("%Y%m%d")
+    except (OSError, OverflowError, ValueError):
+        date_str = "00000000"
+    result = result.replace("{date}", date_str)
+    return result
+
+
 class RenameTab(Frame):
     def __init__(self, master, root):
         super().__init__(master, bg=BG)
         self.root  = root
         self._plan = []
+        self._undo_map = {}
         self._build()
 
     def _build(self):
@@ -104,12 +127,58 @@ class RenameTab(Frame):
                         bg=BG, fg=TEXT, selectcolor=CARD,
                         activebackground=BG, font=F_MAIN).pack(side=LEFT, padx=(4, 0))
 
+        extra_row = Frame(self, bg=BG, padx=16, pady=4)
+        extra_row.pack(fill=X)
+
+        regex_frame = Frame(extra_row, bg=CARD, padx=12, pady=8)
+        regex_frame.pack(side=LEFT, fill=Y, padx=(0, 8))
+        Label(regex_frame, text="Regex Find/Replace", bg=CARD, fg=TEXT,
+              font=F_BOLD).grid(row=0, column=0, columnspan=4, sticky=W, pady=(0, 4))
+        Label(regex_frame, text="Tìm (regex):", bg=CARD, fg=DIM,
+              font=F_MAIN).grid(row=1, column=0, sticky=W)
+        self.v_regex_find = StringVar()
+        self.v_regex_find.trace_add("write", self._on_regex_change)
+        Entry(regex_frame, textvariable=self.v_regex_find, bg="#16162a", fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=3,
+              width=22).grid(row=1, column=1, padx=(6, 12), sticky=W)
+        Label(regex_frame, text="Thay bằng:", bg=CARD, fg=DIM,
+              font=F_MAIN).grid(row=1, column=2, sticky=W)
+        self.v_regex_replace = StringVar()
+        self.v_regex_replace.trace_add("write", self._on_regex_change)
+        Entry(regex_frame, textvariable=self.v_regex_replace, bg="#16162a", fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=3,
+              width=22).grid(row=1, column=3, padx=(6, 0), sticky=W)
+        self.lbl_regex_err = Label(regex_frame, text="", bg=CARD,
+                                   fg="#ff6060", font=("Segoe UI", 9))
+        self.lbl_regex_err.grid(row=2, column=0, columnspan=4, sticky=W, pady=(2, 0))
+
+        tpl_frame = Frame(extra_row, bg=CARD, padx=12, pady=8)
+        tpl_frame.pack(side=LEFT, fill=Y)
+        Label(tpl_frame, text="Template Rename", bg=CARD, fg=TEXT,
+              font=F_BOLD).grid(row=0, column=0, columnspan=2, sticky=W, pady=(0, 4))
+        Label(tpl_frame, text="Template:", bg=CARD, fg=DIM,
+              font=F_MAIN).grid(row=1, column=0, sticky=W)
+        self.v_template = StringVar()
+        self.v_template.trace_add("write", self._on_template_change)
+        Entry(tpl_frame, textvariable=self.v_template, bg="#16162a", fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=3,
+              width=32).grid(row=1, column=1, padx=(6, 0), sticky=W)
+        Label(tpl_frame, text="Tokens: {seq:04d}  {stem}  {ext}  {date}",
+              bg=CARD, fg=DIM, font=("Segoe UI", 9)).grid(
+              row=2, column=0, columnspan=2, sticky=W, pady=(2, 2))
+        self.lbl_tpl_preview = Label(tpl_frame, text="", bg=CARD, fg=ACCENT2,
+                                     font=("Segoe UI", 9), anchor=W, justify=LEFT)
+        self.lbl_tpl_preview.grid(row=3, column=0, columnspan=2, sticky=W)
+
         info = Frame(self, bg=CARD, padx=16, pady=6)
-        info.pack(fill=X, padx=16, pady=(0, 6))
+        info.pack(fill=X, padx=16, pady=(0, 3))
         self.lbl_summary = Label(info,
             text="Chọn folder rồi nhấn  🔍 Quét & Xem trước  để kiểm tra trước khi thực hiện.",
             bg=CARD, fg=DIM, font=("Segoe UI", 9), anchor=W)
         self.lbl_summary.pack(fill=X)
+        self.lbl_overwrite = Label(info, text="", bg=CARD, fg="#ff6060",
+                                   font=("Segoe UI", 9), anchor=W)
+        self.lbl_overwrite.pack(fill=X)
 
         tree_outer = Frame(self, bg=BG, padx=16)
         tree_outer.pack(fill=BOTH, expand=True)
@@ -127,9 +196,10 @@ class RenameTab(Frame):
         sb_tree_h = Scrollbar(tree_outer, orient=HORIZONTAL, command=self.tree.xview)
         self.tree.configure(yscrollcommand=sb_tree_v.set,
                             xscrollcommand=sb_tree_h.set)
-        self.tree.tag_configure("same",   foreground=DIM)
-        self.tree.tag_configure("change", foreground=TEXT)
-        self.tree.tag_configure("warn",   foreground="#f0c040")
+        self.tree.tag_configure("same",     foreground=DIM)
+        self.tree.tag_configure("change",   foreground=TEXT)
+        self.tree.tag_configure("warn",     foreground="#f0c040")
+        self.tree.tag_configure("overwrite",foreground="#ff4444")
 
         sb_tree_v.pack(side=RIGHT,  fill=Y)
         sb_tree_h.pack(side=BOTTOM, fill=X)
@@ -144,6 +214,14 @@ class RenameTab(Frame):
                               activeforeground="white", font=F_BOLD,
                               relief="flat", padx=20, pady=8, cursor="hand2")
         self.btn_run.pack(side=LEFT)
+
+        self.btn_undo = Button(bot, text="↩  Hoàn tác", command=self._undo,
+                               state=DISABLED,
+                               bg=ACCENT2, fg="white",
+                               activebackground="#6a5fac",
+                               activeforeground="white", font=F_BOLD,
+                               relief="flat", padx=14, pady=8, cursor="hand2")
+        self.btn_undo.pack(side=LEFT, padx=(10, 0))
 
         Button(bot, text="🧹  Xóa", command=self._clear,
                bg=CARD, fg=DIM, font=F_MAIN,
@@ -178,6 +256,53 @@ class RenameTab(Frame):
             messagebox.showwarning("Chưa có output",
                                    "Nhập hoặc chạy xong để mở thư mục output.")
 
+    def _on_regex_change(self, *_):
+        pattern = self.v_regex_find.get()
+        if not pattern:
+            self.lbl_regex_err.config(text="")
+            return
+        try:
+            re.compile(pattern)
+            self.lbl_regex_err.config(text="")
+        except re.error as e:
+            self.lbl_regex_err.config(text=f"Regex lỗi: {e}")
+
+    def _on_template_change(self, *_):
+        template = self.v_template.get().strip()
+        if not template or not self._plan:
+            self.lbl_tpl_preview.config(text="")
+            return
+        lines = []
+        for i, (src, _dst) in enumerate(self._plan[:5]):
+            stem = src.stem
+            ext  = src.suffix
+            try:
+                mtime = src.stat().st_mtime
+            except OSError:
+                mtime = 0
+            try:
+                new_stem = _apply_template(template, stem, ext, i + 1, mtime)
+                lines.append(f"{src.name}  →  {new_stem}{ext}")
+            except Exception as exc:
+                lines.append(f"Lỗi: {exc}")
+                break
+        self.lbl_tpl_preview.config(text="\n".join(lines))
+
+    def _get_regex_override(self):
+        pattern = self.v_regex_find.get().strip()
+        if not pattern:
+            return None
+        try:
+            compiled = re.compile(pattern)
+        except re.error:
+            return None
+        replacement = self.v_regex_replace.get()
+        return compiled, replacement
+
+    def _get_template_override(self):
+        tpl = self.v_template.get().strip()
+        return tpl if tpl else None
+
     def _scan(self):
         folder = self.v_folder.get().strip()
         if not folder:
@@ -185,6 +310,12 @@ class RenameTab(Frame):
         if not Path(folder).is_dir():
             messagebox.showerror("Không tồn tại",
                                  f"Folder không tồn tại:\n{folder}"); return
+
+        regex_err = self.lbl_regex_err.cget("text")
+        if regex_err:
+            messagebox.showwarning("Regex lỗi",
+                                   "Vui lòng sửa lỗi regex trước khi quét.")
+            return
 
         try:
             pad   = max(1, int(self.v_pad.get()))
@@ -210,16 +341,60 @@ class RenameTab(Frame):
             recursive  = self.v_recursive.get(),
         )
 
+        regex_override = self._get_regex_override()
+        tpl_override   = self._get_template_override()
+
+        if regex_override or tpl_override:
+            compiled_re, repl = regex_override if regex_override else (None, None)
+            new_plan = []
+            seq = start
+            for src, dst in self._plan:
+                stem = src.stem
+                ext  = src.suffix
+                try:
+                    mtime = src.stat().st_mtime
+                except OSError:
+                    mtime = 0
+                if compiled_re is not None:
+                    stem = compiled_re.sub(repl, stem)
+                if tpl_override:
+                    stem = _apply_template(tpl_override, stem, ext, seq, mtime)
+                new_dst = dst.parent / (stem + (dst.suffix if keep_ext else forced_ext))
+                new_plan.append((src, new_dst))
+                seq += 1
+            self._plan = new_plan
+
+        out_path = Path(out_dir) if out_dir else None
+
         self.tree.delete(*self.tree.get_children())
-        changes      = 0
+        changes       = 0
+        overwrite_cnt = 0
         PREVIEW_LIMIT = 2000
         for i, (src, dst) in enumerate(self._plan):
             same = src.resolve() == dst.resolve()
             if not same:
                 changes += 1
-            tag = "same" if same else "change"
+            will_overwrite = (
+                not same
+                and out_path is not None
+                and (out_path / dst.name).exists()
+                and (out_path / dst.name).resolve() != src.resolve()
+            ) or (
+                not same
+                and out_path is None
+                and dst.exists()
+                and dst.resolve() != src.resolve()
+            )
+            if will_overwrite:
+                overwrite_cnt += 1
             if i < PREVIEW_LIMIT:
                 dst_folder = dst.parent.name if out_dir else src.parent.name
+                if will_overwrite:
+                    tag = "overwrite"
+                elif same:
+                    tag = "same"
+                else:
+                    tag = "change"
                 self.tree.insert("", END,
                                  values=(dst_folder, src.name, dst.name),
                                  tags=(tag,))
@@ -230,6 +405,12 @@ class RenameTab(Frame):
             self.tree.insert("", END,
                              values=("…", f"(+{extra} file nữa)", ""),
                              tags=("warn",))
+
+        if overwrite_cnt > 0:
+            self.lbl_overwrite.config(
+                text=f"⚠  {overwrite_cnt} file sẽ bị ghi đè!")
+        else:
+            self.lbl_overwrite.config(text="")
 
         lbl_count = sum(1 for src, dst in self._plan
                         if src.resolve() != dst.resolve()
@@ -243,6 +424,7 @@ class RenameTab(Frame):
                  f"   |   {action_label}")
         self.btn_run.config(state=NORMAL if changes else DISABLED)
         self.lbl_status.config(text="")
+        self._on_template_change()
 
     def _run(self):
         if not self._plan:
@@ -259,22 +441,24 @@ class RenameTab(Frame):
         if not messagebox.askyesno("Xác nhận", confirm_msg):
             return
 
+        pending_plan = list(self._plan)
         self.btn_run.config(state=DISABLED, text="⏳  Đang xử lý…")
+        self.btn_undo.config(state=DISABLED)
         self.pb["value"] = 0
 
         def worker():
             try:
                 execute_rename_plan(
-                    self._plan,
+                    pending_plan,
                     action   = action,
                     log      = lambda m: self.root.after(
                         0, lambda msg=m: self.lbl_status.config(text=msg)),
                     progress = lambda d, t: self.root.after(0, self._set_pb, d, t),
                 )
-                self.root.after(0, self._done, True)
+                self.root.after(0, self._done, True, pending_plan, action)
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("Lỗi", str(e)))
-                self.root.after(0, self._done, False)
+                self.root.after(0, self._done, False, [], action)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -283,12 +467,58 @@ class RenameTab(Frame):
         self.pb["value"] = pct
         self.pb_lbl.config(text=f"{done:,} / {total:,}  ({pct}%)")
 
-    def _done(self, success):
+    def _done(self, success, completed_plan, action):
         self.btn_run.config(state=NORMAL, text="✏  Thực hiện đổi tên")
         if success:
             self.lbl_status.config(text="✅  Hoàn thành!")
             self._plan = []
             self.btn_run.config(state=DISABLED)
+            if action in ("rename", "move") and completed_plan:
+                self._undo_map = {}
+                for src, dst in completed_plan:
+                    if src.resolve() != dst.resolve():
+                        self._undo_map[str(dst.resolve())] = str(src.resolve())
+                if self._undo_map:
+                    self.btn_undo.config(state=NORMAL)
+                else:
+                    self.btn_undo.config(state=DISABLED)
+            else:
+                self.btn_undo.config(state=DISABLED)
+
+    def _undo(self):
+        if not self._undo_map:
+            self.btn_undo.config(state=DISABLED)
+            return
+        undo_items = list(self._undo_map.items())
+        if not messagebox.askyesno(
+            "Hoàn tác",
+            f"Đổi tên ngược lại {len(undo_items):,} file về tên cũ?"
+        ):
+            return
+
+        errors = []
+        done_count = 0
+        for new_path_str, old_path_str in undo_items:
+            new_p = Path(new_path_str)
+            old_p = Path(old_path_str)
+            try:
+                if new_p.exists():
+                    new_p.rename(old_p)
+                    done_count += 1
+            except OSError as e:
+                errors.append(f"{new_p.name}: {e}")
+
+        self._undo_map = {}
+        self.btn_undo.config(state=DISABLED)
+
+        if errors:
+            messagebox.showerror(
+                "Hoàn tác – lỗi",
+                f"Hoàn tác {done_count} file.\nLỗi ({len(errors)}):\n" +
+                "\n".join(errors[:10])
+            )
+        else:
+            self.lbl_status.config(text=f"↩  Đã hoàn tác {done_count} file.")
 
     def _clear(self):
         self.tree.delete(*self.tree.get_children())
@@ -296,6 +526,8 @@ class RenameTab(Frame):
         self.btn_run.config(state=DISABLED)
         self.lbl_summary.config(
             text="Chọn folder rồi nhấn  🔍 Quét & Xem trước  để kiểm tra trước khi thực hiện.")
+        self.lbl_overwrite.config(text="")
         self.lbl_status.config(text="")
         self.pb["value"] = 0
         self.pb_lbl.config(text="")
+        self.lbl_tpl_preview.config(text="")

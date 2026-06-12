@@ -31,10 +31,11 @@ class BBoxEditorTab(Frame):
         self.label_list  = []
         self.image_files = []
         self.current_idx = -1
-        self._filtered_files  = []   # list of (real_idx, Path)
+        self._filtered_files  = []
         self._filter_name_var  = StringVar()
         self._filter_label_var = StringVar(value="Tất cả")
         self._filter_after     = None
+        self._filter_unlabeled = BooleanVar(value=False)
 
         self._pil_img  = None
         self._tk_img   = None
@@ -62,8 +63,12 @@ class BBoxEditorTab(Frame):
         self._rubber_rect  = None
         self._rubber_start = (0, 0)
 
+        # Undo/Redo stacks
+        self._undo_stack = []
+        self._redo_stack = []
+
         # Grid panel (paginated)
-        self._thumb_n_var   = IntVar(value=3)   # columns
+        self._thumb_n_var   = IntVar(value=3)
         self._thumb_w       = 160
         self._thumb_h       = 100
         self._thumb_cache: dict = {}
@@ -141,6 +146,15 @@ class BBoxEditorTab(Frame):
                bg=CARD, fg=DIM, activebackground=CARD,
                font=F_MAIN, relief="flat", cursor="hand2", width=2).pack(side=LEFT)
 
+        # Filter: chỉ hiện ảnh chưa có nhãn
+        flt_unlabeled = Frame(left, bg=CARD)
+        flt_unlabeled.pack(fill=X, padx=6, pady=(0, 4))
+        Checkbutton(flt_unlabeled, text="Chỉ hiện chưa có nhãn",
+                    variable=self._filter_unlabeled,
+                    bg=CARD, fg=TEXT, selectcolor="#16162a",
+                    activebackground=CARD, font=F_MAIN,
+                    command=self._apply_filters).pack(side=LEFT, anchor=W)
+
         lf = Frame(left, bg=CARD)
         lf.pack(fill=BOTH, expand=True, padx=6, pady=(4, 0))
         self._img_lb = Listbox(lf, bg="#16162a", fg=TEXT,
@@ -205,6 +219,11 @@ class BBoxEditorTab(Frame):
                activeforeground="white", font=F_BOLD,
                relief="flat", padx=10, cursor="hand2").pack(side=LEFT, padx=2)
 
+        Button(tb, text="📋 Sao chép sang ảnh tiếp", command=self._copy_to_next,
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", font=F_MAIN,
+               relief="flat", padx=8, cursor="hand2").pack(side=LEFT, padx=2)
+
         self._info_lbl = Label(tb, text="", bg=CARD, fg=DIM, font=F_MAIN)
         self._info_lbl.pack(side=RIGHT, padx=8)
 
@@ -233,7 +252,6 @@ class BBoxEditorTab(Frame):
         self._film_outer = Frame(paned, bg="#0d0d1e")
         paned.add(self._film_outer, minsize=200, stretch="always")
 
-        # Page nav bar — packed first to reserve bottom space
         _nav = Frame(self._film_outer, bg=CARD, pady=5)
         _nav.pack(side=BOTTOM, fill=X)
         Button(_nav, text="◀  Trước", width=9,
@@ -250,7 +268,6 @@ class BBoxEditorTab(Frame):
                activeforeground="white", relief=FLAT, font=F_MAIN
                ).pack(side=RIGHT, padx=(4, 6))
 
-        # Scrollable grid area
         _grid_area = Frame(self._film_outer, bg="#0d0d1e")
         _grid_area.pack(fill=BOTH, expand=True)
 
@@ -288,16 +305,136 @@ class BBoxEditorTab(Frame):
         self._canvas.bind("<Return>",          lambda e: self._save_labels())
         self._canvas.bind("<Control-a>",       lambda e: self._select_all())
         self._canvas.bind("<Escape>",          lambda e: self._deselect_all())
-        self._canvas.bind("<Left>",  lambda e: self._prev_img())
-        self._canvas.bind("<Right>", lambda e: self._next_img())
+        self._canvas.bind("<Left>",            lambda e: self._prev_img())
+        self._canvas.bind("<Right>",           lambda e: self._next_img())
+        self._canvas.bind("<Control-z>",       lambda e: self._undo())
+        self._canvas.bind("<Control-y>",       lambda e: self._redo())
+        self._canvas.bind("<Control-Z>",       lambda e: self._redo())
+        self._canvas.bind("<a>",               lambda e: self._prev_img())
+        self._canvas.bind("<d>",               lambda e: self._next_img())
+        self._canvas.bind("<c>",               lambda e: self._cycle_class())
+        self._canvas.bind("<Control-c>",       lambda e: self._copy_to_next())
+
         self._img_lb.bind("<Left>",  lambda e: self._prev_img())
         self._img_lb.bind("<Right>", lambda e: self._next_img())
         self._img_lb.bind("<Return>", lambda e: self._save_labels())
 
-        self._status = Label(center,
+        # Status bar with shortcuts hint
+        status_row = Frame(center, bg=BG)
+        status_row.pack(fill=X, pady=(4, 0))
+
+        self._status = Label(status_row,
             text="Chọn thư mục ảnh và label, nhập danh sách nhãn rồi nhấn Tải ảnh",
             bg=BG, fg=DIM, font=F_MAIN, anchor=W)
-        self._status.pack(fill=X, pady=(4, 0))
+        self._status.pack(side=LEFT, fill=X, expand=True)
+
+        self._shortcut_lbl = Label(status_row,
+            text="Phím tắt: A/←=trước  D/→=sau  Del=xóa  Ctrl+S=lưu  C=class  Ctrl+Z/Y=undo/redo",
+            bg=BG, fg="#5a5a7a", font=("Segoe UI", 8), anchor=E)
+        self._shortcut_lbl.pack(side=RIGHT, padx=6)
+
+    # ── Undo / Redo ────────────────────────────────────────────────────────
+
+    def _snapshot(self):
+        import copy
+        return copy.deepcopy(self._bboxes)
+
+    def _push_undo(self):
+        self._undo_stack.append(self._snapshot())
+        self._redo_stack.clear()
+        self._update_undo_status()
+
+    def _undo(self):
+        if not self._undo_stack: return
+        self._redo_stack.append(self._snapshot())
+        self._bboxes = self._undo_stack.pop()
+        self._selected = -1
+        self._selected_set = set()
+        self._modified = True
+        self._render()
+        self._update_undo_status()
+
+    def _redo(self):
+        if not self._redo_stack: return
+        self._undo_stack.append(self._snapshot())
+        self._bboxes = self._redo_stack.pop()
+        self._selected = -1
+        self._selected_set = set()
+        self._modified = True
+        self._render()
+        self._update_undo_status()
+
+    def _update_undo_status(self):
+        u = len(self._undo_stack)
+        r = len(self._redo_stack)
+        if u or r:
+            self._status.config(
+                text=f"Undo: {u}  Redo: {r}  |  {len(self._bboxes)} bbox")
+
+    # ── Keyboard: cycle class ──────────────────────────────────────────────
+
+    def _cycle_class(self):
+        vals = list(self._cls_combo["values"])
+        if not vals: return
+        cur = self._cls_combo.current()
+        nxt = (cur + 1) % len(vals)
+        self._cls_combo.current(nxt)
+        self._cls_lb.selection_clear(0, END)
+        self._cls_lb.selection_set(nxt)
+        self._cls_lb.see(nxt)
+        name = vals[nxt]
+        self._status.config(text=f"Class: {name}")
+
+    # ── Copy bboxes to next image ──────────────────────────────────────────
+
+    def _copy_to_next(self):
+        if not self._filtered_files or self._pil_img is None: return
+        cur_fi = next((i for i, (ri, _) in enumerate(self._filtered_files)
+                       if ri == self.current_idx), -1)
+        if cur_fi < 0 or cur_fi >= len(self._filtered_files) - 1:
+            self._status.config(text="Không có ảnh tiếp theo để sao chép")
+            return
+        if not self._bboxes:
+            self._status.config(text="Không có bbox nào để sao chép")
+            return
+
+        next_fi  = cur_fi + 1
+        next_ri  = self._filtered_files[next_fi][0]
+        next_fp  = self.image_files[next_ri]
+        lbl_dir  = self.lbl_dir_var.get().strip()
+        next_lbl = (Path(lbl_dir) / (next_fp.stem + ".txt")
+                    if lbl_dir else next_fp.parent / (next_fp.stem + ".txt"))
+
+        try:
+            next_img = self._PIL_Image.open(next_fp).convert("RGB")
+            niw, nih = next_img.size
+            ciw, cih = self._pil_img.size
+            import copy
+            bboxes_copy = copy.deepcopy(self._bboxes)
+            # Scale coords proportionally if image sizes differ
+            lines = []
+            for cid, x1, y1, x2, y2 in bboxes_copy:
+                xc = max(0.0, min(1.0, ((x1 + x2) / 2) / ciw))
+                yc = max(0.0, min(1.0, ((y1 + y2) / 2) / cih))
+                bw = max(1e-4, min(1.0, (x2 - x1) / ciw))
+                bh = max(1e-4, min(1.0, (y2 - y1) / cih))
+                lines.append(f"{int(cid)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
+            with open(next_lbl, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+        except Exception as e:
+            messagebox.showerror("Lỗi sao chép", str(e))
+            return
+
+        n = len(self._bboxes)
+        self._autosave()
+        self._img_lb.selection_clear(0, END)
+        self._img_lb.selection_set(next_fi)
+        self._img_lb.see(next_fi)
+        self._load_image(next_ri)
+        self._status.config(
+            text=f"Đã sao chép {n} bbox sang  {next_fp.name}")
+
+    # ── Parse label list ──────────────────────────────────────────────────
 
     def _parse_label_list(self):
         raw = self._labels_var.get().strip()
@@ -340,6 +477,7 @@ class BBoxEditorTab(Frame):
         self._filter_label_combo["values"] = filter_opts
         self._filter_label_var.set("Tất cả")
         self._filter_name_var.set("")
+        self._filter_unlabeled.set(False)
 
         self.current_idx = -1
         self._apply_filters()
@@ -381,6 +519,8 @@ class BBoxEditorTab(Frame):
         self._selected     = -1
         self._selected_set = set()
         self._modified     = False
+        self._undo_stack   = []
+        self._redo_stack   = []
 
         lbl_dir  = self.lbl_dir_var.get().strip()
         lbl_path = (Path(lbl_dir) / (fp.stem + ".txt")
@@ -570,10 +710,10 @@ class BBoxEditorTab(Frame):
         ctrl = bool(event.state & 0x4)
 
         if self._mode.get() == "select":
-            # Handle hit on primary (resize) — only without Ctrl
             if self._selected >= 0 and not ctrl:
                 op = self._handle_hit(cx, cy, self._selected)
                 if op:
+                    self._push_undo()
                     self._drag_op = op
                     self._drag_prev = (cx, cy)
                     self._drag_committed = True
@@ -584,7 +724,6 @@ class BBoxEditorTab(Frame):
             if hits:
                 top = hits[-1]
                 if ctrl:
-                    # Ctrl+Click: toggle in selection set
                     if top in self._selected_set:
                         self._selected_set.discard(top)
                         self._selected = (max(self._selected_set)
@@ -602,6 +741,7 @@ class BBoxEditorTab(Frame):
                         self._update_info_lbl()
                     else:
                         self._selected = top
+                    self._push_undo()
                     self._drag_op        = "move"
                     self._drag_press_pos = (cx, cy)
                     self._drag_prev      = (cx, cy)
@@ -612,7 +752,6 @@ class BBoxEditorTab(Frame):
                     self._selected_set = set()
                     self._render()
                     self._update_info_lbl()
-                # Start rubber-band selection
                 self._rubber_band  = True
                 self._rubber_start = (cx, cy)
                 self._rubber_rect  = self._canvas.create_rectangle(
@@ -717,6 +856,9 @@ class BBoxEditorTab(Frame):
             self._drag_op        = None
             self._drag_committed = True
             if not was_committed:
+                # Pop the undo snapshot we pushed on press since no drag happened
+                if self._undo_stack:
+                    self._undo_stack.pop()
                 self._cycle_at(event.x, event.y)
             return
         if not self._drawing: return
@@ -735,6 +877,7 @@ class BBoxEditorTab(Frame):
         ix2 = max(0.0, min(float(iw), ix2)); iy2 = max(0.0, min(float(ih), iy2))
         if ix2 <= ix1 or iy2 <= iy1: return
         cid = self._current_class_id()
+        self._push_undo()
         self._bboxes.append([cid, ix1, iy1, ix2, iy2])
         self._selected = len(self._bboxes) - 1
         self._modified = True
@@ -753,9 +896,10 @@ class BBoxEditorTab(Frame):
     def _relabel_selected(self):
         if not self._selected_set:
             self._status.config(
-                text="⚠  Chưa chọn bbox — dùng chế độ 'Chọn / sửa' rồi click vào bbox")
+                text="Chưa chọn bbox — dùng chế độ 'Chọn / sửa' rồi click vào bbox")
             return
         cid = self._current_class_id()
+        self._push_undo()
         for i in self._selected_set:
             self._bboxes[i][0] = cid
         self._modified = True
@@ -767,6 +911,7 @@ class BBoxEditorTab(Frame):
 
     def _delete_selected(self):
         if not self._selected_set: return
+        self._push_undo()
         for i in sorted(self._selected_set, reverse=True):
             self._bboxes.pop(i)
         n = len(self._selected_set)
@@ -787,7 +932,7 @@ class BBoxEditorTab(Frame):
             self._write_yolo(lbl_path)
             self._modified = False
             self._status.config(
-                text=f"✔  Đã lưu: {lbl_path}  |  {len(self._bboxes)} bbox")
+                text=f"Đã lưu: {lbl_path}  |  {len(self._bboxes)} bbox")
             self._update_filmstrip()
         except Exception as e:
             messagebox.showerror("Lỗi lưu file", str(e))
@@ -830,6 +975,7 @@ class BBoxEditorTab(Frame):
     def _clear_filters(self):
         self._filter_name_var.set("")
         self._filter_label_var.set("Tất cả")
+        self._filter_unlabeled.set(False)
         self._apply_filters()
 
     def _apply_filters(self):
@@ -838,13 +984,13 @@ class BBoxEditorTab(Frame):
             self._lbl_imgcount.config(text="—")
             return
 
-        name_q   = self._filter_name_var.get().strip().lower()
-        label_q  = self._filter_label_var.get()
-        lbl_dir  = self.lbl_dir_var.get().strip()
-        img_root = Path(self.img_dir_var.get().strip())
+        name_q        = self._filter_name_var.get().strip().lower()
+        label_q       = self._filter_label_var.get()
+        only_unlabeled = self._filter_unlabeled.get()
+        lbl_dir       = self.lbl_dir_var.get().strip()
+        img_root      = Path(self.img_dir_var.get().strip())
 
-        # Decode label filter
-        label_id = None   # None = no filter
+        label_id = None
         if label_q and label_q != "Tất cả":
             if label_q == "Không có label":
                 label_id = -2
@@ -858,9 +1004,15 @@ class BBoxEditorTab(Frame):
         for real_idx, fp in enumerate(self.image_files):
             if name_q and name_q not in fp.name.lower():
                 continue
+            lbl_path = (Path(lbl_dir) / (fp.stem + ".txt")
+                        if lbl_dir else fp.parent / (fp.stem + ".txt"))
+
+            # "Chỉ hiện chưa có nhãn" filter
+            if only_unlabeled:
+                if lbl_path.exists() and lbl_path.stat().st_size > 0:
+                    continue
+
             if label_id is not None:
-                lbl_path = (Path(lbl_dir) / (fp.stem + ".txt")
-                            if lbl_dir else fp.parent / (fp.stem + ".txt"))
                 if label_id == -2:
                     if lbl_path.exists() and lbl_path.stat().st_size > 0:
                         continue
@@ -894,7 +1046,6 @@ class BBoxEditorTab(Frame):
         self._lbl_imgcount.config(
             text=f"{shown}/{total} ảnh" if shown != total else f"{total} ảnh")
 
-        # Restore selection if current image still in filtered list
         if self.current_idx >= 0:
             for fi, (ri, _) in enumerate(self._filtered_files):
                 if ri == self.current_idx:
@@ -939,7 +1090,6 @@ class BBoxEditorTab(Frame):
         return img_path.parent / (img_path.stem + ".txt")
 
     def _grid_filter_id(self):
-        """Return label_id to show in grid: None=all, -2=none (unlabeled filter), int=class id."""
         label_q = self._filter_label_var.get()
         if not label_q or label_q == "Tất cả":
             return None
@@ -1034,7 +1184,6 @@ class BBoxEditorTab(Frame):
         tw = max(120, (canvas_w - pad * (n_cols + 1) - 14) // n_cols)
         th = max(80,  int(tw * 0.625))
 
-        # Invalidate cache only if size changed
         if self._thumb_w != tw or self._thumb_h != th:
             self._thumb_cache.clear()
         self._thumb_w, self._thumb_h = tw, th
@@ -1112,7 +1261,6 @@ class BBoxEditorTab(Frame):
             self._rebuild_filmstrip()
             return
 
-        # Auto-jump to the page containing current image
         n_cols   = max(1, min(6, self._thumb_n_var.get()))
         per_page = n_cols * 4
         fi       = self._current_fi()
@@ -1123,12 +1271,10 @@ class BBoxEditorTab(Frame):
                 self._rebuild_filmstrip()
                 return
 
-        # Update border highlights on current page
         for cell in self._film_cells:
             is_cur = (cell["real_idx"] == self.current_idx)
             cell["frame"].config(bg="#F05922" if is_cur else "#2a2a3e")
 
-        # Re-render current image thumb (bbox may have changed after save)
         fid = self._grid_filter_id()
         for cell in self._film_cells:
             if cell["real_idx"] == self.current_idx:

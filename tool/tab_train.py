@@ -1,4 +1,6 @@
 import csv
+import datetime
+import json
 import os
 import queue
 import random
@@ -26,13 +28,19 @@ try:
 except ImportError:
     _MPL_OK = False
 
+try:
+    from PIL import Image as _PILImage, ImageTk as _PILImageTk, ImageEnhance as _PILEnhance
+    _PIL_OK = True
+except ImportError:
+    _PILImage = _PILImageTk = _PILEnhance = None
+    _PIL_OK = False
+
 _VAL_FG  = "#4fc3f7"
 _EXCL_FG = DIM
 
-# chart palette
-_C_BOX  = "#F05922"
-_C_CLS  = "#B8B3D6"
-_C_DFL  = _VAL_FG
+_C_BOX      = "#F05922"
+_C_CLS      = "#B8B3D6"
+_C_DFL      = _VAL_FG
 _C_MAP50    = "#F05922"
 _C_MAP5095  = "#4caf50"
 _C_PREC     = "#B8B3D6"
@@ -71,20 +79,25 @@ class TrainTab(Frame):
         self._recursive_var   = BooleanVar(value=False)
         _bind_cfg("train.project", self._project_var)
 
+        self._early_stop_var     = BooleanVar(value=False)
+        self._patience_var       = StringVar(value="10")
+
         self._proc       = None
         self._out_queue  = queue.Queue()
         self._poll_id    = None
         self._output_dir  = ""
         self._chart_poll_id = None
 
-        # subfolder data
         self._sf_data: dict = {}
 
-        # chart window
         self._chart_win    = None
         self._fig          = None
         self._axes         = None
         self._mpl_canvas   = None
+
+        self._history_win  = None
+        self._ckpt_win     = None
+        self._aug_win      = None
 
         self._build()
 
@@ -177,6 +190,27 @@ class TrainTab(Frame):
               insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4, width=18).pack(
                   side=LEFT, padx=(4, 0))
 
+        # ── Early stopping row ────────────────────────────────────────────
+        es_row = Frame(pf, bg=CARD)
+        es_row.grid(row=4, column=0, columnspan=10, sticky=W, pady=(6, 0))
+        Checkbutton(es_row, text="Early stopping", variable=self._early_stop_var,
+                    bg=CARD, fg=TEXT, activebackground=CARD, activeforeground=TEXT,
+                    selectcolor="#16162a", font=F_MAIN,
+                    command=self._on_early_stop_toggle).pack(side=LEFT)
+        Label(es_row, text="Patience:", bg=CARD, fg=DIM, font=F_MAIN).pack(
+            side=LEFT, padx=(12, 4))
+        self._patience_entry = Entry(es_row, textvariable=self._patience_var,
+                                     bg="#16162a", fg=TEXT, insertbackground=TEXT,
+                                     relief="flat", font=F_MAIN, bd=4, width=5)
+        self._patience_entry.pack(side=LEFT)
+        Label(es_row, text="epochs", bg=CARD, fg=DIM,
+              font=("Segoe UI", 8, "italic")).pack(side=LEFT, padx=(4, 0))
+        self._early_note_lbl = Label(es_row, text="", bg=CARD, fg=DIM,
+                                      font=("Segoe UI", 8, "italic"))
+        self._early_note_lbl.pack(side=LEFT, padx=(14, 0))
+        self._on_early_stop_toggle()
+
+        # ── Control bar ───────────────────────────────────────────────────
         ctrl = Frame(self, bg=BG, padx=12, pady=6)
         ctrl.pack(fill=X)
         self._btn_start = Button(ctrl, text="▶  Bắt đầu Train",
@@ -203,6 +237,24 @@ class TrainTab(Frame):
             self._btn_chart.config(state=DISABLED,
                                     text="📊  Biểu đồ (cần matplotlib)")
 
+        Button(ctrl, text="📋  Lịch sử train",
+               command=self._open_history_window,
+               bg=ACCENT2, fg="white",
+               activebackground=ACCENT, activeforeground="white",
+               font=F_BOLD, relief="flat", padx=14, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+
+        Button(ctrl, text="💾  Checkpoint",
+               command=self._open_checkpoint_window,
+               bg=ACCENT2, fg="white",
+               activebackground=ACCENT, activeforeground="white",
+               font=F_BOLD, relief="flat", padx=14, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+
+        Button(ctrl, text="🖼  Xem augmentation",
+               command=self._open_aug_preview,
+               bg=ACCENT2, fg="white",
+               activebackground=ACCENT, activeforeground="white",
+               font=F_BOLD, relief="flat", padx=14, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+
         self._status_lbl = Label(ctrl, text="", bg=BG, fg=DIM, font=F_MAIN)
         self._status_lbl.pack(side=LEFT, padx=16)
 
@@ -210,7 +262,7 @@ class TrainTab(Frame):
         log_frame.pack(fill=BOTH, expand=True, padx=12, pady=(2, 0))
 
         res = Frame(self, bg=CARD, padx=12, pady=6)
-        res.pack(fill=X, padx=12, pady=(2, 8))
+        res.pack(fill=X, padx=12, pady=(2, 8), side=BOTTOM)
         Label(res, text="Kết quả:", bg=CARD, fg=TEXT, font=F_BOLD).pack(side=LEFT)
         self._result_lbl = Label(res, text="—", bg=CARD, fg=DIM, font=F_MAIN)
         self._result_lbl.pack(side=LEFT, padx=8)
@@ -471,6 +523,13 @@ class TrainTab(Frame):
                     f"nc: {nc}\nnames: [{names_str}]\n")
         return yaml_path, split_msg, len(train_imgs), len(val_imgs)
 
+    # ── Early stopping ────────────────────────────────────────────────────
+
+    def _on_early_stop_toggle(self):
+        enabled = self._early_stop_var.get()
+        state = NORMAL if enabled else DISABLED
+        self._patience_entry.config(state=state)
+
     # ── Chart window ──────────────────────────────────────────────────────
 
     def _open_chart_window(self):
@@ -494,7 +553,6 @@ class TrainTab(Frame):
         win.protocol("WM_DELETE_WINDOW", win.withdraw)
         self._chart_win = win
 
-        # Toolbar
         tb = Frame(win, bg=CARD, padx=8, pady=4)
         tb.pack(fill=X)
         self._epoch_lbl = Label(tb, text="—", bg=CARD, fg=TEXT, font=F_BOLD)
@@ -503,7 +561,6 @@ class TrainTab(Frame):
                bg=ACCENT2, fg="white", activebackground=ACCENT, activeforeground="white",
                font=F_MAIN, relief="flat", padx=10, cursor="hand2").pack(side=RIGHT)
 
-        # Figure
         fig = Figure(figsize=(10, 5.5), dpi=92, facecolor="#16162a")
         axes = fig.subplots(2, 2)
         fig.subplots_adjust(left=0.07, right=0.97, top=0.93,
@@ -585,7 +642,7 @@ class TrainTab(Frame):
             plotted = False
             for key, label, color in series:
                 vals = _v(key)
-                if any(v == v for v in vals):   # any non-NaN
+                if any(v == v for v in vals):
                     ax.plot(epochs, vals, label=label,
                             color=color, linewidth=1.6, alpha=0.9)
                     plotted = True
@@ -624,7 +681,6 @@ class TrainTab(Frame):
             pass
 
     def _start_chart_poll(self):
-        """Refresh chart every 5 s while training — independent of stdout queue."""
         self._update_charts()
         self._chart_poll_id = self.root.after(5000, self._start_chart_poll)
 
@@ -632,6 +688,446 @@ class TrainTab(Frame):
         if self._chart_poll_id:
             self.root.after_cancel(self._chart_poll_id)
             self._chart_poll_id = None
+
+    # ── History (Lịch sử train) ───────────────────────────────────────────
+
+    def _history_file(self):
+        project = self._project_var.get().strip()
+        if not project:
+            return None
+        return Path(project) / "train_history.json"
+
+    def _load_history(self):
+        hf = self._history_file()
+        if hf is None or not hf.exists():
+            return []
+        try:
+            with open(hf, encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    def _save_history(self, records):
+        hf = self._history_file()
+        if hf is None:
+            return
+        try:
+            hf.parent.mkdir(parents=True, exist_ok=True)
+            with open(hf, "w", encoding="utf-8") as f:
+                json.dump(records, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _append_history_record(self, stopped_early=False):
+        rows = self._read_csv()
+        best_map = "—"
+        if rows:
+            try:
+                vals = [float(r.get("metrics/mAP50(B)", "nan")) for r in rows]
+                vals = [v for v in vals if v == v]
+                if vals:
+                    best_map = f"{max(vals):.4f}"
+            except Exception:
+                pass
+        record = {
+            "date":          datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "model":         self._model_var.get(),
+            "epochs_done":   len(rows),
+            "epochs_total":  self._epochs_var.get(),
+            "best_mAP":      best_map,
+            "output_dir":    self._output_dir,
+            "stopped_early": stopped_early,
+        }
+        records = self._load_history()
+        records.append(record)
+        self._save_history(records)
+        if self._history_win and self._history_win.winfo_exists():
+            self._populate_history_tree()
+
+    def _open_history_window(self):
+        if self._history_win and self._history_win.winfo_exists():
+            self._history_win.lift()
+            self._populate_history_tree()
+            return
+        win = Toplevel(self.root)
+        win.title("KZTEK – Lịch sử train")
+        win.geometry("860x400")
+        win.configure(bg=BG)
+        self._history_win = win
+
+        tb = Frame(win, bg=CARD, padx=8, pady=6)
+        tb.pack(fill=X)
+        Label(tb, text="Lịch sử các lần train", bg=CARD, fg=TEXT,
+              font=F_BOLD).pack(side=LEFT)
+        Button(tb, text="↻ Làm mới", command=self._populate_history_tree,
+               bg=ACCENT2, fg="white", activebackground=ACCENT, activeforeground="white",
+               font=F_MAIN, relief="flat", padx=8, cursor="hand2").pack(side=RIGHT)
+        Button(tb, text="🗑 Xóa lịch sử",
+               command=self._clear_history,
+               bg="#c62828", fg="white", activebackground="#8b0000", activeforeground="white",
+               font=F_MAIN, relief="flat", padx=8, cursor="hand2").pack(side=RIGHT, padx=(0, 4))
+
+        cols = ("date", "model", "epochs", "best_mAP", "early", "output")
+        self._hist_tree = ttk.Treeview(win, columns=cols, show="headings",
+                                        style="Dark.Treeview", height=14)
+        self._hist_tree.heading("date",     text="Ngày train")
+        self._hist_tree.heading("model",    text="Model")
+        self._hist_tree.heading("epochs",   text="Epochs")
+        self._hist_tree.heading("best_mAP", text="Best mAP50")
+        self._hist_tree.heading("early",    text="Kết thúc")
+        self._hist_tree.heading("output",   text="Output dir")
+        self._hist_tree.column("date",     width=140, anchor=CENTER, stretch=False)
+        self._hist_tree.column("model",    width=100, anchor=CENTER, stretch=False)
+        self._hist_tree.column("epochs",   width=80,  anchor=CENTER, stretch=False)
+        self._hist_tree.column("best_mAP", width=90,  anchor=CENTER, stretch=False)
+        self._hist_tree.column("early",    width=100, anchor=CENTER, stretch=False)
+        self._hist_tree.column("output",   width=320, anchor=W)
+        vsb = ttk.Scrollbar(win, orient=VERTICAL, command=self._hist_tree.yview)
+        hsb = ttk.Scrollbar(win, orient=HORIZONTAL, command=self._hist_tree.xview)
+        self._hist_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        vsb.pack(side=RIGHT, fill=Y)
+        hsb.pack(side=BOTTOM, fill=X)
+        self._hist_tree.pack(fill=BOTH, expand=True)
+        self._hist_tree.tag_configure("early", foreground="#f0c040")
+        self._hist_tree.tag_configure("done",  foreground=SUCCESS)
+        self._hist_tree.bind("<Double-1>", self._on_history_dbl_click)
+
+        self._populate_history_tree()
+
+    def _populate_history_tree(self):
+        if not hasattr(self, "_hist_tree"):
+            return
+        for iid in self._hist_tree.get_children():
+            self._hist_tree.delete(iid)
+        records = self._load_history()
+        for rec in reversed(records):
+            early      = rec.get("stopped_early", False)
+            done_ep    = rec.get("epochs_done", "?")
+            total_ep   = rec.get("epochs_total", "?")
+            ep_str     = f"{done_ep}/{total_ep}"
+            end_str    = "Early stop" if early else "Hoàn tất"
+            tag        = "early" if early else "done"
+            self._hist_tree.insert("", END, values=(
+                rec.get("date", ""),
+                rec.get("model", ""),
+                ep_str,
+                rec.get("best_mAP", "—"),
+                end_str,
+                rec.get("output_dir", ""),
+            ), tags=(tag,))
+
+    def _on_history_dbl_click(self, event):
+        iid = self._hist_tree.identify_row(event.y)
+        if not iid:
+            return
+        vals = self._hist_tree.item(iid, "values")
+        output_dir = vals[5] if len(vals) > 5 else ""
+        if not output_dir or not os.path.isdir(output_dir):
+            messagebox.showinfo("Thông báo", f"Thư mục không tồn tại:\n{output_dir}")
+            return
+        self._output_dir = output_dir
+        if _MPL_OK:
+            self._open_chart_window()
+            self._update_charts()
+        messagebox.showinfo("Đã tải", f"Đã chuyển sang run:\n{output_dir}")
+
+    def _clear_history(self):
+        if not messagebox.askyesno("Xác nhận", "Xóa toàn bộ lịch sử train?"):
+            return
+        hf = self._history_file()
+        if hf and hf.exists():
+            try:
+                hf.unlink()
+            except Exception as e:
+                messagebox.showerror("Lỗi", str(e))
+                return
+        self._populate_history_tree()
+
+    # ── Checkpoint manager ────────────────────────────────────────────────
+
+    def _open_checkpoint_window(self):
+        if self._ckpt_win and self._ckpt_win.winfo_exists():
+            self._ckpt_win.lift()
+            self._populate_ckpt_list()
+            return
+        win = Toplevel(self.root)
+        win.title("KZTEK – Checkpoint Manager")
+        win.geometry("720x420")
+        win.configure(bg=BG)
+        self._ckpt_win = win
+
+        tb = Frame(win, bg=CARD, padx=8, pady=6)
+        tb.pack(fill=X)
+        Label(tb, text="Danh sách checkpoint (.pt)", bg=CARD, fg=TEXT,
+              font=F_BOLD).pack(side=LEFT)
+        Button(tb, text="↻ Làm mới", command=self._populate_ckpt_list,
+               bg=ACCENT2, fg="white", activebackground=ACCENT, activeforeground="white",
+               font=F_MAIN, relief="flat", padx=8, cursor="hand2").pack(side=RIGHT)
+
+        cols = ("name", "size", "modified")
+        self._ckpt_tree = ttk.Treeview(win, columns=cols, show="headings",
+                                        style="Dark.Treeview", height=14)
+        self._ckpt_tree.heading("name",     text="Tên file")
+        self._ckpt_tree.heading("size",     text="Kích thước")
+        self._ckpt_tree.heading("modified", text="Ngày sửa")
+        self._ckpt_tree.column("name",     width=200, anchor=W)
+        self._ckpt_tree.column("size",     width=100, anchor=CENTER, stretch=False)
+        self._ckpt_tree.column("modified", width=160, anchor=CENTER, stretch=False)
+        vsb = ttk.Scrollbar(win, orient=VERTICAL, command=self._ckpt_tree.yview)
+        vsb.pack(side=RIGHT, fill=Y)
+        self._ckpt_tree.pack(fill=BOTH, expand=True)
+        self._ckpt_tree.configure(yscrollcommand=vsb.set)
+
+        btn_row = Frame(win, bg=BG, padx=8, pady=6)
+        btn_row.pack(fill=X)
+        Button(btn_row, text="📂 Load checkpoint",
+               command=self._load_selected_checkpoint,
+               bg="#2e7d32", fg="white", activebackground="#1b5e20", activeforeground="white",
+               font=F_MAIN, relief="flat", padx=10, cursor="hand2").pack(side=LEFT)
+        Button(btn_row, text="🗑 Xóa checkpoint",
+               command=self._delete_selected_checkpoints,
+               bg="#c62828", fg="white", activebackground="#8b0000", activeforeground="white",
+               font=F_MAIN, relief="flat", padx=10, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+        self._ckpt_info_lbl = Label(btn_row, text="", bg=BG, fg=DIM, font=F_MAIN)
+        self._ckpt_info_lbl.pack(side=LEFT, padx=12)
+
+        self._populate_ckpt_list()
+
+    def _ckpt_search_dirs(self):
+        dirs = []
+        if self._output_dir and os.path.isdir(self._output_dir):
+            dirs.append(Path(self._output_dir))
+            weights_dir = Path(self._output_dir) / "weights"
+            if weights_dir.is_dir():
+                dirs.append(weights_dir)
+        project = self._project_var.get().strip()
+        if project and os.path.isdir(project):
+            p = Path(project)
+            name = self._name_var.get().strip() or "kztek_train"
+            run_dir = p / name
+            if run_dir.is_dir():
+                dirs.append(run_dir)
+                wd = run_dir / "weights"
+                if wd.is_dir():
+                    dirs.append(wd)
+        return dirs
+
+    def _populate_ckpt_list(self):
+        if not hasattr(self, "_ckpt_tree"):
+            return
+        for iid in self._ckpt_tree.get_children():
+            self._ckpt_tree.delete(iid)
+        self._ckpt_paths = {}
+        dirs = self._ckpt_search_dirs()
+        found = set()
+        for d in dirs:
+            for pt in sorted(d.glob("*.pt")):
+                if pt in found:
+                    continue
+                found.add(pt)
+                size_bytes = pt.stat().st_size
+                size_str   = (f"{size_bytes / 1024 / 1024:.1f} MB"
+                              if size_bytes >= 1024 * 1024
+                              else f"{size_bytes / 1024:.0f} KB")
+                mtime = datetime.datetime.fromtimestamp(pt.stat().st_mtime)
+                mtime_str = mtime.strftime("%Y-%m-%d %H:%M")
+                iid = self._ckpt_tree.insert("", END, values=(pt.name, size_str, mtime_str))
+                self._ckpt_paths[iid] = pt
+        count = len(found)
+        if hasattr(self, "_ckpt_info_lbl"):
+            self._ckpt_info_lbl.config(
+                text=f"{count} file .pt" if count else "Không tìm thấy .pt",
+                fg=TEXT if count else DIM)
+
+    def _load_selected_checkpoint(self):
+        sel = self._ckpt_tree.selection()
+        if not sel:
+            messagebox.showwarning("Chưa chọn", "Chọn một file .pt để load.")
+            return
+        pt_path = self._ckpt_paths.get(sel[0])
+        if pt_path and pt_path.exists():
+            self._model_var.set(str(pt_path))
+            messagebox.showinfo("Đã load", f"Model path đã được đặt thành:\n{pt_path}")
+        else:
+            messagebox.showerror("Lỗi", "File không tồn tại.")
+
+    def _delete_selected_checkpoints(self):
+        sel = self._ckpt_tree.selection()
+        if not sel:
+            messagebox.showwarning("Chưa chọn", "Chọn các file .pt muốn xóa.")
+            return
+        names = [self._ckpt_paths[iid].name for iid in sel if iid in self._ckpt_paths]
+        if not messagebox.askyesno("Xác nhận xóa",
+                                    f"Xóa {len(names)} file:\n" + "\n".join(names)):
+            return
+        errors = []
+        for iid in sel:
+            pt = self._ckpt_paths.get(iid)
+            if pt and pt.exists():
+                try:
+                    pt.unlink()
+                except Exception as e:
+                    errors.append(f"{pt.name}: {e}")
+        if errors:
+            messagebox.showerror("Lỗi", "\n".join(errors))
+        self._populate_ckpt_list()
+
+    # ── Augmentation preview ──────────────────────────────────────────────
+
+    def _open_aug_preview(self):
+        if not _PIL_OK:
+            messagebox.showwarning(
+                "Thiếu thư viện",
+                "Cài Pillow để xem augmentation:\n\npip install Pillow")
+            return
+        train_dir = self.train_dir.get().strip()
+        if not train_dir or not os.path.isdir(train_dir):
+            messagebox.showwarning("Chưa có thư mục", "Chọn thư mục train trước.")
+            return
+
+        img_files = []
+        for ext in IMAGE_EXTENSIONS:
+            img_files.extend(Path(train_dir).rglob(f"*{ext}"))
+            img_files.extend(Path(train_dir).rglob(f"*{ext.upper()}"))
+        img_files = list(set(img_files))
+        if not img_files:
+            messagebox.showwarning("Không có ảnh", f"Không tìm thấy ảnh trong:\n{train_dir}")
+            return
+
+        if self._aug_win and self._aug_win.winfo_exists():
+            self._aug_win.destroy()
+        win = Toplevel(self.root)
+        win.title("KZTEK – Augmentation Preview")
+        win.geometry("900x520")
+        win.configure(bg=BG)
+        self._aug_win = win
+
+        tb = Frame(win, bg=CARD, padx=8, pady=6)
+        tb.pack(fill=X)
+        Label(tb, text="Xem augmentation – ảnh gốc vs. ảnh đã biến đổi",
+              bg=CARD, fg=TEXT, font=F_BOLD).pack(side=LEFT)
+        self._aug_img_paths = img_files
+
+        Button(tb, text="↻ Ảnh ngẫu nhiên",
+               command=lambda: self._aug_refresh(win),
+               bg=ACCENT2, fg="white", activebackground=ACCENT, activeforeground="white",
+               font=F_MAIN, relief="flat", padx=8, cursor="hand2").pack(side=RIGHT)
+
+        aug_params = Frame(win, bg=BG, padx=8, pady=4)
+        aug_params.pack(fill=X)
+        Label(aug_params, text="Flip:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        self._aug_flip_var = BooleanVar(value=True)
+        Checkbutton(aug_params, text="Ngang", variable=self._aug_flip_var,
+                    bg=BG, fg=TEXT, activebackground=BG, selectcolor=CARD,
+                    font=F_MAIN).pack(side=LEFT)
+        Label(aug_params, text="  Brightness ±:", bg=BG, fg=DIM,
+              font=F_MAIN).pack(side=LEFT)
+        self._aug_bright_var = DoubleVar(value=0.3)
+        Scale(aug_params, variable=self._aug_bright_var,
+              from_=0.0, to=1.0, resolution=0.05, orient=HORIZONTAL,
+              bg=BG, fg=TEXT, troughcolor=CARD, highlightthickness=0,
+              length=100, font=F_MAIN).pack(side=LEFT)
+        Label(aug_params, text="  Hue shift ±:", bg=BG, fg=DIM,
+              font=F_MAIN).pack(side=LEFT)
+        self._aug_hue_var = IntVar(value=30)
+        Scale(aug_params, variable=self._aug_hue_var,
+              from_=0, to=90, orient=HORIZONTAL,
+              bg=BG, fg=TEXT, troughcolor=CARD, highlightthickness=0,
+              length=100, font=F_MAIN).pack(side=LEFT)
+        Button(aug_params, text="Áp dụng",
+               command=lambda: self._aug_refresh(win),
+               bg=ACCENT, fg="white", activebackground=ACCENT2, activeforeground="white",
+               font=F_MAIN, relief="flat", padx=8, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+
+        img_frame = Frame(win, bg=BG)
+        img_frame.pack(fill=BOTH, expand=True, padx=8, pady=4)
+        img_frame.columnconfigure(0, weight=1)
+        img_frame.columnconfigure(1, weight=1)
+
+        Label(img_frame, text="Ảnh gốc", bg=BG, fg=DIM,
+              font=F_MAIN).grid(row=0, column=0)
+        Label(img_frame, text="Sau augmentation", bg=BG, fg=DIM,
+              font=F_MAIN).grid(row=0, column=1)
+
+        self._aug_lbl_orig = Label(img_frame, bg=BG)
+        self._aug_lbl_orig.grid(row=1, column=0, padx=4, pady=4, sticky=NSEW)
+        self._aug_lbl_aug  = Label(img_frame, bg=BG)
+        self._aug_lbl_aug.grid(row=1, column=1, padx=4, pady=4, sticky=NSEW)
+        img_frame.rowconfigure(1, weight=1)
+
+        self._aug_fname_lbl = Label(win, text="", bg=BG, fg=DIM,
+                                     font=("Segoe UI", 8, "italic"))
+        self._aug_fname_lbl.pack()
+
+        self._aug_refresh(win)
+
+    def _aug_refresh(self, win):
+        if not _PIL_OK or not hasattr(self, "_aug_img_paths") or not self._aug_img_paths:
+            return
+        img_path = random.choice(self._aug_img_paths)
+        try:
+            orig = _PILImage.open(img_path).convert("RGB")
+        except Exception as e:
+            messagebox.showerror("Lỗi mở ảnh", str(e))
+            return
+
+        aug = orig.copy()
+
+        if self._aug_flip_var.get() and random.random() > 0.5:
+            aug = aug.transpose(_PILImage.FLIP_LEFT_RIGHT)
+
+        bright_delta = self._aug_bright_var.get()
+        if bright_delta > 0:
+            factor = 1.0 + random.uniform(-bright_delta, bright_delta)
+            factor = max(0.1, factor)
+            aug = _PILEnhance.Brightness(aug).enhance(factor)
+
+        hue_shift = self._aug_hue_var.get()
+        if hue_shift > 0:
+            try:
+                import colorsys
+                h_delta = random.randint(-hue_shift, hue_shift) / 360.0
+                r, g, b = aug.split()
+                r_arr = list(r.getdata())
+                g_arr = list(g.getdata())
+                b_arr = list(b.getdata())
+                new_r, new_g, new_b = [], [], []
+                for rv, gv, bv in zip(r_arr, g_arr, b_arr):
+                    h, s, v = colorsys.rgb_to_hsv(rv / 255, gv / 255, bv / 255)
+                    h = (h + h_delta) % 1.0
+                    nr, ng, nb = colorsys.hsv_to_rgb(h, s, v)
+                    new_r.append(int(nr * 255))
+                    new_g.append(int(ng * 255))
+                    new_b.append(int(nb * 255))
+                aug_r = _PILImage.new("L", aug.size)
+                aug_g = _PILImage.new("L", aug.size)
+                aug_b = _PILImage.new("L", aug.size)
+                aug_r.putdata(new_r)
+                aug_g.putdata(new_g)
+                aug_b.putdata(new_b)
+                aug = _PILImage.merge("RGB", (aug_r, aug_g, aug_b))
+            except Exception:
+                pass
+
+        max_w, max_h = 420, 360
+        orig_disp = self._pil_fit(orig, max_w, max_h)
+        aug_disp  = self._pil_fit(aug,  max_w, max_h)
+
+        self._aug_tk_orig = _PILImageTk.PhotoImage(orig_disp)
+        self._aug_tk_aug  = _PILImageTk.PhotoImage(aug_disp)
+        self._aug_lbl_orig.config(image=self._aug_tk_orig)
+        self._aug_lbl_aug.config(image=self._aug_tk_aug)
+        self._aug_fname_lbl.config(
+            text=f"{img_path.name}  ({orig.width}×{orig.height})")
+
+    @staticmethod
+    def _pil_fit(img, max_w, max_h):
+        w, h = img.size
+        scale = min(max_w / w, max_h / h, 1.0)
+        if scale < 1.0:
+            img = img.resize((int(w * scale), int(h * scale)), _PILImage.LANCZOS)
+        return img
 
     # ── UI event handlers ─────────────────────────────────────────────────
 
@@ -688,10 +1184,53 @@ class TrainTab(Frame):
             return
         device = self._device_var.get().strip() or "0"
 
+        early_stop = self._early_stop_var.get()
+        try:
+            patience = int(self._patience_var.get())
+        except ValueError:
+            patience = 10
+
         try:
             yaml_path, split_msg, n_train, n_val = self._write_yaml(labels)
         except Exception as e:
             messagebox.showerror("Lỗi tạo data.yaml", str(e)); return
+
+        early_stop_lines = ""
+        if early_stop:
+            early_stop_lines = (
+                f"    import inspect\n"
+                f"    _sig = inspect.signature(model.train)\n"
+                f"    _kw = {{}}\n"
+                f"    if 'patience' in _sig.parameters:\n"
+                f"        _kw['patience'] = {patience}\n"
+            )
+            train_call = (
+                f"    results = model.train(\n"
+                f"        data={yaml_path!r},\n"
+                f"        epochs={epochs},\n"
+                f"        imgsz={imgsz},\n"
+                f"        batch={batch},\n"
+                f"        device={device!r},\n"
+                f"        project={project!r},\n"
+                f"        name={name!r},\n"
+                f"        exist_ok=True,\n"
+                f"        **_kw,\n"
+                f"    )\n"
+            )
+        else:
+            early_stop_lines = ""
+            train_call = (
+                f"    results = model.train(\n"
+                f"        data={yaml_path!r},\n"
+                f"        epochs={epochs},\n"
+                f"        imgsz={imgsz},\n"
+                f"        batch={batch},\n"
+                f"        device={device!r},\n"
+                f"        project={project!r},\n"
+                f"        name={name!r},\n"
+                f"        exist_ok=True,\n"
+                f"    )\n"
+            )
 
         script = (
             "import os, sys, multiprocessing\n"
@@ -704,17 +1243,17 @@ class TrainTab(Frame):
             "        print('[LỖI] ultralytics chưa được cài. Chạy: pip install ultralytics')\n"
             "        sys.exit(1)\n"
             f"    model = YOLO({model!r})\n"
-            f"    results = model.train(\n"
-            f"        data={yaml_path!r},\n"
-            f"        epochs={epochs},\n"
-            f"        imgsz={imgsz},\n"
-            f"        batch={batch},\n"
-            f"        device={device!r},\n"
-            f"        project={project!r},\n"
-            f"        name={name!r},\n"
-            f"        exist_ok=True,\n"
-            f"    )\n"
-            "    print(f'KZTEK_SAVE_DIR: {results.save_dir}')\n"
+            + early_stop_lines
+            + train_call
+            + "    print(f'KZTEK_SAVE_DIR: {results.save_dir}')\n"
+            + f"    csv_path = str(results.save_dir) + '/results.csv'\n"
+            + "    import csv as _csv, os as _os\n"
+            + "    _epochs_done = 0\n"
+            + "    if _os.path.exists(csv_path):\n"
+            + "        with open(csv_path, newline='', encoding='utf-8') as _f:\n"
+            + "            _epochs_done = sum(1 for _ in _csv.DictReader(_f))\n"
+            + f"    if _epochs_done < {epochs}:\n"
+            + "        print(f'KZTEK_EARLY_STOP: {_epochs_done}')\n"
         )
         tmp_script = Path(tempfile.gettempdir()) / "kztek_train_job.py"
         tmp_script.write_text(script, encoding="utf-8")
@@ -725,12 +1264,17 @@ class TrainTab(Frame):
         _append_log(self._log,
             f"▶  model={model}  epochs={epochs}  imgsz={imgsz}  "
             f"batch={batch}  device={device}")
+        if early_stop:
+            _append_log(self._log, f"   Early stopping: patience={patience}")
         _append_log(self._log, f"   data.yaml : {yaml_path}")
         _append_log(self._log, f"   dataset   : {n_train} train / {n_val} val")
         if split_msg:
             _append_log(self._log, f"   {split_msg}")
         _append_log(self._log, f"   output    : {project}/{name}")
         _append_log(self._log, "─" * 70)
+
+        self._train_epochs_total = epochs
+        self._train_stopped_early = False
 
         try:
             self._proc = subprocess.Popen(
@@ -746,7 +1290,6 @@ class TrainTab(Frame):
         self._result_lbl.config(text="—")
         self._open_btn.config(state=DISABLED)
 
-        # Auto-open chart window and start refresh timer
         if _MPL_OK:
             self._open_chart_window()
             self._stop_chart_poll()
@@ -783,8 +1326,15 @@ class TrainTab(Frame):
                     continue
                 if "KZTEK_SAVE_DIR:" in text:
                     self._output_dir = text.split("KZTEK_SAVE_DIR:", 1)[1].strip()
-                    continue        # don't print this internal marker
-                # strip ANSI escape codes
+                    continue
+                if "KZTEK_EARLY_STOP:" in text:
+                    try:
+                        done = int(text.split("KZTEK_EARLY_STOP:", 1)[1].strip())
+                        self._train_stopped_early = done < getattr(
+                            self, "_train_epochs_total", done + 1)
+                    except Exception:
+                        pass
+                    continue
                 text = re.sub(r"\x1b\[[0-9;]*[mKA-Z]", "", text)
                 text = re.sub(r"\[[\d;]*m",             "", text)
                 if text:
@@ -803,7 +1353,7 @@ class TrainTab(Frame):
                 pass
             rc = self._proc.returncode
             if rc is None:
-                rc = 0          # stdout EOF = process finished normally
+                rc = 0
         self._proc = None
         if self._poll_id:
             self.root.after_cancel(self._poll_id); self._poll_id = None
@@ -812,11 +1362,23 @@ class TrainTab(Frame):
         if rc == 0:
             best = os.path.join(self._output_dir, "weights", "best.pt")
             _append_log(self._log, "─" * 70)
-            _append_log(self._log, f"✔  Hoàn tất!  best.pt → {best}")
-            self._status_lbl.config(text="✔ Hoàn tất", fg=SUCCESS)
+            stopped_early = getattr(self, "_train_stopped_early", False)
+            if stopped_early:
+                _append_log(self._log, "⚡  Early stopping đã kích hoạt — training dừng sớm.")
+                _append_log(self._log, f"   best.pt → {best}")
+                self._status_lbl.config(text="⚡ Early stopped", fg="#f0c040")
+                self._early_note_lbl.config(
+                    text="(lần train trước: dừng sớm)", fg="#f0c040")
+            else:
+                _append_log(self._log, f"✔  Hoàn tất!  best.pt → {best}")
+                self._status_lbl.config(text="✔ Hoàn tất", fg=SUCCESS)
+                self._early_note_lbl.config(text="", fg=DIM)
             self._result_lbl.config(text=f"best.pt  →  {best}")
             self._open_btn.config(state=NORMAL)
-            self._update_charts()   # final refresh
+            self._update_charts()
+            self._append_history_record(stopped_early=stopped_early)
+            if self._ckpt_win and self._ckpt_win.winfo_exists():
+                self._populate_ckpt_list()
         else:
             _append_log(self._log, f"[LỖI]  Tiến trình kết thúc với exit code {rc}")
             self._status_lbl.config(text=f"Lỗi (exit {rc})", fg="#f05050")

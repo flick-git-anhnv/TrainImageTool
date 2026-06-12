@@ -1,8 +1,9 @@
+import csv
 import os
 import threading
 from pathlib import Path
 from tkinter import *
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 
 from .constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD
 from .settings import _bind_cfg
@@ -12,6 +13,16 @@ from .ui_helpers import (
     _set_progress, _action_btn,
 )
 
+try:
+    from PIL import Image as _PILImage, ImageTk as _ImageTk
+    _PIL_OK = True
+except ImportError:
+    _PIL_OK = False
+
+
+_PREVIEW_W = 220
+_PREVIEW_H = 180
+
 
 class CropByLabelTab(Frame):
     def __init__(self, master, root):
@@ -19,6 +30,8 @@ class CropByLabelTab(Frame):
         self.root = root
         self._stop_event = threading.Event()
         self._class_vars = {}
+        self._last_stats = None
+        self._preview_photo = None
         self._build()
 
     def _build(self):
@@ -47,21 +60,27 @@ class CropByLabelTab(Frame):
                activeforeground="white", font=F_MAIN, relief="flat",
                padx=10, cursor="hand2").pack(side=LEFT, padx=(6, 0))
 
-        opt = Frame(self, bg=BG, padx=20)
-        opt.pack(fill=X, pady=(0, 4))
-        opt.columnconfigure(0, weight=3)
-        opt.columnconfigure(1, weight=2)
+        mid = Frame(self, bg=BG, padx=20)
+        mid.pack(fill=X, pady=(0, 4))
+        mid.columnconfigure(0, weight=3)
+        mid.columnconfigure(1, weight=2)
+        mid.columnconfigure(2, weight=0)
 
-        cls_f = LabelFrame(opt, text=" Nhãn lớp cần crop ",
+        cls_f = LabelFrame(mid, text=" Nhãn lớp cần crop ",
                            bg=BG, fg=TEXT, font=F_BOLD, bd=1, relief="groove")
         cls_f.grid(row=0, column=0, sticky=NSEW, padx=(0, 8), pady=4)
         self._class_frame = Frame(cls_f, bg=BG)
         self._class_frame.pack(anchor=W, padx=10, pady=8)
 
-        cfg_f = LabelFrame(opt, text=" Tùy chọn ",
+        cfg_f = LabelFrame(mid, text=" Tùy chọn ",
                            bg=BG, fg=TEXT, font=F_BOLD, bd=1, relief="groove")
         cfg_f.grid(row=0, column=1, sticky=NSEW, pady=4)
         self._build_opts(cfg_f)
+
+        prev_f = LabelFrame(mid, text=" Xem trước crop ",
+                            bg=BG, fg=TEXT, font=F_BOLD, bd=1, relief="groove")
+        prev_f.grid(row=0, column=2, sticky=NSEW, padx=(8, 0), pady=4)
+        self._build_preview_panel(prev_f)
 
         btn_row = Frame(self, bg=BG, padx=20, pady=6)
         self.btn_run = _action_btn(btn_row, "✂  Bắt đầu Crop", self._run, ACCENT,
@@ -75,6 +94,10 @@ class CropByLabelTab(Frame):
                     padx=14, pady=7).pack(side=LEFT, padx=(8, 0))
         _action_btn(btn_row, "📂  Mở output", self._open_out, ACCENT2,
                     padx=14, pady=7).pack(side=LEFT, padx=(8, 0))
+        self.btn_stats = _action_btn(btn_row, "📊  Thống kê", self._show_stats, ACCENT2,
+                                     padx=14, pady=7)
+        self.btn_stats.pack(side=LEFT, padx=(8, 0))
+        self.btn_stats.config(state=DISABLED)
         Button(btn_row, text="🧹  Xóa log",
                command=lambda: (self.log.configure(state=NORMAL),
                                 self.log.delete("1.0", END),
@@ -94,6 +117,40 @@ class CropByLabelTab(Frame):
         log_outer.pack(fill=BOTH, expand=True)
 
         self._refresh_classes()
+
+        self.v_img.trace_add("write", lambda *_: self._refresh_file_list())
+        self.v_lbl.trace_add("write", lambda *_: self._refresh_file_list())
+
+    def _build_preview_panel(self, parent):
+        list_f = Frame(parent, bg=BG)
+        list_f.pack(fill=BOTH, expand=True, padx=6, pady=(6, 2))
+
+        sb = Scrollbar(list_f, bg=CARD, troughcolor=BG, relief="flat")
+        sb.pack(side=RIGHT, fill=Y)
+        self._file_listbox = Listbox(
+            list_f, bg="#16162a", fg=TEXT, selectbackground=ACCENT2,
+            selectforeground="white", font=("Consolas", 8),
+            relief="flat", bd=0, activestyle="none",
+            yscrollcommand=sb.set, width=22, height=6,
+        )
+        self._file_listbox.pack(side=LEFT, fill=BOTH, expand=True)
+        sb.config(command=self._file_listbox.yview)
+        self._file_listbox.bind("<<ListboxSelect>>", self._on_file_select)
+
+        self._preview_label = Label(
+            parent, bg="#16162a", text="(chọn ảnh để xem)", fg=DIM,
+            font=("Consolas", 8), width=_PREVIEW_W, height=_PREVIEW_H,
+        )
+        self._preview_label.pack(padx=6, pady=(2, 6))
+
+        self._preview_info = Label(
+            parent, bg=BG, fg=DIM, font=("Consolas", 8), text="", anchor=W,
+        )
+        self._preview_info.pack(fill=X, padx=6, pady=(0, 4))
+
+        Button(parent, text="↺ Làm mới", command=self._refresh_file_list,
+               bg=CARD, fg=DIM, font=F_MAIN, relief="flat",
+               padx=8, pady=3, cursor="hand2").pack(pady=(0, 4))
 
     def _build_opts(self, p):
         def _row(label, var, unit="", row=0, w=6):
@@ -154,6 +211,128 @@ class CropByLabelTab(Frame):
                         font=F_MAIN).grid(row=i // 3, column=i % 3,
                                           sticky=W, padx=6, pady=2)
 
+    def _refresh_file_list(self):
+        img_dir = self.v_img.get().strip()
+        self._file_listbox.delete(0, END)
+        self._preview_label.config(image="", text="(chọn ảnh để xem)")
+        self._preview_info.config(text="")
+        if not img_dir or not Path(img_dir).is_dir():
+            return
+        from .constants import IMAGE_EXTENSIONS
+        files = sorted(
+            f.name for f in Path(img_dir).iterdir()
+            if f.suffix.lower() in IMAGE_EXTENSIONS
+        )
+        for name in files:
+            self._file_listbox.insert(END, name)
+
+    def _on_file_select(self, event=None):
+        sel = self._file_listbox.curselection()
+        if not sel:
+            return
+        fname = self._file_listbox.get(sel[0])
+        img_dir = self.v_img.get().strip()
+        lbl_dir = self.v_lbl.get().strip()
+        if not img_dir or not lbl_dir:
+            return
+        img_path = Path(img_dir) / fname
+        lbl_path = Path(lbl_dir) / (Path(fname).stem + ".txt")
+        self._render_preview(img_path, lbl_path)
+
+    def _render_preview(self, img_path, lbl_path):
+        if not _PIL_OK:
+            self._preview_label.config(image="", text="PIL không khả dụng")
+            return
+        if not img_path.exists():
+            self._preview_label.config(image="", text="Ảnh không tồn tại")
+            return
+
+        try:
+            img = _PILImage.open(img_path).convert("RGB")
+            iw, ih = img.size
+        except Exception as e:
+            self._preview_label.config(image="", text=f"Lỗi ảnh:\n{e}")
+            return
+
+        if not lbl_path.exists():
+            self._preview_label.config(image="", text="Không có label")
+            self._preview_info.config(text=f"{img_path.name}  {iw}×{ih}")
+            return
+
+        import math as _math
+        boxes = []
+        try:
+            with open(lbl_path, encoding="utf-8") as f:
+                for line in f:
+                    p = line.strip().split()
+                    if len(p) >= 5:
+                        vals = list(map(float, p[1:5]))
+                        if not any(_math.isnan(v) or _math.isinf(v) for v in vals):
+                            boxes.append((int(p[0]), *vals))
+        except Exception:
+            pass
+
+        if not boxes:
+            self._preview_label.config(image="", text="Label rỗng")
+            self._preview_info.config(text=f"{img_path.name}  {iw}×{ih}")
+            return
+
+        keep_cls = None
+        if self.v_filter_cls.get():
+            keep_cls = {i for i, (_, v) in self._class_vars.items() if v.get()}
+
+        box = None
+        for cid, xc, yc, bw, bh in boxes:
+            if keep_cls is not None and cid not in keep_cls:
+                continue
+            box = (cid, xc, yc, bw, bh)
+            break
+
+        if box is None:
+            box = boxes[0]
+
+        cid, xc, yc, bw, bh = box
+        x1 = max(0,  int((xc - bw/2) * iw))
+        y1 = max(0,  int((yc - bh/2) * ih))
+        x2 = min(iw, int((xc + bw/2) * iw))
+        y2 = min(ih, int((yc + bh/2) * ih))
+
+        try:
+            pad = self.v_padding.get()
+        except Exception:
+            pad = 0
+        if pad:
+            x1 = max(0, x1 - pad)
+            y1 = max(0, y1 - pad)
+            x2 = min(iw, x2 + pad)
+            y2 = min(ih, y2 + pad)
+
+        cw, ch = x2 - x1, y2 - y1
+        if cw <= 0 or ch <= 0:
+            self._preview_label.config(image="", text="Bbox không hợp lệ")
+            return
+
+        crop = img.crop((x1, y1, x2, y2))
+
+        scale = min(_PREVIEW_W / cw, _PREVIEW_H / ch, 1.0)
+        disp_w = max(1, int(cw * scale))
+        disp_h = max(1, int(ch * scale))
+        crop_disp = crop.resize((disp_w, disp_h), _PILImage.LANCZOS)
+
+        canvas = _PILImage.new("RGB", (_PREVIEW_W, _PREVIEW_H), (22, 22, 46))
+        ox = (_PREVIEW_W - disp_w) // 2
+        oy = (_PREVIEW_H - disp_h) // 2
+        canvas.paste(crop_disp, (ox, oy))
+
+        self._preview_photo = _ImageTk.PhotoImage(canvas)
+        self._preview_label.config(image=self._preview_photo, text="")
+
+        class_map = {i: name for i, (name, _) in self._class_vars.items()}
+        cname = class_map.get(cid, f"class{cid}")
+        self._preview_info.config(
+            text=f"{cname}  {cw}×{ch}px  ({len(boxes)} bbox)"
+        )
+
     def _get_cfg(self):
         keep_ids  = [i for i, (_, v) in self._class_vars.items() if v.get()]
         class_map = {i: name for i, (name, _) in self._class_vars.items()}
@@ -177,13 +356,16 @@ class CropByLabelTab(Frame):
         if not cfg["image_dir"] or not cfg["label_dir"] or not cfg["output_dir"]:
             messagebox.showwarning("Thiếu thông tin", "Vui lòng chọn đủ 3 thư mục."); return
         self._stop_event.clear()
+        self._last_stats = None
         self.btn_run.config(state=DISABLED, text="⏳  Đang xử lý…")
         self.btn_stop.config(state=NORMAL)
+        self.btn_stats.config(state=DISABLED)
         self.pb["value"] = 0; self.pb_lbl.config(text="Đang khởi động…")
 
         def worker():
+            result = None
             try:
-                run_crop_by_label(
+                result = run_crop_by_label(
                     cfg,
                     log=lambda m: self.root.after(0, _append_log, self.log, m),
                     progress=lambda d, t: self.root.after(
@@ -192,10 +374,14 @@ class CropByLabelTab(Frame):
             except Exception as e:
                 self.root.after(0, _append_log, self.log, f"[LỖI] {e}")
             finally:
-                self.root.after(0, lambda: (
-                    self.btn_run.config(state=NORMAL, text="✂  Bắt đầu Crop"),
-                    self.btn_stop.config(state=DISABLED),
-                    self.pb_lbl.config(text="✅  Hoàn thành!")))
+                def _done():
+                    self.btn_run.config(state=NORMAL, text="✂  Bắt đầu Crop")
+                    self.btn_stop.config(state=DISABLED)
+                    self.pb_lbl.config(text="✅  Hoàn thành!")
+                    if result and result.get("class_stats"):
+                        self._last_stats = result
+                        self.btn_stats.config(state=NORMAL)
+                self.root.after(0, _done)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -221,3 +407,115 @@ class CropByLabelTab(Frame):
             os.startfile(p)
         else:
             messagebox.showwarning("Chưa có output", "Chọn hoặc chạy xong để mở thư mục.")
+
+    def _show_stats(self):
+        if not self._last_stats:
+            messagebox.showinfo("Thống kê", "Chưa có dữ liệu. Hãy chạy crop trước.")
+            return
+        stats = self._last_stats
+        class_stats = stats.get("class_stats", {})
+
+        win = Toplevel(self.root)
+        win.title("Thống kê Crop")
+        win.configure(bg=BG)
+        win.resizable(True, True)
+        win.geometry("560x440")
+
+        Label(win, text="Thống kê kết quả Crop", bg=BG, fg=TEXT,
+              font=F_BOLD).pack(pady=(14, 4))
+
+        summary_f = Frame(win, bg=CARD, padx=14, pady=8)
+        summary_f.pack(fill=X, padx=16, pady=(0, 8))
+        rows = [
+            ("Tổng ảnh đã xử lý", stats.get("total", 0)),
+            ("Bỏ qua (đã có)", stats.get("skipped", 0)),
+            ("Thiếu label", stats.get("no_label", 0)),
+            ("Bỏ qua (nhỏ hơn min size)", stats.get("size_skipped", 0)),
+            ("Tổng crops đã lưu", stats.get("saved", 0)),
+        ]
+        for label, val in rows:
+            rf = Frame(summary_f, bg=CARD)
+            rf.pack(fill=X, pady=1)
+            Label(rf, text=label, bg=CARD, fg=DIM, font=F_MAIN, anchor=W,
+                  width=30).pack(side=LEFT)
+            Label(rf, text=str(val), bg=CARD, fg=TEXT, font=F_BOLD,
+                  anchor=W).pack(side=LEFT)
+
+        Label(win, text="Chi tiết theo nhãn:", bg=BG, fg=TEXT,
+              font=F_BOLD).pack(anchor=W, padx=16, pady=(4, 2))
+
+        tbl_f = Frame(win, bg=BG, padx=16)
+        tbl_f.pack(fill=BOTH, expand=True)
+
+        cols = ("Nhãn", "Số crops", "TB rộng (px)", "TB cao (px)")
+        col_w = (160, 90, 110, 110)
+
+        hdr = Frame(tbl_f, bg=ACCENT2)
+        hdr.pack(fill=X)
+        for c, w in zip(cols, col_w):
+            Label(hdr, text=c, bg=ACCENT2, fg="white", font=F_BOLD,
+                  width=w // 8, anchor=W, padx=6, pady=4).pack(side=LEFT)
+
+        data_outer = Frame(tbl_f, bg=BG)
+        data_outer.pack(fill=BOTH, expand=True)
+        canvas = Canvas(data_outer, bg="#16162a", highlightthickness=0)
+        vsb = Scrollbar(data_outer, orient=VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=RIGHT, fill=Y)
+        canvas.pack(side=LEFT, fill=BOTH, expand=True)
+        inner = Frame(canvas, bg="#16162a")
+        canvas_win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>", lambda e: canvas.configure(
+            scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(
+            canvas_win, width=e.width))
+
+        table_data = []
+        for cname, cs in sorted(class_stats.items()):
+            cnt = cs["count"]
+            avg_w = cs["total_w"] / cnt if cnt else 0
+            avg_h = cs["total_h"] / cnt if cnt else 0
+            table_data.append((cname, cnt, round(avg_w, 1), round(avg_h, 1)))
+
+        for ridx, (cname, cnt, avg_w, avg_h) in enumerate(table_data):
+            row_bg = "#16162a" if ridx % 2 == 0 else CARD
+            rf = Frame(inner, bg=row_bg)
+            rf.pack(fill=X)
+            for val, w in zip((cname, cnt, avg_w, avg_h), col_w):
+                Label(rf, text=str(val), bg=row_bg, fg=TEXT, font=F_MAIN,
+                      width=w // 8, anchor=W, padx=6, pady=3).pack(side=LEFT)
+
+        btn_f = Frame(win, bg=BG, pady=10)
+        btn_f.pack(fill=X, padx=16)
+
+        def _export_csv():
+            path = filedialog.asksaveasfilename(
+                parent=win,
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialfile="crop_stats.csv",
+                title="Xuất thống kê CSV",
+            )
+            if not path:
+                return
+            try:
+                with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                    w = csv.writer(f)
+                    w.writerow(["Nhãn", "Số crops", "TB rộng (px)", "TB cao (px)"])
+                    for row in table_data:
+                        w.writerow(row)
+                    w.writerow([])
+                    w.writerow(["Tổng ảnh", stats.get("total", 0)])
+                    w.writerow(["Bỏ qua (đã có)", stats.get("skipped", 0)])
+                    w.writerow(["Thiếu label", stats.get("no_label", 0)])
+                    w.writerow(["Bỏ qua (nhỏ)", stats.get("size_skipped", 0)])
+                    w.writerow(["Tổng crops", stats.get("saved", 0)])
+                messagebox.showinfo("Xuất CSV", f"Đã lưu:\n{path}", parent=win)
+            except Exception as e:
+                messagebox.showerror("Lỗi", str(e), parent=win)
+
+        _action_btn(btn_f, "📥  Xuất CSV", _export_csv, ACCENT,
+                    padx=16, pady=6).pack(side=LEFT)
+        Button(btn_f, text="Đóng", command=win.destroy,
+               bg=CARD, fg=DIM, font=F_MAIN, relief="flat",
+               padx=14, pady=6, cursor="hand2").pack(side=RIGHT)

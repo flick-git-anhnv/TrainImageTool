@@ -51,15 +51,23 @@ def _li_bad_reason(rec: dict) -> Optional[Tuple[str, str, str]]:
     return None
 
 
+def _vi_to_ascii(s: str) -> str:
+    """Chuyển tiếng Việt → ASCII để so khớp không phân biệt dấu.
+    Xử lý đặc biệt 'đ/Đ' vì NFKD không decompose ký tự này.
+    """
+    s = s.replace("đ", "d").replace("Đ", "D")
+    return unicodedata.normalize("NFKD", s).encode("ascii", errors="ignore").decode()
+
+
 def _li_match_kw(src: str, keywords: list) -> bool:
     """True nếu bất kỳ từ khóa nào khớp với src (không phân biệt dấu/hoa-thường)."""
     if not src or not keywords:
         return False
     s   = src.lower()
-    s_n = unicodedata.normalize("NFKD", s).encode("ascii", errors="ignore").decode()
+    s_n = _vi_to_ascii(s)
     for kw in keywords:
         k   = kw.lower()
-        k_n = unicodedata.normalize("NFKD", k).encode("ascii", errors="ignore").decode()
+        k_n = _vi_to_ascii(k)
         if k and (k in s or k_n in s_n):
             return True
     return False
@@ -73,15 +81,16 @@ def _li_categorize(description: str, card_group: str = "",
     kw_may = cfg.get("xe_may")    or ["xe máy"]
     kw_oto = cfg.get("o_to")      or []
 
+    # description: chỉ phân biệt toàn cảnh hay ảnh xe
     if _li_match_kw(description, kw_tc):
         return "toan_canh"
 
-    src = card_group if card_group else description
-    if _li_match_kw(src, kw_dap):
+    # card_group: phân loại loại xe
+    if _li_match_kw(card_group, kw_dap):
         return "xe_dap"
-    if _li_match_kw(src, kw_may):
+    if _li_match_kw(card_group, kw_may):
         return "xe_may"
-    if kw_oto and _li_match_kw(src, kw_oto):
+    if kw_oto and _li_match_kw(card_group, kw_oto):
         return "o_to"
     return "o_to"
 
@@ -214,11 +223,14 @@ class LotteApiClient:
 
 
 class LotteWorker:
-    def __init__(self, cfg: dict, log_q: queue.Queue, stat_q: queue.Queue):
-        self.cfg    = cfg
-        self.log_q  = log_q
-        self.stat_q = stat_q
-        self._stop  = threading.Event()
+    def __init__(self, cfg: dict, log_q: queue.Queue, stat_q: queue.Queue,
+                 pause_event: threading.Event = None):
+        self.cfg         = cfg
+        self.log_q       = log_q
+        self.stat_q      = stat_q
+        self._stop       = threading.Event()
+        self._pause      = pause_event or threading.Event()
+        self._pause.set()   # mặc định không pause
         self.stats: dict = {
             "page": 0, "total": 0, "event": 0, "found": 0,
             "saved": 0, "skipped": 0, "error": 0, "bad_saved": 0,
@@ -363,6 +375,9 @@ class LotteWorker:
                      out: Path, size: int, sleep_s: float):
         page, empty_n = 1, 0
         while not self._stop.is_set():
+            self._pause.wait()   # chờ nếu đang tạm dừng
+            if self._stop.is_set():
+                return
             self._log(f"  [PAGE {page}] Đang gọi API...")
             t0 = time.time()
             ok, data = api.search(d_from, d_to, page, size)
@@ -415,24 +430,31 @@ class LotteWorker:
         bad_label     = bad_result[1] if bad_result else ""
         bad_direction = bad_result[2] if bad_result else ""
         card_group = str(rec.get("CardGroupName") or rec.get("VehicleType") or "")
-        self._log(f"  [{event_id}] {plate or '?':12s} | {lane_in} | {dt_in.strftime('%Y-%m-%d')} "
-                  f"| {len(imgs_in)+len(imgs_out)} ảnh"
+        # xe đạp không có biển số là bình thường → không phải sự kiện xấu
+        if bad_reason == "none" and _li_categorize("", card_group, self._vtype_cfg) == "xe_dap":
+            bad_reason = None
+            bad_label  = ""
+            bad_direction = ""
+        cg_display = f" | nhóm thẻ: {card_group}" if card_group else ""
+        self._log(f"  [{event_id}] {plate or '?':12s} | {lane_in} | {dt_in.strftime('%Y-%m-%d %H:%M')}"
+                  f"{cg_display} | {len(imgs_in)+len(imgs_out)} ảnh"
                   + (f" | BAD:{bad_reason}[{bad_label}]" if bad_reason else ""))
         event_folder = _li_safe(str(rec.get("Id") or event_id or "evt"))
         for idx, img_obj in enumerate(imgs_in, 1):
             if self._stop.is_set():
                 return
-            desc = img_obj.get("Description", "") if isinstance(img_obj, dict) else ""
-            self._log(f"    IN  [{idx}/{len(imgs_in)}] {desc}")
+            desc  = img_obj.get("Description", "") if isinstance(img_obj, dict) else ""
+            vtype = _li_categorize(desc, card_group, self._vtype_cfg)
+            self._log(f"    IN  [{idx}/{len(imgs_in)}] \"{desc}\" → {vtype}")
             self._save_image(api, img_obj, lane_in, dt_in, plate, out,
                              bad_reason, bad_label, card_group, "in", bad_direction,
                              event_folder)
         for idx, img_obj in enumerate(imgs_out, 1):
             if self._stop.is_set():
                 return
-            desc = img_obj.get("Description", "") if isinstance(img_obj, dict) else ""
-            self._log(f"    OUT [{idx}/{len(imgs_out)}] {desc}")
-            # bad: dùng lane_in để cùng thư mục với ảnh vào
+            desc  = img_obj.get("Description", "") if isinstance(img_obj, dict) else ""
+            vtype = _li_categorize(desc, card_group, self._vtype_cfg)
+            self._log(f"    OUT [{idx}/{len(imgs_out)}] \"{desc}\" → {vtype}")
             save_lane = lane_in if bad_reason else lane_out
             self._save_image(api, img_obj, save_lane, dt_out, plate, out,
                              bad_reason, bad_label, card_group, "out", bad_direction,
