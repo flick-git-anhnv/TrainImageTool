@@ -1,0 +1,91 @@
+{
+  "format": 1,
+  "restore": {
+    "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj": {}
+  },
+  "projects": {
+    "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj": {
+      "version": "1.0.0.3",
+      "restore": {
+        "projectUniqueName": "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj",
+        "projectName": "iParkingv5.Lpr",
+        "projectPath": "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj",
+        "packagesPath": "C:\\Users\\nguye\\.nuget\\packages\\",
+        "outputPath": "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\obj\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\nguye\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+        ],
+        "originalTargetFrameworks": [
+          "netstandard2.1"
+        ],
+        "sources": {
+          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "netstandard2.1": {
+            "targetAlias": "netstandard2.1",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.300"
+      },
+      "frameworks": {
+        "netstandard2.1": {
+          "targetAlias": "netstandard2.1",
+          "dependencies": {
+            "Newtonsoft.Json": {
+              "target": "Package",
+              "version": "[13.0.3, )"
+            },
+            "OpenCvSharp4.Extensions": {
+              "target": "Package",
+              "version": "[4.13.0.20260302, )"
+            },
+            "OpenCvSharp4.Windows": {
+              "target": "Package",
+              "version": "[4.13.0.20260302, )"
+            },
+            "OpenVINO.CSharp.Windows": {
+              "target": "Package",
+              "version": "[2024.0.0.1, )"
+            },
+            "System.Drawing.Common": {
+              "target": "Package",
+              "version": "[10.0.3, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "NETStandard.Library": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.314\\RuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}
