@@ -1,3 +1,4 @@
+import os
 from tkinter import *
 from tkinter import filedialog, ttk
 
@@ -140,6 +141,16 @@ def _folder_row(parent, label_text, var, row, bg=BG, history_key=None):
            bg=ACCENT2, fg="white", activebackground=ACCENT,
            activeforeground="white", font=F_MAIN,
            relief="flat", padx=10, cursor="hand2").grid(row=row, column=2)
+
+    def _open_dir(v=var):
+        p = v.get().strip()
+        if p and os.path.isdir(p):
+            os.startfile(p)
+    Button(parent, text="📂",
+           command=_open_dir,
+           bg=CARD, fg=TEXT, activebackground=ACCENT2,
+           activeforeground="white", font=F_MAIN,
+           relief="flat", padx=6, cursor="hand2").grid(row=row, column=3, padx=(2, 0))
     parent.columnconfigure(1, weight=1)
 
 

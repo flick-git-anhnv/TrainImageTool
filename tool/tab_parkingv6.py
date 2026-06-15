@@ -108,6 +108,10 @@ class Parkingv6ImageTab(Frame):
                bg=ACCENT2, fg="white", font=F_MAIN,
                activebackground=ACCENT, activeforeground="white",
                relief="flat", padx=10, cursor="hand2").grid(row=0, column=1)
+        Button(f, text="📂", command=self._open_out,
+               bg=CARD, fg=TEXT, font=F_MAIN,
+               activebackground=ACCENT2, activeforeground="white",
+               relief="flat", padx=6, cursor="hand2").grid(row=0, column=2, padx=(2, 0))
         Label(p,
               text="Cấu trúc: <thư mục> / <tên làn> / <loại xe> / <YYYY-MM-DD> / <HH> / HHmmss_BSX.jpg"
                    "   (loại xe: toan_canh | xe_may | xe_dap | xe_tai | o_to)",
@@ -214,31 +218,6 @@ class Parkingv6ImageTab(Frame):
         Label(f, text="both=vào+ra  •  event-in=vào  •  event-out=ra",
               bg=BG, fg=DIM, font=("Segoe UI", 8)).grid(
             row=3, column=2, columnspan=4, sticky=W, padx=(4, 0), pady=(6, 0))
-
-        # Phân loại xe
-        self._sep(p, "Phân loại xe (từ khóa so khớp vehicleTypeName)")
-        fv = Frame(p, bg=BG)
-        fv.pack(fill=X)
-        _vtype_rows = [
-            ("Xe máy:",  "kw_xe_may", "motor, xe may, motorbike"),
-            ("Xe đạp:",  "kw_xe_dap", "bicycle, xe dap"),
-            ("Xe tải/Bus:", "kw_xe_tai", "bus, truck, xe tai, container, trong tai, tan"),
-            ("Ô tô:",    "kw_o_to",   ""),
-        ]
-        for _r, (_lbl, _attr, _default) in enumerate(_vtype_rows):
-            Label(fv, text=_lbl, bg=BG, fg=TEXT, font=F_MAIN).grid(
-                row=_r, column=0, padx=(0, 6), sticky=W, pady=2)
-            _var = StringVar(value=_default)
-            setattr(self, _attr, _var)
-            _bind_cfg(f"p6.{_attr}", _var)
-            Entry(fv, textvariable=_var, width=50,
-                  bg=CARD, fg=TEXT, insertbackground=TEXT,
-                  relief="flat", font=F_MAIN, bd=4).grid(
-                row=_r, column=1, sticky=W, padx=4, pady=2)
-        Label(p,
-              text="Nhiều từ khóa cách nhau bởi dấu phẩy  •  Ô tô = mặc định nếu không khớp  "
-                   "•  Ảnh toàn cảnh tự nhận diện qua tên key MinIO (OVERVIEW/FULL)",
-              font=("Segoe UI", 8), fg=DIM, bg=BG, anchor=W).pack(fill=X, pady=(2, 6))
 
         # Advanced panel
         adv_wrapper = Frame(p, bg=BG)
@@ -477,6 +456,12 @@ class Parkingv6ImageTab(Frame):
             row=1, column=0, sticky=W, pady=(4, 0))
 
     # ── browse ────────────────────────────────────────────────────────────────
+
+    def _open_out(self):
+        import os
+        p = self.out_var.get().strip()
+        if p and os.path.isdir(p):
+            os.startfile(p)
 
     def _browse(self):
         d = filedialog.askdirectory(title="Chọn thư mục lưu ảnh",
@@ -872,10 +857,6 @@ class Parkingv6ImageTab(Frame):
             "minio_bucket": self.cfg_mbk.get().strip(),
             "minio_ak":     self.cfg_mak.get().strip(),
             "minio_sk":     self.cfg_msk.get().strip(),
-            "kw_xe_may":    self.kw_xe_may.get().strip(),
-            "kw_xe_dap":    self.kw_xe_dap.get().strip(),
-            "kw_xe_tai":    self.kw_xe_tai.get().strip(),
-            "kw_o_to":      self.kw_o_to.get().strip(),
         }
         self._last_cfg = cfg
         self._failed_items.clear()

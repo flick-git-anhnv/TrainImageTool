@@ -82,7 +82,12 @@ class PlateSearchTab(Frame):
                bg=ACCENT2, fg="white", font=F_MAIN, relief="flat",
                padx=8, cursor="hand2",
                activebackground="#2e2560", activeforeground="white",
-               ).pack(side=LEFT, padx=(6, 0))
+               ).pack(side=LEFT, padx=(6, 4))
+        Button(r0, text="📂", command=self._open_img_dir,
+               bg=CARD, fg=TEXT, font=F_MAIN, relief="flat",
+               padx=6, cursor="hand2",
+               activebackground=ACCENT2, activeforeground="white",
+               ).pack(side=LEFT)
 
         # --- row 1: search + fuzzy ---
         r1 = Frame(bar, bg=CARD)
@@ -296,6 +301,10 @@ class PlateSearchTab(Frame):
             self.v_status.set(f"Đã tải {len(rows):,} dòng  ·  {os.path.basename(path)}")
         except Exception as e:
             messagebox.showerror("Lỗi", str(e), parent=self.root)
+
+    def _open_img_dir(self):
+        if self.img_dir and os.path.isdir(self.img_dir):
+            os.startfile(self.img_dir)
 
     def _pick_img_dir(self):
         d = filedialog.askdirectory(title="Chọn thư mục chứa ảnh", parent=self.root)

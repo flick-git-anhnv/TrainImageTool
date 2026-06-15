@@ -42,19 +42,19 @@ def _p6_vtype_to_category(vt_int) -> str:
 def _p6_img_type_from_key(key: str, idx: int, vehicle_category: str) -> str:
     """Xác định loại ảnh từ tên key MinIO và vị trí trong fileKeys.
 
-    LPR/BSX crop → <category>_bsx_cut  (e.g. o_to_bsx_cut)
-    VEHICLE      → <category>           (e.g. o_to)
-    OVERVIEW     → toan_canh
+    LPR/BSX crop → <category>_bsx_cut       (e.g. o_to_bsx_cut)
+    VEHICLE      → <category>                (e.g. o_to)
+    OVERVIEW     → toan_canh_<category>      (e.g. toan_canh_o_to)
     """
     k = key.upper()
     if any(s in k for s in ("OVERVIEW", "TOAN_CANH", "TOAN-CANH", "FULL")):
-        return "toan_canh"
+        return f"toan_canh_{vehicle_category}"
     if any(s in k for s in ("LPR", "BSX", "PLATE")):
         return f"{vehicle_category}_bsx_cut"
     if any(s in k for s in ("VEHICLE", "VEH", "CAR")):
         return vehicle_category
     # Fallback: index 0 → toàn cảnh, còn lại → loại xe
-    return "toan_canh" if idx == 0 else vehicle_category
+    return f"toan_canh_{vehicle_category}" if idx == 0 else vehicle_category
 
 
 def _p6_parse_dt(s) -> Optional[datetime]:

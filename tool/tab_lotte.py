@@ -99,6 +99,10 @@ class LotteImageTab(Frame):
                bg=ACCENT2, fg="white", font=F_MAIN,
                activebackground=ACCENT, activeforeground="white",
                relief="flat", padx=10, cursor="hand2").grid(row=0, column=1)
+        Button(f, text="📂", command=self._open_out,
+               bg=CARD, fg=TEXT, font=F_MAIN,
+               activebackground=ACCENT2, activeforeground="white",
+               relief="flat", padx=6, cursor="hand2").grid(row=0, column=2, padx=(2, 0))
         Label(p,
               text="Cấu trúc: <thư mục> / <tên làn> / <loại xe> / <YYYY-MM-DD> / <HH> / HHmmss_BSX.jpg"
                    "   (loại xe: toan_canh | xe_may | xe_dap | o_to)",
@@ -417,6 +421,12 @@ class LotteImageTab(Frame):
                bg=CARD, fg=DIM, font=F_MAIN,
                relief="flat", padx=8, cursor="hand2").grid(
             row=1, column=0, sticky=W, pady=(4, 0))
+
+    def _open_out(self):
+        import os
+        p = self.out_var.get().strip()
+        if p and os.path.isdir(p):
+            os.startfile(p)
 
     def _browse(self):
         d = filedialog.askdirectory(title="Chọn thư mục lưu ảnh",

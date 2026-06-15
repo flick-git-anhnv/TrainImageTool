@@ -15,10 +15,9 @@ from .constants import (
 )
 from .imports import _req_mod, _REQUESTS_OK, _cv2_mod, _np_mod, _CV2_OK
 
-# EmImageType int → suffix (exit direction)
-# 0=FULL(toàn cảnh), 1=VEHICLE, 2=PLATE
-_IMG_TYPE_SUFFIX_EXIT  = {0: "fo", 1: "vo", 2: "po"}   # full-out, vehicle-out, plate-out
-_IMG_TYPE_SUFFIX_ENTRY = {0: "fi", 1: "vi", 2: "pi"}   # full-in,  vehicle-in,  plate-in
+# EmImageType enum: 0=VEHICLE, 1=PLATE_NUMBER, 2=PANORAMA, 3=FACE, 4=OTHER
+_IMG_TYPE_SUFFIX_EXIT  = {0: "vo", 1: "po", 2: "fo", 3: "face_o", 4: "other_o"}
+_IMG_TYPE_SUFFIX_ENTRY = {0: "vi", 1: "pi", 2: "fi", 3: "face_i", 4: "other_i"}
 
 # Suffix nào là ảnh toàn cảnh → bỏ qua khi lưu ảnh xấu
 _FULL_SUFFIXES  = {"fo", "fi"}
@@ -30,12 +29,12 @@ _PLATE_SUFFIXES = {"po", "pi"}
 def _p8_suffix_to_imgtype(suffix: str, vtype: str) -> str:
     """Ánh xạ suffix ảnh → tên thư mục lưu.
 
-    fo/fi → toan_canh
-    po/pi → <vtype>_bsx_cut  (plate crop)
-    vo/vi → <vtype>           (vehicle image)
+    fo/fi → toan_canh_<vtype>   (panorama, phân theo loại xe)
+    po/pi → <vtype>_bsx_cut     (plate crop)
+    vo/vi → <vtype>              (vehicle image)
     """
     if suffix in _FULL_SUFFIXES:
-        return "toan_canh"
+        return f"toan_canh_{vtype}"
     if suffix in _PLATE_SUFFIXES:
         return f"{vtype}_bsx_cut"
     return vtype
@@ -102,17 +101,20 @@ def _p8_match_kw(src: str, keywords: list) -> bool:
     return False
 
 
+# EmVehicleType enum: 0=CAR, 1=MOTORBIKE, 2=BIKE
+_VT_INT_MAP = {0: "o_to", 1: "xe_may", 2: "xe_dap"}
+
+
 def _p8_categorize(vehicle_type: str, vtype_cfg: Optional[dict] = None) -> str:
+    """Phân loại xe theo keyword (fallback khi không có integer enum)."""
     cfg    = vtype_cfg or {}
-    kw_may = cfg.get("xe_may") or ["motor", "xe_may"]
-    kw_dap = cfg.get("xe_dap") or ["bicycle", "xe_dap"]
-    kw_tai = cfg.get("xe_tai") or ["bus", "truck", "xe_tai"]
+    kw_may = cfg.get("xe_may") or ["motor", "xe_may", "motorbike"]
+    kw_dap = cfg.get("xe_dap") or ["bicycle", "xe_dap", "bike"]
     kw_oto = cfg.get("o_to")   or []
 
     vt = vehicle_type or ""
     if _p8_match_kw(vt, kw_dap): return "xe_dap"
     if _p8_match_kw(vt, kw_may): return "xe_may"
-    if _p8_match_kw(vt, kw_tai): return "xe_tai"
     if kw_oto and _p8_match_kw(vt, kw_oto): return "o_to"
     return "o_to"
 
@@ -378,7 +380,6 @@ class Parkingv8Worker:
         return {
             "xe_may": _kws("kw_xe_may", "motor, xe_may"),
             "xe_dap": _kws("kw_xe_dap", "bicycle, xe_dap"),
-            "xe_tai": _kws("kw_xe_tai", "bus, truck, xe_tai"),
             "o_to":   _kws("kw_o_to",   ""),
         }
 
@@ -576,12 +577,16 @@ class Parkingv8Worker:
             _get_nested(rec, "Device.Name") or
             _get_nested(rec, "entry.device.name") or
             "unknown_lane")
-        # vehicle type: collection.vehicleType (int) từ search result
-        vt_raw = (
-            _get_nested(rec, "collection.vehicleType") or
-            _get_nested(rec, "accessKey.collection.vehicleType") or
-            _get_nested(rec, "AccessKey.Collection.VehicleType") or "")
-        vtype = _p8_categorize(str(vt_raw), self._vtype_cfg)
+        # vehicle type: ưu tiên integer enum (EmVehicleType), fallback keyword trên name
+        vt_int = _get_nested(rec, "collection.vehicleType")
+        if vt_int is None:
+            vt_int = _get_nested(rec, "accessKey.collection.vehicleType")
+        if isinstance(vt_int, int) and vt_int in _VT_INT_MAP:
+            vtype = _VT_INT_MAP[vt_int]
+        else:
+            vt_name = (_get_nested(rec, "collection.name") or
+                       _get_nested(rec, "accessKey.collection.name") or "")
+            vtype = _p8_categorize(str(vt_name), self._vtype_cfg)
 
         # Gọi detail API để lấy ảnh (search result trả images=[])
         full_id = str(rec.get("id") or rec.get("Id") or "")

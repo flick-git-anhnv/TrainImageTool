@@ -54,6 +54,10 @@ class RenameTab(Frame):
                                            style="Dark.TCombobox", font=F_MAIN, width=52)
         self._folder_combo.pack(side=LEFT, padx=10)
         _bind_history("h.rename.src", self._folder_combo)
+        Button(row1, text="📂", command=self._open_src,
+               bg=CARD, fg=TEXT, activebackground=ACCENT2,
+               activeforeground="white", font=F_MAIN,
+               relief="flat", padx=6, pady=5, cursor="hand2").pack(side=LEFT, padx=(0, 6))
         Button(row1, text="🔍  Quét & Xem trước", command=self._scan,
                bg=ACCENT, fg="white", activebackground="#c04010",
                activeforeground="white", font=F_BOLD,
@@ -267,6 +271,11 @@ class RenameTab(Frame):
             self.v_out.set(p)
             _push_history("h.rename.out", p)
             self._out_combo["values"] = _get_history("h.rename.out")
+
+    def _open_src(self):
+        p = self.v_folder.get().strip()
+        if p and os.path.isdir(p):
+            os.startfile(p)
 
     def _open_out(self):
         p = self.v_out.get().strip()

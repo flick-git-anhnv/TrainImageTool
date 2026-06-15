@@ -31,8 +31,11 @@ def _bind_cfg(key: str, var):
             pass
 
     def _cb(*_):
-        _CFG[key] = var.get()
-        _cfg_save()
+        try:
+            _CFG[key] = var.get()
+            _cfg_save()
+        except Exception:
+            pass
 
     var.trace_add("write", _cb)
 

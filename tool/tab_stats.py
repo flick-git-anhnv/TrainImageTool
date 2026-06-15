@@ -49,6 +49,11 @@ class StatsTab(Frame):
                bg=ACCENT2, fg="white", activebackground=ACCENT,
                activeforeground="white", font=F_BOLD,
                relief="flat", padx=12, pady=5, cursor="hand2").pack(side=LEFT)
+        self.btn_open1 = Button(row1, text="📂 Mở", command=self._open_folder1,
+               bg=CARD, fg=DIM, activebackground=ACCENT2,
+               activeforeground="white", font=F_MAIN,
+               relief="flat", padx=8, pady=5, cursor="hand2")
+        self.btn_open1.pack(side=LEFT, padx=(4, 0))
         self.lbl_path = Label(row1, text="Chưa chọn folder",
                               bg=CARD, fg=DIM, font=F_MAIN)
         self.lbl_path.pack(side=LEFT, padx=10)
@@ -62,6 +67,11 @@ class StatsTab(Frame):
                bg="#3a3a5e", fg="white", activebackground=ACCENT2,
                activeforeground="white", font=F_MAIN,
                relief="flat", padx=12, pady=5, cursor="hand2").pack(side=LEFT)
+        self.btn_open2 = Button(row2, text="📂 Mở", command=self._open_folder2,
+               bg=CARD, fg=DIM, activebackground=ACCENT2,
+               activeforeground="white", font=F_MAIN,
+               relief="flat", padx=8, pady=5, cursor="hand2")
+        self.btn_open2.pack(side=LEFT, padx=(4, 0))
         self.lbl_path2 = Label(row2, text="Chưa chọn (tùy chọn)",
                                bg=CARD, fg=DIM, font=F_MAIN)
         self.lbl_path2.pack(side=LEFT, padx=10)
@@ -266,6 +276,14 @@ class StatsTab(Frame):
         self.txt_len.tag_config("bar2",  foreground=_ONLY2_FG)
 
     # ── DATASET LOADING ──────────────────────────────────────────
+
+    def _open_folder1(self):
+        if self._folder and os.path.isdir(self._folder):
+            os.startfile(self._folder)
+
+    def _open_folder2(self):
+        if self._folder2 and os.path.isdir(self._folder2):
+            os.startfile(self._folder2)
 
     def _load(self):
         folder = filedialog.askdirectory(

@@ -75,6 +75,12 @@ class CheckerTab(Frame):
                bg=ACCENT2, fg="white", activebackground=ACCENT,
                activeforeground="white", font=F_BOLD,
                relief="flat", padx=14, pady=6, cursor="hand2").pack(side=LEFT)
+        self.btn_open_folder = Button(top, text="📂 Mở",
+               command=self._open_dataset_folder,
+               bg=CARD, fg=DIM, activebackground=ACCENT2,
+               activeforeground="white", font=F_MAIN,
+               relief="flat", padx=8, pady=6, cursor="hand2")
+        self.btn_open_folder.pack(side=LEFT, padx=(4, 0))
         self.lbl_info = Label(top,
             text="Chọn thư mục chứa  raw_images/  và  gt.txt",
             bg=CARD, fg=DIM, font=F_MAIN)
@@ -407,6 +413,10 @@ class CheckerTab(Frame):
         return self._filtered_list if self._search_active else self.data_list
 
     # ── Dataset loading ───────────────────────────────────────────────────
+
+    def _open_dataset_folder(self):
+        if self.img_dir and os.path.isdir(self.img_dir):
+            os.startfile(self.img_dir)
 
     def load_dataset(self):
         folder = filedialog.askdirectory(

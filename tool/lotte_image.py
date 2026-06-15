@@ -81,18 +81,20 @@ def _li_categorize(description: str, card_group: str = "",
     kw_may = cfg.get("xe_may")    or ["xe máy"]
     kw_oto = cfg.get("o_to")      or []
 
-    # description: chỉ phân biệt toàn cảnh hay ảnh xe
-    if _li_match_kw(description, kw_tc):
-        return "toan_canh"
-
-    # card_group: phân loại loại xe
+    # Xác định loại xe từ card_group
     if _li_match_kw(card_group, kw_dap):
-        return "xe_dap"
-    if _li_match_kw(card_group, kw_may):
-        return "xe_may"
-    if kw_oto and _li_match_kw(card_group, kw_oto):
-        return "o_to"
-    return "o_to"
+        vtype = "xe_dap"
+    elif _li_match_kw(card_group, kw_may):
+        vtype = "xe_may"
+    elif kw_oto and _li_match_kw(card_group, kw_oto):
+        vtype = "o_to"
+    else:
+        vtype = "o_to"
+
+    # description: toàn cảnh → kết hợp với loại xe
+    if _li_match_kw(description, kw_tc):
+        return f"toan_canh_{vtype}"
+    return vtype
 
 
 def _li_parse_dt(s: str) -> Optional[datetime]:

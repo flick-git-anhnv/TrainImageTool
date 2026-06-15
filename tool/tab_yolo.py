@@ -160,6 +160,12 @@ class YoloTab(Frame):
         Button(r0a, text="Chọn Thư Mục", command=self._select_folder,
                bg="#2e5fa3", fg="white", font=F_MAIN, relief="flat",
                padx=8, cursor="hand2",
+               ).pack(side=LEFT, padx=(0, 4))
+
+        Button(r0a, text="📂", command=self._open_check_folder,
+               bg=CARD, fg=TEXT, font=F_MAIN, relief="flat",
+               padx=6, cursor="hand2",
+               activebackground=ACCENT2, activeforeground="white",
                ).pack(side=LEFT, padx=(0, 6))
 
         Checkbutton(r0a, text="Quét sub folder", variable=self.v_subfolder,
@@ -610,6 +616,12 @@ class YoloTab(Frame):
         if path:
             self._update_path_combo(path)
             self._load_image_list([path])
+
+    def _open_check_folder(self):
+        p = self.v_check_folder.get().strip()
+        d = p if os.path.isdir(p) else os.path.dirname(p) if p else ""
+        if d and os.path.isdir(d):
+            os.startfile(d)
 
     def _select_folder(self):
         if not self.model:

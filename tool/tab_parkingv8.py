@@ -107,6 +107,10 @@ class Parkingv8ImageTab(Frame):
                bg=ACCENT2, fg="white", font=F_MAIN,
                activebackground=ACCENT, activeforeground="white",
                relief="flat", padx=10, cursor="hand2").grid(row=0, column=1)
+        Button(f, text="📂", command=self._open_out,
+               bg=CARD, fg=TEXT, font=F_MAIN,
+               activebackground=ACCENT2, activeforeground="white",
+               relief="flat", padx=6, cursor="hand2").grid(row=0, column=2, padx=(2, 0))
         Label(p,
               text="Cấu trúc: <thư mục> / <tên làn> / <loại xe> / <YYYY-MM-DD> / <HH> / HHmmss_BSX_type.jpg"
                    "   (loại xe: o_to | xe_may | xe_dap | xe_tai)",
@@ -188,29 +192,6 @@ class Parkingv8ImageTab(Frame):
                    "•  Max ảnh/giờ/làn: trải đều các giờ trong ngày",
               font=("Segoe UI", 7), fg=DIM, bg=BG).grid(
             row=2, column=0, columnspan=8, sticky=W, pady=(3, 0))
-
-        self._sep(p, "Phân loại phương tiện")
-        fv = Frame(p, bg=BG)
-        fv.pack(fill=X)
-        _vtype_rows = [
-            ("Xe máy (vehicleType):", "kw_xe_may", "motor, xe_may"),
-            ("Xe đạp (vehicleType):",  "kw_xe_dap", "bicycle, xe_dap"),
-            ("Xe tải (vehicleType):",  "kw_xe_tai", "bus, truck, xe_tai"),
-            ("Ô tô (vehicleType):",    "kw_o_to",   ""),
-        ]
-        for _r, (_lbl, _attr, _default) in enumerate(_vtype_rows):
-            Label(fv, text=_lbl, bg=BG, fg=TEXT, font=F_MAIN).grid(
-                row=_r, column=0, padx=(0, 6), sticky=W, pady=2)
-            _var = StringVar(value=_default)
-            setattr(self, _attr, _var)
-            _bind_cfg(f"p8.{_attr}", _var)
-            Entry(fv, textvariable=_var, width=46,
-                  bg=CARD, fg=TEXT, insertbackground=TEXT,
-                  relief="flat", font=F_MAIN, bd=4).grid(
-                row=_r, column=1, sticky=W, padx=4, pady=2)
-        Label(p, text="Nhiều từ khóa cách nhau bởi dấu phẩy  •  Ô tô = mặc định nếu không khớp  "
-                      "•  Ảnh xấu bỏ qua: xe đạp + ảnh toàn cảnh (fi/fo/full)",
-              font=("Segoe UI", 8), fg=DIM, bg=BG, anchor=W).pack(fill=X, pady=(2, 6))
 
         adv_wrapper = Frame(p, bg=BG)
         adv_wrapper.pack(fill=X, pady=(5, 0))
@@ -430,6 +411,12 @@ class Parkingv8ImageTab(Frame):
 
     # ── actions ───────────────────────────────────────────────────────────────
 
+    def _open_out(self):
+        import os
+        p = self.out_var.get().strip()
+        if p and os.path.isdir(p):
+            os.startfile(p)
+
     def _browse(self):
         d = filedialog.askdirectory(title="Chọn thư mục lưu ảnh",
                                     initialdir=_cfg_dir("p8.out"))
@@ -547,10 +534,6 @@ class Parkingv8ImageTab(Frame):
             "client_secret": self.cfg_client_secret.get().strip(),
             "username":      self.cfg_user.get().strip(),
             "password":      self.cfg_pass.get().strip(),
-            "kw_xe_may":     self.kw_xe_may.get().strip(),
-            "kw_xe_dap":     self.kw_xe_dap.get().strip(),
-            "kw_xe_tai":     self.kw_xe_tai.get().strip(),
-            "kw_o_to":       self.kw_o_to.get().strip(),
         }
         self._last_cfg = cfg
         self._failed_items.clear()

@@ -209,7 +209,14 @@ class TrainTab(Frame):
                 _proj_combo["values"] = _get_history("h.train.project")
         Button(pr, text="…", command=_pick_project,
                bg=ACCENT2, fg="white", font=F_MAIN, relief="flat",
-               padx=8, cursor="hand2").pack(side=LEFT, padx=(4, 16))
+               padx=8, cursor="hand2").pack(side=LEFT, padx=(4, 4))
+        Button(pr, text="📂", command=lambda: (
+                   __import__("os").startfile(self._project_var.get().strip())
+                   if self._project_var.get().strip() and
+                   __import__("os").path.isdir(self._project_var.get().strip()) else None
+               ),
+               bg=CARD, fg=TEXT, font=F_MAIN, relief="flat",
+               padx=6, cursor="hand2").pack(side=LEFT, padx=(0, 12))
         Label(pr, text="Run name:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
         _name_combo = ttk.Combobox(pr, textvariable=self._name_var,
                                     style="Dark.TCombobox", font=F_MAIN, width=18)
