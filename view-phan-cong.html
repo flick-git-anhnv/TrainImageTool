@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Phân công Module — AI Camera Platform 2026</title>
+  <style>
+    :root {
+      --navy:       #251C53;
+      --navy-light: #4A3F8C;
+      --navy-pale:  #B8B3D6;
+      --orange:     #F05922;
+      --orange-pale:#FFAA80;
+      --gray:       #CBCBCB;
+      --white:      #FFFFFF;
+      --bg:         #181430;
+      --card:       #1e1a3a;
+      --card2:      #231f42;
+      --border:     #312b5a;
+      --dim:        #7070a0;
+      --success:    #4caf50;
+      --teal:       #1a8f7a;
+      --purple:     #7b4ea0;
+      --amber:      #ff9800;
+
+      --c-kien:  #4A3F8C;
+      --c-trong: #1a8f7a;
+      --c-tam:   #7b4ea0;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--white);
+      min-height: 100vh;
+      font-size: 14px;
+    }
+
+    /* ══════════ HEADER ══════════ */
+    .hdr {
+      background: linear-gradient(135deg, #110e2a 0%, var(--navy) 100%);
+      border-bottom: 2px solid var(--orange);
+      padding: 0 32px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky; top: 0; z-index: 200;
+      box-shadow: 0 2px 24px rgba(0,0,0,0.4);
+    }
+    .hdr-left { display: flex; align-items: center; gap: 12px; }
+    .hdr-logo {
+      width: 32px; height: 32px; border-radius: 7px;
+      background: var(--orange);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; font-size: 13px; color: var(--white);
+      letter-spacing: 1px;
+    }
+    .hdr-title { font-size: 15px; font-weight: 700; color: var(--white); }
+    .hdr-sub   { font-size: 11px; color: var(--navy-pale); margin-top: 1px; }
+    .hdr-back  {
+      font-size: 12px; color: var(--navy-pale);
+      text-decoration: none; padding: 5px 12px;
+      border: 1px solid var(--border); border-radius: 20px;
+      transition: all 0.2s;
+    }
+    .hdr-back:hover { border-color: var(--orange); color: var(--white); }
+
+    /* ══════════ MAIN ══════════ */
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 28px 24px 56px; }
+
+    /* ══════════ WORKLOAD SUMMARY ══════════ */
+    .wl-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .wl-card {
+      border-radius: 14px;
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+    .wl-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+    }
+    .wl-kien  { background: linear-gradient(135deg, rgba(74,63,140,0.35), rgba(74,63,140,0.12)); border: 1px solid rgba(74,63,140,0.5); }
+    .wl-kien::before  { background: var(--c-kien); }
+    .wl-trong { background: linear-gradient(135deg, rgba(26,143,122,0.35), rgba(26,143,122,0.12)); border: 1px solid rgba(26,143,122,0.5); }
+    .wl-trong::before { background: var(--c-trong); }
+    .wl-tam   { background: linear-gradient(135deg, rgba(123,78,160,0.35), rgba(123,78,160,0.12)); border: 1px solid rgba(123,78,160,0.5); }
+    .wl-tam::before   { background: var(--c-tam); }
+
+    .wl-top { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+    .wl-av {
+      width: 44px; height: 44px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; font-weight: 800; color: var(--white);
+      flex-shrink: 0;
+    }
+    .av-k { background: linear-gradient(135deg, var(--c-kien), #2d2268); }
+    .av-tr{ background: linear-gradient(135deg, var(--c-trong), #0d5c4f); }
+    .av-ta{ background: linear-gradient(135deg, var(--c-tam),  #4a2070); }
+
+    .wl-name { font-size: 17px; font-weight: 700; }
+    .wl-role { font-size: 11px; color: var(--dim); margin-top: 2px; }
+
+    .wl-stats { display: flex; gap: 10px; flex-wrap: wrap; }
+    .wl-stat {
+      display: flex; flex-direction: column; align-items: center;
+      background: rgba(255,255,255,0.06); border-radius: 8px;
+      padding: 8px 14px; flex: 1; min-width: 60px;
+    }
+    .wl-stat-n { font-size: 22px; font-weight: 800; line-height: 1; }
+    .wl-stat-l { font-size: 10px; color: var(--dim); margin-top: 3px; text-align: center; }
+    .n-orange { color: var(--orange); }
+    .n-pale   { color: var(--navy-pale); }
+    .n-teal   { color: #7de0ce; }
+    .n-amber  { color: #ffb74d; }
+
+    /* ══════════ TOOLBAR ══════════ */
+    .toolbar {
+      display: flex; align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap; gap: 12px;
+      margin-bottom: 16px;
+    }
+    .view-tabs { display: flex; gap: 4px; background: rgba(255,255,255,0.04); border-radius: 8px; padding: 4px; }
+    .view-tab {
+      padding: 6px 16px; border-radius: 6px;
+      font-size: 12px; font-weight: 600;
+      border: none; background: transparent;
+      color: var(--dim); cursor: pointer; transition: all 0.2s;
+    }
+    .view-tab.active { background: var(--card2); color: var(--white); box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+
+    .filter-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+    .fp {
+      padding: 5px 14px; border-radius: 20px;
+      font-size: 12px; font-weight: 600;
+      border: 1px solid var(--border);
+      background: transparent; color: var(--dim);
+      cursor: pointer; transition: all 0.2s;
+    }
+    .fp:hover { color: var(--white); }
+    .fp.active         { color: var(--white); }
+    .fp.active[data-f="all"]   { background: var(--orange); border-color: var(--orange); }
+    .fp.active[data-f="kien"]  { background: var(--c-kien);  border-color: var(--c-kien); }
+    .fp.active[data-f="trong"] { background: var(--c-trong); border-color: var(--c-trong); }
+    .fp.active[data-f="tam"]   { background: var(--c-tam);   border-color: var(--c-tam); }
+
+    /* ══════════ VIEW: MATRIX ══════════ */
+    #view-matrix { display: block; }
+    #view-cards  { display: none; }
+
+    .matrix-wrap {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .matrix-scroll { overflow-x: auto; }
+
+    table.mtx {
+      width: 100%; min-width: 640px;
+      border-collapse: collapse;
+    }
+
+    table.mtx thead tr {
+      border-bottom: 2px solid var(--border);
+      background: rgba(255,255,255,0.02);
+    }
+    table.mtx th {
+      padding: 16px 10px; text-align: center;
+      font-size: 12px; font-weight: 700;
+    }
+    table.mtx th.th-mod {
+      text-align: left; padding-left: 24px;
+      width: 230px; color: var(--dim);
+      font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px;
+    }
+    .ph { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+    .ph .av {
+      width: 40px; height: 40px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; font-weight: 800; color: var(--white);
+    }
+    .ph .nm { font-size: 14px; font-weight: 700; }
+    .ph .rl { font-size: 10px; color: var(--dim); }
+
+    /* Group rows */
+    table.mtx tr.grp td {
+      padding: 9px 24px;
+      font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 2px;
+      color: var(--orange);
+      background: rgba(240,89,34,0.06);
+      border-top: 1px solid rgba(240,89,34,0.18);
+    }
+
+    /* Module rows */
+    table.mtx tr.mrow td {
+      padding: 12px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.035);
+      vertical-align: middle;
+    }
+    table.mtx tr.mrow:last-child td { border-bottom: none; }
+    table.mtx tr.mrow:hover td { background: rgba(255,255,255,0.02); }
+    table.mtx tr.mrow.dimmed { opacity: 0.15; pointer-events: none; }
+
+    .td-mod { padding-left: 24px !important; }
+    .mod-n { font-size: 13px; font-weight: 600; }
+    .mod-s { font-size: 11px; color: var(--dim); margin-top: 2px; }
+
+    .td-chip { text-align: center; }
+    .chip {
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 4px; padding: 5px 11px; border-radius: 7px;
+      font-size: 11px; font-weight: 700;
+      min-width: 76px; white-space: nowrap;
+      transition: transform 0.15s;
+    }
+    .chip:hover { transform: scale(1.05); }
+    .c-owner    { background: rgba(240,89,34,0.22); color: var(--orange);    border: 1px solid rgba(240,89,34,0.5); }
+    .c-support  { background: rgba(74,63,140,0.28);  color: var(--navy-pale); border: 1px solid rgba(74,63,140,0.45); }
+    .c-pipeline { background: rgba(26,143,122,0.22); color: #7de0ce;          border: 1px solid rgba(26,143,122,0.4); }
+    .c-validate { background: rgba(255,152,0,0.18);  color: #ffb74d;          border: 1px solid rgba(255,152,0,0.38); }
+    .c-data     { background: rgba(123,78,160,0.22); color: #c9a0e0;          border: 1px solid rgba(123,78,160,0.4); }
+    .c-empty    { background: transparent; color: transparent; border: 1px dashed rgba(255,255,255,0.07); cursor: default; }
+    .c-empty:hover { transform: none; }
+
+    /* Legend */
+    .legend-row {
+      display: flex; flex-wrap: wrap; gap: 10px;
+      padding: 12px 24px;
+      border-top: 1px solid var(--border);
+      background: rgba(255,255,255,0.01);
+    }
+    .leg { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--dim); }
+
+    /* ══════════ VIEW: CARDS ══════════ */
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 20px;
+    }
+
+    .pc {
+      background: var(--card);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .pc-header {
+      padding: 18px 20px 14px;
+      display: flex; align-items: center; gap: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .pc-header .av {
+      width: 48px; height: 48px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; font-weight: 800; color: var(--white);
+      flex-shrink: 0;
+    }
+    .pc-name { font-size: 17px; font-weight: 700; }
+    .pc-role { font-size: 12px; color: var(--dim); margin-top: 2px; }
+
+    .pc-body { padding: 14px 20px; }
+    .pc-group-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1.5px; color: var(--orange);
+      margin: 12px 0 8px;
+    }
+    .pc-group-label:first-child { margin-top: 0; }
+
+    .pc-task {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 9px 12px; border-radius: 8px;
+      background: rgba(255,255,255,0.03);
+      margin-bottom: 6px;
+      border: 1px solid var(--border);
+      transition: border-color 0.2s;
+    }
+    .pc-task:hover { border-color: rgba(255,255,255,0.15); }
+    .pc-task-chip { flex-shrink: 0; margin-top: 1px; }
+    .pc-task-info .t-name { font-size: 13px; font-weight: 600; }
+    .pc-task-info .t-desc { font-size: 11px; color: var(--dim); margin-top: 2px; }
+
+    /* ══════════ ESCALATE TABLE ══════════ */
+    .escalate-wrap {
+      margin-top: 28px;
+      background: var(--card);
+      border: 1px solid rgba(240,89,34,0.3);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .escalate-header {
+      padding: 14px 20px;
+      background: rgba(240,89,34,0.1);
+      border-bottom: 1px solid rgba(240,89,34,0.2);
+      display: flex; align-items: center; gap: 10px;
+    }
+    .escalate-header h3 { font-size: 14px; font-weight: 700; color: var(--orange); }
+    .escalate-header p  { font-size: 12px; color: var(--navy-pale); margin-top: 2px; }
+
+    table.esc {
+      width: 100%; border-collapse: collapse;
+    }
+    table.esc th {
+      padding: 10px 18px; text-align: left;
+      font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 1px;
+      color: var(--orange);
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.01);
+    }
+    table.esc td {
+      padding: 11px 18px;
+      font-size: 12px; color: var(--white);
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      vertical-align: top;
+    }
+    table.esc tr:last-child td { border-bottom: none; }
+    table.esc tr:hover td { background: rgba(255,255,255,0.02); }
+    .esc-who { font-weight: 600; }
+    .esc-when { color: var(--dim); font-size: 11px; }
+    .esc-type {
+      display: inline-block; padding: 2px 9px; border-radius: 5px;
+      font-size: 11px; font-weight: 600;
+    }
+    .et-data   { background: rgba(123,78,160,0.25); color: #c9a0e0; }
+    .et-tool   { background: rgba(26,143,122,0.25); color: #7de0ce; }
+    .et-device { background: rgba(255,152,0,0.2);   color: #ffb74d; }
+    .et-doc    { background: rgba(74,63,140,0.3);   color: var(--navy-pale); }
+
+    /* ══════════ FOOTER ══════════ */
+    .foot {
+      text-align: center; padding: 20px;
+      border-top: 1px solid var(--border);
+      font-size: 11px; color: var(--dim);
+    }
+
+    /* ══════════ ANIMATIONS ══════════ */
+    @keyframes fadeUp { from { opacity:0; transform:translateY(12px) } to { opacity:1; transform:none } }
+    .fade { animation: fadeUp 0.45s ease both; }
+    .d1 { animation-delay:0.05s } .d2 { animation-delay:0.1s } .d3 { animation-delay:0.15s }
+    .d4 { animation-delay:0.2s  } .d5 { animation-delay:0.25s} .d6 { animation-delay:0.3s  }
+
+    @media (max-width:680px) {
+      .wl-row { grid-template-columns: 1fr; }
+      .hdr { padding: 0 14px; }
+      .wrap { padding: 16px 10px 40px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ══════════ HEADER ══════════ -->
+<header class="hdr">
+  <div class="hdr-left">
+    <div class="hdr-logo">KZ</div>
+    <div>
+      <div class="hdr-title">Phân công Module</div>
+      <div class="hdr-sub">AI Camera Platform 2026 — KZTEK</div>
+    </div>
+  </div>
+  <a class="hdr-back" href="dashboard-ai-camera-platform.html">← Dashboard</a>
+</header>
+
+<!-- ══════════ MAIN ══════════ -->
+<main class="wrap">
+
+  <!-- Workload summary -->
+  <div class="wl-row">
+
+    <div class="wl-card wl-kien fade d1">
+      <div class="wl-top">
+        <div class="wl-av av-k">K</div>
+        <div>
+          <div class="wl-name">Kiên</div>
+          <div class="wl-role">Technical Lead · AI Engineer · Backend</div>
+        </div>
+      </div>
+      <div class="wl-stats">
+        <div class="wl-stat"><span class="wl-stat-n n-orange">7</span><span class="wl-stat-l">Owner</span></div>
+        <div class="wl-stat"><span class="wl-stat-n n-pale">2</span><span class="wl-stat-l">Support</span></div>
+        <div class="wl-stat"><span class="wl-stat-n n-teal">2</span><span class="wl-stat-l">Pipeline</span></div>
+        <div class="wl-stat"><span class="wl-stat-n n-amber">1</span><span class="wl-stat-l">Validate</span></div>
+      </div>
+    </div>
+
+    <div class="wl-card wl-trong fade d2">
+      <div class="wl-top">
+        <div class="wl-av av-tr">T</div>
+        <div>
+          <div class="wl-name">Trọng</div>
+          <div class="wl-role">CV Engineer — Tracking &amp; Analytics</div>
+        </div>
+      </div>
+      <div class="wl-stats">
+        <div class="wl-stat"><span class="wl-stat-n n-orange">7</span><span class="wl-stat-l">Owner</span></div>
+        <div class="wl-stat"><span class="wl-stat-n n-pale">3</span><span class="wl-stat-l">Support</span></div>
+        <div class="wl-stat"><span class="wl-stat-n n-amber">1</span><span class="wl-stat-l">Validate</span></div>
+      </div>
+    </div>
+
+    <div class="wl-card wl-tam fade d3">
+      <div class="wl-top">
+        <div class="wl-av av-ta">T</div>
+        <div>
+          <div class="wl-name">Tâm</div>
+          <div class="wl-role">CV Engineer — LPR &amp; Data · (sắp full-time)</div>
+        </div>
+      </div>
+      <div class="wl-stats">
+        <div class="wl-stat"><span class="wl-stat-n n-orange">4</span><span class="wl-stat-l">Owner</span></div>
+        <div class="wl-stat"><span class="wl-stat-n n-pale">1</span><span class="wl-stat-l">Support</span></div>
+        <div class="wl-stat"><span class="wl-stat-n" style="color:#c9a0e0">2</span><span class="wl-stat-l">Data</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar fade d4">
+    <div class="view-tabs">
+      <button class="view-tab active" data-view="matrix">Ma trận</button>
+      <button class="view-tab"        data-view="cards">Theo người</button>
+    </div>
+    <div class="filter-pills">
+      <button class="fp active" data-f="all">Tất cả</button>
+      <button class="fp" data-f="kien">Kiên</button>
+      <button class="fp" data-f="trong">Trọng</button>
+      <button class="fp" data-f="tam">Tâm</button>
+    </div>
+  </div>
+
+  <!-- ── VIEW: MATRIX ── -->
+  <div id="view-matrix" class="fade d5">
+    <div class="matrix-wrap">
+      <div class="matrix-scroll">
+        <table class="mtx" id="mtx">
+          <thead>
+            <tr>
+              <th class="th-mod">Module</th>
+              <th>
+                <div class="ph">
+                  <div class="av" style="background:linear-gradient(135deg,#4A3F8C,#2d2268)">K</div>
+                  <span class="nm">Kiên</span>
+                  <span class="rl">Tech Lead · Backend</span>
+                </div>
+              </th>
+              <th>
+                <div class="ph">
+                  <div class="av" style="background:linear-gradient(135deg,#1a8f7a,#0d5c4f)">T</div>
+                  <span class="nm">Trọng</span>
+                  <span class="rl">CV · Tracking</span>
+                </div>
+              </th>
+              <th>
+                <div class="ph">
+                  <div class="av" style="background:linear-gradient(135deg,#7b4ea0,#4a2070)">T</div>
+                  <span class="nm">Tâm</span>
+                  <span class="rl">CV · LPR · Data</span>
+                </div>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+
+            <tr class="grp"><td colspan="4">🏗️ Core Platform</td></tr>
+            <tr class="mrow" data-kien="owner" data-trong="" data-tam="">
+              <td class="td-mod"><div class="mod-n">Camera Gateway</div><div class="mod-s">Kết nối RTSP, quản lý 200+ camera</div></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+            </tr>
+            <tr class="mrow" data-kien="owner" data-trong="support" data-tam="">
+              <td class="td-mod"><div class="mod-n">Stream Engine</div><div class="mod-s">FFmpeg đọc frame, resize, queue</div></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+              <td class="td-chip"><span class="chip c-support">Support</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+            </tr>
+            <tr class="mrow" data-kien="owner" data-trong="" data-tam="">
+              <td class="td-mod"><div class="mod-n">AI Server</div><div class="mod-s">FastAPI, điều phối GPU, REST endpoints</div></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+            </tr>
+            <tr class="mrow" data-kien="pipeline" data-trong="owner" data-tam="">
+              <td class="td-mod"><div class="mod-n">Tracking Engine</div><div class="mod-s">ByteTrack — ID liên tục giữa các frame</div></td>
+              <td class="td-chip"><span class="chip c-pipeline">Pipeline</span></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+            </tr>
+            <tr class="mrow" data-kien="owner" data-trong="" data-tam="">
+              <td class="td-mod"><div class="mod-n">Notification Engine</div><div class="mod-s">Telegram, Zalo webhook cảnh báo</div></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+            </tr>
+
+            <tr class="grp"><td colspan="4">🚗 Vehicle AI</td></tr>
+            <tr class="mrow" data-kien="" data-trong="support" data-tam="owner">
+              <td class="td-mod"><div class="mod-n">Vehicle Classification</div><div class="mod-s">Phân loại loại xe, màu sắc</div></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-support">Support</span></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+            </tr>
+            <tr class="mrow" data-kien="pipeline" data-trong="" data-tam="owner">
+              <td class="td-mod"><div class="mod-n">LPR Streaming</div><div class="mod-s">Nhận dạng biển số realtime</div></td>
+              <td class="td-chip"><span class="chip c-pipeline">Pipeline</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+            </tr>
+            <tr class="mrow" data-kien="" data-trong="owner" data-tam="">
+              <td class="td-mod"><div class="mod-n">Vehicle Counter</div><div class="mod-s">Đếm xe, xác định chiều vào/ra</div></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+            </tr>
+            <tr class="mrow" data-kien="" data-trong="" data-tam="owner">
+              <td class="td-mod"><div class="mod-n">Vehicle Search</div><div class="mod-s">Tìm lịch sử xe theo biển số + thời gian</div></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+            </tr>
+
+            <tr class="grp"><td colspan="4">👤 FaceID Platform</td></tr>
+            <tr class="mrow" data-kien="" data-trong="owner" data-tam="">
+              <td class="td-mod"><div class="mod-n">Face Detection &amp; Embedding</div><div class="mod-s">InsightFace, vector 512 chiều</div></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+            </tr>
+            <tr class="mrow" data-kien="owner" data-trong="support" data-tam="">
+              <td class="td-mod"><div class="mod-n">FaceID Server Ph.1 &amp; Ph.2</div><div class="mod-s">API nhận dạng, tối ưu, webapp quản trị</div></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+              <td class="td-chip"><span class="chip c-support">Support</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+            </tr>
+            <tr class="mrow" data-kien="owner" data-trong="validate" data-tam="">
+              <td class="td-mod"><div class="mod-n">FaceID ARM &amp; Android</div><div class="mod-s">ONNX → TFLite, RK3588 / Jetson</div></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+              <td class="td-chip"><span class="chip c-validate">Validate</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+            </tr>
+
+            <tr class="grp"><td colspan="4">🅿️ Parking Analytics</td></tr>
+            <tr class="mrow" data-kien="" data-trong="owner" data-tam="data">
+              <td class="td-mod"><div class="mod-n">Parking Slot Detection</div><div class="mod-s">ZCU báo trống/đầy từng ô đỗ xe</div></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+              <td class="td-chip"><span class="chip c-data">Data</span></td>
+            </tr>
+            <tr class="mrow" data-kien="" data-trong="owner" data-tam="">
+              <td class="td-mod"><div class="mod-n">Occupancy &amp; Heatmap</div><div class="mod-s">Tỷ lệ lấp đầy, visualize khu vực</div></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+            </tr>
+
+            <tr class="grp"><td colspan="4">🚶 People Analytics</td></tr>
+            <tr class="mrow" data-kien="" data-trong="owner" data-tam="">
+              <td class="td-mod"><div class="mod-n">People Counting</div><div class="mod-s">Đếm người qua line, đa hướng</div></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+            </tr>
+            <tr class="mrow" data-kien="" data-trong="owner" data-tam="data">
+              <td class="td-mod"><div class="mod-n">Zone &amp; Dwell Time Analytics</div><div class="mod-s">Khu vực đông người, thời gian đứng</div></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+              <td class="td-chip"><span class="chip c-data">Data</span></td>
+            </tr>
+
+            <tr class="grp"><td colspan="4">🤖 Helpdesk</td></tr>
+            <tr class="mrow" data-kien="owner" data-trong="" data-tam="">
+              <td class="td-mod"><div class="mod-n">Q&amp;A Bot &amp; Helpdesk Bot</div><div class="mod-s">RAG trên tài liệu sản phẩm KZTEK</div></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+            </tr>
+
+            <tr class="grp"><td colspan="4">🗂️ Data &amp; Dataset</td></tr>
+            <tr class="mrow" data-kien="" data-trong="" data-tam="owner">
+              <td class="td-mod"><div class="mod-n">Dataset Management</div><div class="mod-s">Label, chuẩn hóa folder, data pipeline</div></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-empty">—</span></td>
+              <td class="td-chip"><span class="chip c-owner">✦ Owner</span></td>
+            </tr>
+
+          </tbody>
+        </table>
+      </div>
+
+      <div class="legend-row">
+        <div class="leg"><span class="chip c-owner"   style="min-width:auto;padding:3px 9px">✦ Owner</span>Chịu trách nhiệm chính</div>
+        <div class="leg"><span class="chip c-support" style="min-width:auto;padding:3px 9px">Support</span>Hỗ trợ / review</div>
+        <div class="leg"><span class="chip c-pipeline"style="min-width:auto;padding:3px 9px">Pipeline</span>Làm phần tích hợp</div>
+        <div class="leg"><span class="chip c-validate"style="min-width:auto;padding:3px 9px">Validate</span>Kiểm tra kết quả</div>
+        <div class="leg"><span class="chip c-data"    style="min-width:auto;padding:3px 9px">Data</span>Cung cấp / label data</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── VIEW: CARDS ── -->
+  <div id="view-cards">
+    <div class="cards-grid">
+
+      <!-- Kiên card -->
+      <div class="pc fade d1">
+        <div class="pc-header" style="border-left: 4px solid var(--c-kien)">
+          <div class="av av-k" style="background:linear-gradient(135deg,#4A3F8C,#2d2268)">K</div>
+          <div><div class="pc-name">Kiên</div><div class="pc-role">Technical Lead · AI Engineer · Backend · Infra</div></div>
+        </div>
+        <div class="pc-body">
+          <div class="pc-group-label">🏗️ Core Platform</div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">Camera Gateway</div><div class="t-desc">Kết nối RTSP, quản lý luồng camera</div></div></div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">Stream Engine</div><div class="t-desc">FFmpeg + OpenCV, queue frame</div></div></div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">AI Server</div><div class="t-desc">FastAPI, điều phối GPU</div></div></div>
+          <div class="pc-task"><span class="chip c-pipeline pc-task-chip" style="min-width:auto;padding:3px 8px">Pipeline</span><div class="pc-task-info"><div class="t-name">Tracking Engine</div><div class="t-desc">Tích hợp output ByteTrack vào AI Server</div></div></div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">Notification Engine</div><div class="t-desc">Webhook Telegram / Zalo</div></div></div>
+          <div class="pc-group-label">🚗 Vehicle AI</div>
+          <div class="pc-task"><span class="chip c-pipeline pc-task-chip" style="min-width:auto;padding:3px 8px">Pipeline</span><div class="pc-task-info"><div class="t-name">LPR Streaming</div><div class="t-desc">Xây dựng streaming pipeline, tích hợp model Tâm</div></div></div>
+          <div class="pc-group-label">👤 FaceID Platform</div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">FaceID Server Ph.1 &amp; Ph.2</div><div class="t-desc">API nhận dạng, tối ưu tài nguyên, webapp quản trị</div></div></div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">FaceID ARM &amp; Android</div><div class="t-desc">Convert ONNX → TFLite, deploy RK3588 / Jetson</div></div></div>
+          <div class="pc-group-label">🤖 Helpdesk</div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">Q&amp;A Bot &amp; Helpdesk Bot</div><div class="t-desc">RAG trên tài liệu sản phẩm KZTEK</div></div></div>
+        </div>
+      </div>
+
+      <!-- Trọng card -->
+      <div class="pc fade d2">
+        <div class="pc-header" style="border-left: 4px solid var(--c-trong)">
+          <div class="av av-tr" style="background:linear-gradient(135deg,#1a8f7a,#0d5c4f)">T</div>
+          <div><div class="pc-name">Trọng</div><div class="pc-role">Computer Vision Engineer — Tracking &amp; Analytics</div></div>
+        </div>
+        <div class="pc-body">
+          <div class="pc-group-label">🏗️ Core Platform</div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">Tracking Engine</div><div class="t-desc">ByteTrack, đảm bảo ID liên tục giữa các frame</div></div></div>
+          <div class="pc-group-label">🚗 Vehicle AI</div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">Vehicle Counter</div><div class="t-desc">Đếm xe, xác định chiều vào/ra qua line</div></div></div>
+          <div class="pc-task"><span class="chip c-support pc-task-chip" style="min-width:auto;padding:3px 8px">Support</span><div class="pc-task-info"><div class="t-name">Vehicle Classification</div><div class="t-desc">Review model, hỗ trợ Tâm tích hợp</div></div></div>
+          <div class="pc-group-label">👤 FaceID Platform</div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">Face Detection &amp; Embedding</div><div class="t-desc">InsightFace, chuẩn hóa output 512-dim</div></div></div>
+          <div class="pc-task"><span class="chip c-validate pc-task-chip" style="min-width:auto;padding:3px 8px">Validate</span><div class="pc-task-info"><div class="t-name">FaceID ARM &amp; Android</div><div class="t-desc">Test accuracy trên thiết bị thực tế</div></div></div>
+          <div class="pc-group-label">🅿️ Parking Analytics</div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">Parking Slot Detection</div><div class="t-desc">Vẽ polygon ROI, detect trống/đầy từng ô</div></div></div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">Occupancy &amp; Heatmap</div><div class="t-desc">Tỷ lệ lấp đầy, map nhiệt khu vực</div></div></div>
+          <div class="pc-group-label">🚶 People Analytics</div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">People Counting</div><div class="t-desc">Đếm người, tái dùng logic Vehicle Counter</div></div></div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">Zone &amp; Dwell Time Analytics</div><div class="t-desc">Khu vực đông người, thời gian đứng tại chỗ</div></div></div>
+        </div>
+      </div>
+
+      <!-- Tâm card -->
+      <div class="pc fade d3">
+        <div class="pc-header" style="border-left: 4px solid var(--c-tam)">
+          <div class="av av-ta" style="background:linear-gradient(135deg,#7b4ea0,#4a2070)">T</div>
+          <div><div class="pc-name">Tâm <span style="font-size:11px;background:rgba(255,255,255,0.1);border-radius:4px;padding:1px 6px;font-weight:400">sắp full-time</span></div><div class="pc-role">CV Engineer — LPR &amp; Data</div></div>
+        </div>
+        <div class="pc-body">
+          <div class="pc-group-label">🚗 Vehicle AI</div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">Vehicle Classification</div><div class="t-desc">Train + fine-tune YOLO từ model iParking</div></div></div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">LPR Streaming</div><div class="t-desc">Model nhận dạng biển số, YOLO + PaddleOCR</div></div></div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">Vehicle Search</div><div class="t-desc">Query lịch sử theo biển số + khoảng thời gian</div></div></div>
+          <div class="pc-group-label">🅿️ Parking &amp; 🚶 People</div>
+          <div class="pc-task"><span class="chip c-data pc-task-chip" style="min-width:auto;padding:3px 8px">Data</span><div class="pc-task-info"><div class="t-name">Parking Slot Detection</div><div class="t-desc">Thu thập ảnh bãi đỗ xe, label ô trống/đầy</div></div></div>
+          <div class="pc-task"><span class="chip c-data pc-task-chip" style="min-width:auto;padding:3px 8px">Data</span><div class="pc-task-info"><div class="t-name">Zone Analytics</div><div class="t-desc">Hỗ trợ label data khu vực đông người</div></div></div>
+          <div class="pc-group-label">🗂️ Data &amp; Dataset</div>
+          <div class="pc-task"><span class="chip c-owner pc-task-chip" style="min-width:auto;padding:3px 8px">Owner</span><div class="pc-task-info"><div class="t-name">Dataset Management</div><div class="t-desc">Chuẩn hóa folder, naming, data pipeline toàn team</div></div></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Escalate Table ── -->
+  <div class="escalate-wrap fade d6">
+    <div class="escalate-header">
+      <div>
+        <h3>⚠️ Những việc cần báo lại bạn</h3>
+        <p>Khi bị vướng mắc về data, tool, thiết bị — Kiên tổng hợp và báo trực tiếp</p>
+      </div>
+    </div>
+    <table class="esc">
+      <thead>
+        <tr>
+          <th>Nhu cầu</th>
+          <th>Ai cần</th>
+          <th>Sprint</th>
+          <th>Loại</th>
+          <th>Chi tiết</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Video RTSP test hoặc file .mp4 đa dạng</td>
+          <td><span class="esc-who">Kiên + Trọng</span></td>
+          <td class="esc-when">Sprint 1</td>
+          <td><span class="esc-type et-tool">Tool</span></td>
+          <td>Test tracking + stream pipeline trước khi có camera thật</td>
+        </tr>
+        <tr>
+          <td>Ảnh xe đa dạng để bổ sung dataset</td>
+          <td><span class="esc-who">Tâm</span></td>
+          <td class="esc-when">Sprint 1–2</td>
+          <td><span class="esc-type et-data">Data</span></td>
+          <td>Xe máy, ô tô, xe tải, xe bus — đủ góc chụp, ánh sáng</td>
+        </tr>
+        <tr>
+          <td>Ảnh biển số đặc thù</td>
+          <td><span class="esc-who">Tâm</span></td>
+          <td class="esc-when">Sprint 3</td>
+          <td><span class="esc-type et-data">Data</span></td>
+          <td>Biển 2 hàng, biển xanh, biển ngoại giao, biển các tỉnh miền Nam</td>
+        </tr>
+        <tr>
+          <td>Vào bãi đỗ xe thực tế chụp ảnh</td>
+          <td><span class="esc-who">Trọng</span></td>
+          <td class="esc-when">Sprint 5</td>
+          <td><span class="esc-type et-data">Data</span></td>
+          <td>Góc camera từ trên cao, ban ngày + ban đêm, ô trống + đầy</td>
+        </tr>
+        <tr>
+          <td>Tài liệu sản phẩm KZTEK đầy đủ</td>
+          <td><span class="esc-who">Kiên</span></td>
+          <td class="esc-when">Sprint 5</td>
+          <td><span class="esc-type et-doc">Doc</span></td>
+          <td>Feed vào Helpdesk Bot RAG — hướng dẫn cài đặt, vận hành, FAQ</td>
+        </tr>
+        <tr>
+          <td>Thiết bị ARM / Android để test</td>
+          <td><span class="esc-who">Kiên</span></td>
+          <td class="esc-when">Sprint 6</td>
+          <td><span class="esc-type et-device">Device</span></td>
+          <td>RK3588, Jetson Nano, hoặc Android mid-range để validate FaceID ARM</td>
+        </tr>
+        <tr>
+          <td>Bổ sung data khi accuracy thấp</td>
+          <td><span class="esc-who">Tâm / Trọng</span></td>
+          <td class="esc-when">Bất kỳ</td>
+          <td><span class="esc-type et-tool">Tool</span></td>
+          <td>Tool chụp ảnh hàng loạt, script crawl ảnh, hoặc cung cấp camera test</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+</main>
+
+<footer class="foot">
+  <strong>KZTEK</strong> — AI Camera Platform 2026 · Phân công Module v1.0 ·
+  <a href="dashboard-ai-camera-platform.html" style="color:var(--orange-pale);text-decoration:none">← Về Dashboard chính</a>
+</footer>
+
+<script>
+  // ── View toggle ──
+  document.querySelectorAll('.view-tab').forEach(btn => {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.view-tab').forEach(b => b.classList.remove('active'));
+      this.classList.add('active');
+      const v = this.dataset.view;
+      document.getElementById('view-matrix').style.display = v === 'matrix' ? 'block' : 'none';
+      document.getElementById('view-cards').style.display  = v === 'cards'  ? 'block' : 'none';
+    });
+  });
+
+  // ── Matrix filter ──
+  document.querySelectorAll('.fp').forEach(btn => {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.fp').forEach(b => b.classList.remove('active'));
+      this.classList.add('active');
+      const f = this.dataset.f;
+      document.querySelectorAll('#mtx tr.mrow').forEach(row => {
+        if (f === 'all') {
+          row.classList.remove('dimmed');
+        } else {
+          row.classList.toggle('dimmed', !(row.dataset[f] || ''));
+        }
+      });
+    });
+  });
+
+  // ── Live date ──
+  const el = document.querySelector('.hdr-sub');
+  const now = new Date();
+  el.textContent = 'AI Camera Platform 2026 · Cập nhật: ' +
+    now.toLocaleDateString('vi-VN', {day:'2-digit',month:'2-digit',year:'numeric'});
+</script>
+</body>
+</html>

@@ -1,7 +1,13 @@
-"""Tab kiểm thử LPR — nhận dạng biển số qua HTTP API (REST /read-plate)."""
+"""Tab kiểm thử LPR — Kztek LPR AI Server & American LPR (OpenALPR).
+
+Hai chế độ nhận dạng:
+  lprdetect      — Gửi ảnh xe, server tự cắt biển (field: image)
+  DirectLprDetect — Gửi ảnh biển đã cắt (field: upload, endpoint /read-plate)
+"""
 
 import csv
 import os
+import re
 import shutil
 import threading
 from io import BytesIO
@@ -10,6 +16,8 @@ from tkinter import ttk, filedialog, messagebox
 
 try:
     import requests
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
     _REQ_OK = True
 except ImportError:
     _REQ_OK = False
@@ -21,6 +29,7 @@ except ImportError:
     _PIL_OK = False
 
 from .constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, SUCCESS, F_MAIN, F_BOLD, F_MONO
+from .imports import _DND_OK
 from .settings import (
     _bind_cfg, _bind_history, _push_history, _get_history,
     _cfg_dir, _cfg_save, _CFG,
@@ -28,105 +37,131 @@ from .settings import (
 from .ui_helpers import _make_logbox, _append_log, _zoom_image_window, _action_btn
 
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tiff", ".tif", ".webp"}
-_LPR_TYPES = ["HTTP REST API (/read-plate)", "Kztek LPR AI Server", "OpenALPR (OpenAlpr)"]
+_LPR_TYPES = ["Kztek LPR AI Server", "American LPR (OpenALPR)"]
+_MODE_VEHICLE = "lprdetect"
+_MODE_DIRECT  = "DirectLprDetect"
+_URL_HINTS = {
+    ("Kztek LPR AI Server",     _MODE_VEHICLE): "http://localhost:8000/detect",
+    ("Kztek LPR AI Server",     _MODE_DIRECT):  "http://localhost:8000/read-plate",
+    ("American LPR (OpenALPR)", _MODE_VEHICLE): "http://localhost:8080/v2/recognize",
+    ("American LPR (OpenALPR)", _MODE_DIRECT):  "http://localhost:8080/read-plate",
+}
+_MIME = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".bmp": "image/bmp",  ".webp": "image/webp", ".gif": "image/gif",
+    ".tiff": "image/tiff", ".tif": "image/tiff",
+}
+_REVIEW_ICON = {"correct": "✓", "incorrect": "✗", "": "○"}
+
+_SESSION = None
+
+
+def _get_session():
+    global _SESSION
+    if _SESSION is None and _REQ_OK:
+        s = requests.Session()
+        r = Retry(total=0, raise_on_status=False)
+        s.mount("http://",  HTTPAdapter(max_retries=r, pool_connections=4, pool_maxsize=8))
+        s.mount("https://", HTTPAdapter(max_retries=r, pool_connections=4, pool_maxsize=8))
+        _SESSION = s
+    return _SESSION
 
 
 def _parse_lpr_response(raw) -> dict:
-    """Parse JSON trả về từ nhiều kiểu API LPR khác nhau.
-
-    Trả về dict chuẩn hoá:
-        plate, original, confidence, vehicle_type, bbox, lpr_image_b64
-    """
-    result = {
-        "plate": "", "original": "", "confidence": 0.0,
-        "vehicle_type": "", "bbox": None, "lpr_image_b64": None,
-    }
+    res = {"plate": "", "original": "", "confidence": 0.0,
+           "vehicle_type": "", "bbox": None, "lpr_image_b64": None}
     if isinstance(raw, list):
         raw = raw[0] if raw else {}
     if not isinstance(raw, dict):
-        return result
-
-    # Plate number
+        return res
     for k in ("plate", "PlateNumber", "license_plate", "licensePlate",
               "plate_number", "plateNumber", "number_plate", "text"):
         if raw.get(k):
-            result["plate"] = str(raw[k]).strip()
-            break
-    # Nested results list (OpenALPR style)
-    if not result["plate"]:
+            res["plate"] = str(raw[k]).strip(); break
+    if not res["plate"]:
         for k in ("results", "candidates"):
             sub = raw.get(k)
             if isinstance(sub, list) and sub:
-                result["plate"] = str(sub[0].get("plate", "")).strip()
-                break
-
-    # Original / raw plate
-    for k in ("original", "OriginalPlate", "original_plate", "originalPlate", "raw_plate"):
+                res["plate"] = str(sub[0].get("plate", "")).strip(); break
+    for k in ("original", "OriginalPlate", "original_plate", "originalPlate"):
         if raw.get(k):
-            result["original"] = str(raw[k]).strip()
-            break
-
-    # Confidence
-    for k in ("confidence", "Confidence", "score", "Score", "prob"):
+            res["original"] = str(raw[k]).strip(); break
+    for k in ("score", "Score", "confidence", "Confidence", "prob"):
         if k in raw:
             try:
                 v = float(raw[k])
-                result["confidence"] = v / 100 if v > 1 else v
-            except Exception:
-                pass
+                res["confidence"] = v / 100 if v > 1.5 else v
+            except Exception: pass
             break
-
-    # Vehicle type
     for k in ("vehicle_type", "VehicleType", "vehicleType", "vehicle", "type", "class"):
         if raw.get(k):
-            result["vehicle_type"] = str(raw[k]).strip()
-            break
-
-    # Bounding box
+            res["vehicle_type"] = str(raw[k]).strip(); break
     for k in ("bbox", "BoundingBox", "bounding_box", "box", "region"):
         if raw.get(k):
-            result["bbox"] = raw[k]
-            break
-
-    # LPR crop (base64)
-    for k in ("lpr_image", "LprImage", "plate_image", "plateImage",
-              "image_base64", "plate_crop"):
+            res["bbox"] = raw[k]; break
+    for k in ("lpr_image", "LprImage", "plate_image", "plateImage", "image_base64", "plate_crop"):
         if raw.get(k):
-            result["lpr_image_b64"] = raw[k]
-            break
+            res["lpr_image_b64"] = raw[k]; break
+    return res
 
-    return result
+
+def _fmt_bbox(bbox) -> str:
+    if isinstance(bbox, dict):
+        return (f"({bbox.get('xmin',0)}, {bbox.get('ymin',0)}) → "
+                f"({bbox.get('xmax',0)}, {bbox.get('ymax',0)})")
+    if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+        return f"({bbox[0]}, {bbox[1]}) → ({bbox[2]}, {bbox[3]})"
+    return "-"
+
+
+def _dnd_parse(data: str) -> list:
+    return [m.group(1) or m.group(2) for m in re.finditer(r"\{([^}]+)\}|(\S+)", data)
+            if m.group(1) or m.group(2)]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 
 
 class LprTesterTab(Frame):
-    """Tab kiểm thử LPR — test ảnh đơn hoặc toàn bộ thư mục."""
 
     def __init__(self, master, root):
         super().__init__(master, bg=BG)
         self.root = root
-        self._cancel = False
-        self._pil_single = None      # PIL Image ảnh đơn đang load
-        self._pil_lpr_single = None  # PIL Image ảnh biển cắt (single test)
-        self._folder_lpr = {}        # iid → PIL Image biển cắt (folder results)
+        self._cancel      = False
+        self._pil_single  = None
+        self._loaded_path = None
+        self._pil_lpr     = None
+        self._folder_lpr  = {}          # iid → PIL Image biển
+        self._folder_files = {}         # iid → full file path
+        self._all_tree_order = []       # [(iid, file_path)] — toàn bộ kết quả
+
+        # Resume support
+        self._all_queued_files: list = []  # toàn bộ file list của batch hiện tại
+        self._resume_from: int = 0         # index kế tiếp cần xử lý
+        self._batch_folder: str = ""       # folder của batch hiện tại
+
+        # Review state (giống YOLO)
+        self._review_state: dict = dict(_CFG.get("lpr.review_states", {}))
+        self._active_filter  = "all"   # review: all/correct/incorrect/unreviewed
+        self._detect_filter  = "all"   # detect: all/detected/undetected
+        self._filter_btns:  dict = {}
+        self._detect_btns:  dict = {}
+
         self._build()
 
-    # ═══════════════════════════ BUILD UI ══════════════════════════════════
+    # ═══════════════════════════════ BUILD ════════════════════════════════
 
     def _build(self):
-        self._build_config_strip()
-
+        self._build_config()
         pw = PanedWindow(self, orient=HORIZONTAL, bg=DIM,
                          sashwidth=5, sashrelief="flat", relief="flat")
         pw.pack(fill=BOTH, expand=True, padx=8, pady=4)
-
-        left = Frame(pw, bg=BG)
+        left  = Frame(pw, bg=BG)
         right = Frame(pw, bg=BG)
-        pw.add(left, minsize=360)
-        pw.add(right, minsize=440)
-
+        pw.add(left,  minsize=360)
+        pw.add(right, minsize=460)
         self._build_single(left)
         self._build_folder(right)
-
         log_wrap = Frame(self, bg=CARD, pady=2)
         log_wrap.pack(fill=X, padx=8, pady=(0, 6))
         Label(log_wrap, text="Log", bg=CARD, fg=DIM, font=F_BOLD, padx=8).pack(anchor=W)
@@ -135,64 +170,86 @@ class LprTesterTab(Frame):
 
     # ── Config strip ──────────────────────────────────────────────────────
 
-    def _build_config_strip(self):
+    def _build_config(self):
         strip = Frame(self, bg=CARD, padx=10, pady=6)
         strip.pack(fill=X, padx=8, pady=(6, 2))
+        r = Frame(strip, bg=CARD)
+        r.pack(fill=X)
 
-        Label(strip, text="Loại LPR:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Label(r, text="LPR Server:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
         self._type_var = StringVar(value=_LPR_TYPES[0])
         _bind_cfg("lpr.type", self._type_var)
-        type_cb = ttk.Combobox(strip, textvariable=self._type_var, width=28,
+        type_cb = ttk.Combobox(r, textvariable=self._type_var, width=22,
                                 style="Dark.TCombobox", values=_LPR_TYPES, state="readonly")
         type_cb.pack(side=LEFT, padx=(4, 14))
-        type_cb.bind("<<ComboboxSelected>>", self._on_type_change)
+        type_cb.bind("<<ComboboxSelected>>", self._on_mode_change)
 
-        Label(strip, text="URL:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Label(r, text="Chế độ:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        self._detect_mode = StringVar(value=_MODE_DIRECT)
+        _bind_cfg("lpr.detect_mode", self._detect_mode)
+        for label, val in [("Đọc từ xe", _MODE_VEHICLE), ("Đọc từ biển số", _MODE_DIRECT)]:
+            Radiobutton(r, text=label, variable=self._detect_mode, value=val,
+                        bg=CARD, fg=TEXT, selectcolor=CARD, activebackground=CARD,
+                        activeforeground=ACCENT, font=F_MAIN,
+                        command=self._on_mode_change).pack(side=LEFT, padx=(4, 0))
+        Frame(r, bg=CARD, width=12).pack(side=LEFT)
+
+        Label(r, text="URL:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
         self._url_var = StringVar(value="http://localhost:8000/read-plate")
-        self._url_cb = ttk.Combobox(strip, textvariable=self._url_var, width=42,
+        self._url_cb = ttk.Combobox(r, textvariable=self._url_var, width=40,
                                      style="Dark.TCombobox", font=F_MAIN)
         self._url_cb.pack(side=LEFT, padx=(4, 14))
         _bind_history("h.lpr.url", self._url_cb)
 
-        Label(strip, text="Timeout:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Label(r, text="Timeout:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
         self._timeout_var = IntVar(value=10)
         _bind_cfg("lpr.timeout", self._timeout_var)
-        Spinbox(strip, from_=1, to=120, textvariable=self._timeout_var, width=5,
+        Spinbox(r, from_=1, to=120, textvariable=self._timeout_var, width=4,
                 bg=CARD, fg=TEXT, insertbackground=TEXT, buttonbackground=ACCENT2,
                 relief="flat", font=F_MAIN).pack(side=LEFT, padx=(4, 2))
-        Label(strip, text="s", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(0, 14))
-
-        Button(strip, text="🔌 Test kết nối", command=self._test_connection,
+        Label(r, text="s", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(0, 10))
+        Button(r, text="🔌 Test kết nối", command=self._test_connection,
                bg=ACCENT2, fg="white", activebackground=ACCENT, activeforeground="white",
                font=F_MAIN, relief="flat", padx=10, cursor="hand2").pack(side=LEFT, padx=(0, 8))
-
         self._conn_var = StringVar(value="Chưa kiểm tra")
-        self._conn_lbl = Label(strip, textvariable=self._conn_var,
+        self._conn_lbl = Label(r, textvariable=self._conn_var,
                                 bg=CARD, fg=DIM, font=F_MAIN, width=22, anchor=W)
         self._conn_lbl.pack(side=LEFT)
 
-    # ── Single image pane (left) ──────────────────────────────────────────
+    # ── Single image pane ─────────────────────────────────────────────────
 
     def _build_single(self, parent):
-        Label(parent, text="Test ảnh đơn", bg=BG, fg=ACCENT,
-              font=F_BOLD).pack(anchor=W, padx=8, pady=(6, 2))
+        hdr = Frame(parent, bg=BG)
+        hdr.pack(fill=X, padx=8, pady=(6, 2))
+        Label(hdr, text="Test ảnh đơn", bg=BG, fg=ACCENT, font=F_BOLD).pack(side=LEFT)
+        self._auto_var = BooleanVar(value=True)
+        _bind_cfg("lpr.auto_detect", self._auto_var)
+        Checkbutton(hdr, text="Tự động nhận dạng", variable=self._auto_var,
+                    bg=BG, fg=DIM, selectcolor=CARD, activebackground=BG,
+                    font=("Segoe UI", 9)).pack(side=RIGHT)
 
-        # Image preview box
-        pic_frame = Frame(parent, bg=CARD, height=220)
-        pic_frame.pack(fill=X, padx=8, pady=(2, 2))
-        pic_frame.pack_propagate(False)
-        self._pic_vehicle = Label(pic_frame, bg=CARD, fg=DIM, font=F_MAIN,
-                                   text="(click để tải ảnh — double-click để phóng to)",
-                                   cursor="hand2", wraplength=340)
-        self._pic_vehicle.pack(fill=BOTH, expand=True)
+        pic_outer = Frame(parent, bg="#0d0d1a", bd=2, relief="groove", height=300)
+        pic_outer.pack(fill=X, padx=8, pady=(2, 2))
+        pic_outer.pack_propagate(False)
+        hint = "(Kéo-thả ảnh vào đây  |  Click để chọn file)" if _DND_OK else "(Click để chọn file)"
+        self._pic_vehicle = Label(pic_outer, bg="#0d0d1a", fg=DIM, font=F_MAIN,
+                                   text=hint, cursor="hand2", wraplength=340)
+        self._pic_vehicle.pack(fill=BOTH, expand=True, padx=4, pady=4)
         self._pic_vehicle.bind("<Button-1>",        lambda e: self._load_image())
-        self._pic_vehicle.bind("<Double-Button-1>", lambda e: self._zoom_single())
+        self._pic_vehicle.bind("<Double-Button-1>", lambda e: _zoom_image_window(
+            self.root, self._pil_single, "Ảnh xe"))
+        if _DND_OK:
+            try:
+                self._pic_vehicle.drop_target_register("DND_Files")
+                self._pic_vehicle.dnd_bind("<<Drop>>", self._on_drop)
+                pic_outer.drop_target_register("DND_Files")
+                pic_outer.dnd_bind("<<Drop>>", self._on_drop)
+            except Exception: pass
 
-        self._img_name_lbl = Label(parent, text="", bg=BG, fg=DIM,
-                                    font=F_MONO, wraplength=360, anchor=CENTER)
-        self._img_name_lbl.pack()
+        self._img_lbl = Label(parent, text="", bg=BG, fg=DIM,
+                               font=F_MONO, wraplength=360, anchor=CENTER)
+        self._img_lbl.pack()
 
-        # Buttons + options
         btn_row = Frame(parent, bg=BG)
         btn_row.pack(fill=X, padx=8, pady=(4, 2))
         _action_btn(btn_row, "📂 Load ảnh (Ctrl+O)", self._load_image,
@@ -215,46 +272,37 @@ class LprTesterTab(Frame):
                 bg=CARD, fg=TEXT, insertbackground=TEXT, buttonbackground=ACCENT2,
                 relief="flat", font=F_MAIN).pack(side=LEFT, padx=4)
 
-        # Result fields
         res = Frame(parent, bg=CARD, padx=10, pady=8)
         res.pack(fill=X, padx=8, pady=(4, 2))
-        self._res_vars = {}
-        for label, key in [
-            ("Biển số",    "plate"),
-            ("Biển gốc",   "original"),
-            ("Loại xe",    "vehicle_type"),
-            ("Confidence", "confidence"),
-            ("Thời gian",  "elapsed_ms"),
-            ("Bounding box", "bbox"),
-        ]:
-            row = Frame(res, bg=CARD)
-            row.pack(fill=X, pady=1)
+        self._res = {}
+        for label, key in [("Biển số", "plate"), ("Biển gốc", "original"),
+                            ("Loại xe", "vehicle_type"), ("Confidence", "confidence"),
+                            ("Thời gian", "elapsed_ms"), ("Bounding box", "bbox")]:
+            row = Frame(res, bg=CARD); row.pack(fill=X, pady=1)
             Label(row, text=f"{label}:", bg=CARD, fg=DIM,
                   font=F_MAIN, width=13, anchor=W).pack(side=LEFT)
             v = StringVar(value="-")
             Entry(row, textvariable=v, bg=CARD, fg=TEXT,
                   insertbackground=TEXT, relief="flat", font=F_MONO,
                   state="readonly", readonlybackground=CARD).pack(side=LEFT, fill=X, expand=True)
-            self._res_vars[key] = v
+            self._res[key] = v
 
-        # LPR crop image
-        lpr_wrap = Frame(parent, bg=CARD)
-        lpr_wrap.pack(fill=X, padx=8, pady=(2, 6))
-        Label(lpr_wrap, text="Ảnh biển cắt (double-click để zoom):",
+        lc = Frame(parent, bg=CARD)
+        lc.pack(fill=X, padx=8, pady=(2, 6))
+        Label(lc, text="Ảnh biển cắt (double-click để zoom):",
               bg=CARD, fg=DIM, font=F_MAIN).pack(anchor=W, padx=4, pady=(4, 0))
-        self._pic_lpr = Label(lpr_wrap, bg=CARD, fg=DIM, font=F_MAIN,
+        self._pic_lpr = Label(lc, bg=CARD, fg=DIM, font=F_MAIN,
                                text="(chưa nhận dạng)", height=4, cursor="hand2")
         self._pic_lpr.pack(fill=X, padx=4, pady=4)
-        self._pic_lpr.bind("<Double-Button-1>", lambda e: _zoom_image_window(
-            self.root, self._pil_lpr_single, "Ảnh biển số"))
+        self._pic_lpr.bind("<Double-Button-1>",
+                            lambda e: _zoom_image_window(self.root, self._pil_lpr, "Ảnh biển số"))
 
-    # ── Folder batch pane (right) ─────────────────────────────────────────
+    # ── Folder batch pane ─────────────────────────────────────────────────
 
     def _build_folder(self, parent):
         Label(parent, text="Test thư mục", bg=BG, fg=ACCENT,
               font=F_BOLD).pack(anchor=W, padx=8, pady=(6, 2))
 
-        # Folder row
         fr = Frame(parent, bg=BG)
         fr.pack(fill=X, padx=8, pady=2)
         self._folder_var = StringVar()
@@ -270,7 +318,6 @@ class LprTesterTab(Frame):
                bg=CARD, fg=TEXT, activebackground=ACCENT2, activeforeground="white",
                font=F_MAIN, relief="flat", padx=6, cursor="hand2").pack(side=LEFT)
 
-        # Options row
         opt = Frame(parent, bg=BG)
         opt.pack(fill=X, padx=8, pady=2)
         self._subfolder_var = BooleanVar(value=False)
@@ -296,58 +343,137 @@ class LprTesterTab(Frame):
                 bg=CARD, fg=TEXT, insertbackground=TEXT, buttonbackground=ACCENT2,
                 relief="flat", font=F_MAIN).pack(side=LEFT, padx=4)
 
-        # Action buttons
         btn_row = Frame(parent, bg=BG)
         btn_row.pack(fill=X, padx=8, pady=(4, 2))
         self._btn_start = _action_btn(btn_row, "▶ Test thư mục (F5)",
                                        self._start, ACCENT, padx=10, pady=4)
         self._btn_start.pack(side=LEFT, padx=(0, 8))
-        self._btn_stop = _action_btn(btn_row, "■ Dừng (Esc)",
-                                      self._stop, "#555", padx=10, pady=4)
+        self._btn_stop = _action_btn(btn_row, "■ Dừng (Esc)", self._stop, "#555", padx=10, pady=4)
         self._btn_stop.pack(side=LEFT, padx=(0, 8))
         self._btn_stop.config(state=DISABLED)
+        self._btn_resume = _action_btn(btn_row, "▶ Tiếp tục", self._resume, "#2a5a2a", padx=10, pady=4)
+        self._btn_resume.pack(side=LEFT, padx=(0, 8))
+        self._btn_resume.config(state=DISABLED)
         _action_btn(btn_row, "↻ Retry lỗi", self._retry_failed,
                     ACCENT2, padx=8, pady=4).pack(side=LEFT, padx=(0, 8))
         _action_btn(btn_row, "💾 Xuất CSV (Ctrl+S)", self._export,
                     ACCENT2, padx=8, pady=4).pack(side=LEFT)
 
-        # Progress + stats
         pg = Frame(parent, bg=BG)
         pg.pack(fill=X, padx=8, pady=2)
         self._prog_lbl = Label(pg, text="Sẵn sàng", bg=BG, fg=DIM, font=F_MAIN, anchor=W)
         self._prog_lbl.pack(fill=X)
-        self._pb = ttk.Progressbar(pg, style="K.Horizontal.TProgressbar",
-                                    maximum=100, value=0)
+        self._pb = ttk.Progressbar(pg, style="K.Horizontal.TProgressbar", maximum=100, value=0)
         self._pb.pack(fill=X, pady=(2, 2))
         self._stats_lbl = Label(pg, text="", bg=BG, fg=SUCCESS, font=F_MAIN, anchor=W)
         self._stats_lbl.pack(fill=X)
 
-        # Results Treeview
-        tv_frame = Frame(parent, bg=BG)
-        tv_frame.pack(fill=BOTH, expand=True, padx=8, pady=(2, 2))
-        cols = ("#", "Tên file", "Biển số", "Biển gốc", "Loại xe", "ms", "Trạng thái")
-        self._tree = ttk.Treeview(tv_frame, columns=cols, show="headings",
+        # ── Row 1: Review filter (All / ✓ / ✗ / ?) ─────────────────────────
+        filter_row = Frame(parent, bg=BG)
+        filter_row.pack(fill=X, padx=8, pady=(4, 1))
+        Label(filter_row, text="Đánh giá:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(0, 4))
+        for code, lbl_text, fg in [
+            ("all",        "Tất cả",   TEXT),
+            ("correct",    "✓ Đúng",   SUCCESS),
+            ("incorrect",  "✗ Sai",    "#f05050"),
+            ("unreviewed", "? Chưa",   DIM),
+        ]:
+            btn = Button(filter_row, text=lbl_text,
+                         command=lambda c=code: self._set_review_filter(c),
+                         bg=CARD, fg=fg, font=F_MAIN, relief="flat",
+                         padx=8, cursor="hand2", activebackground="#252540",
+                         activeforeground=fg)
+            btn.pack(side=LEFT, padx=2)
+            self._filter_btns[code] = btn
+        self._filter_btns["all"].config(relief="sunken", bg="#252540")
+
+        # ── Row 2: Detection filter + keyword search ─────────────────────
+        filter_row2 = Frame(parent, bg=BG)
+        filter_row2.pack(fill=X, padx=8, pady=(1, 4))
+        Label(filter_row2, text="Kết quả:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(0, 4))
+        for code, lbl_text, fg in [
+            ("all",        "Tất cả",           TEXT),
+            ("detected",   "Đọc được",         SUCCESS),
+            ("undetected", "Không đọc được",   "#f05050"),
+        ]:
+            btn = Button(filter_row2, text=lbl_text,
+                         command=lambda c=code: self._set_detect_filter(c),
+                         bg=CARD, fg=fg, font=F_MAIN, relief="flat",
+                         padx=8, cursor="hand2", activebackground="#252540",
+                         activeforeground=fg)
+            btn.pack(side=LEFT, padx=2)
+            self._detect_btns[code] = btn
+        self._detect_btns["all"].config(relief="sunken", bg="#252540")
+
+        Frame(filter_row2, bg=BG, width=14).pack(side=LEFT)
+        Label(filter_row2, text="Biển:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(0, 4))
+        self._kw_var = StringVar()
+        kw_entry = Entry(filter_row2, textvariable=self._kw_var, width=18,
+                         bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat",
+                         font=F_MONO)
+        kw_entry.pack(side=LEFT, padx=(0, 4))
+        kw_entry.bind("<KeyRelease>", lambda e: self._apply_all_filters())
+        Button(filter_row2, text="✕", command=self._clear_kw,
+               bg=CARD, fg=DIM, font=F_MAIN, relief="flat",
+               padx=4, cursor="hand2").pack(side=LEFT)
+        Label(filter_row2, text="(* = đầu/cuối  ? = 1 ký tự)",
+              bg=BG, fg=DIM, font=("Segoe UI", 8)).pack(side=LEFT, padx=(6, 0))
+
+        # ── Treeview ─────────────────────────────────────────────────────
+        tv_f = Frame(parent, bg=BG)
+        tv_f.pack(fill=BOTH, expand=True, padx=8, pady=(2, 2))
+        cols = ("#", "Tên file", "Biển số", "Biển gốc", "Loại xe", "ms", "Trạng thái", "📂", "📋")
+        self._tree = ttk.Treeview(tv_f, columns=cols, show="headings",
                                    style="Dark.Treeview", selectmode="browse")
-        for col, w in zip(cols, [38, 200, 120, 110, 90, 68, 110]):
+        col_widths = [38, 190, 115, 105, 85, 60, 110, 34, 34]
+        for col, w in zip(cols, col_widths):
             self._tree.heading(col, text=col)
-            self._tree.column(col, width=w, minwidth=30,
-                               stretch=(col in ("Tên file", "Trạng thái")))
-        vsb = ttk.Scrollbar(tv_frame, orient=VERTICAL,   command=self._tree.yview)
-        hsb = ttk.Scrollbar(tv_frame, orient=HORIZONTAL, command=self._tree.xview)
+            stretch = col in ("Tên file", "Trạng thái")
+            self._tree.column(col, width=w, minwidth=w if col in ("📂", "📋") else 30,
+                               stretch=stretch, anchor=CENTER if col in ("📂", "📋", "#", "ms") else W)
+        vsb = ttk.Scrollbar(tv_f, orient=VERTICAL,   command=self._tree.yview)
+        hsb = ttk.Scrollbar(tv_f, orient=HORIZONTAL, command=self._tree.xview)
         self._tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         vsb.pack(side=RIGHT, fill=Y)
         hsb.pack(side=BOTTOM, fill=X)
         self._tree.pack(fill=BOTH, expand=True)
+        self._tree.tag_configure("ok",        background="#1a2e1a", foreground=TEXT)
+        self._tree.tag_configure("err",       background="#2e1a1a", foreground=TEXT)
+        self._tree.tag_configure("warn",      background="#2a2820", foreground=TEXT)
+        self._tree.tag_configure("gt_ok",     background="#0d2b0d", foreground=SUCCESS)
+        self._tree.tag_configure("gt_err",    background="#2b0d0d", foreground="#f08080")
+        self._tree.tag_configure("unreviewed",background="#16162a", foreground=DIM)
         self._tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         self._tree.bind("<Double-Button-1>",  self._on_tree_dbl)
+        self._tree.bind("<Button-1>",         self._on_tree_click)
 
-        # Preview row
+        # ── Mark buttons (nổi bật, như YOLO) ─────────────────────────────
+        mark_row = Frame(parent, bg=BG)
+        mark_row.pack(fill=X, padx=8, pady=(4, 2))
+        Button(mark_row, text="✓ Đúng  [Enter]",
+               command=lambda: self._mark_current("correct"),
+               bg="#1a3a1a", fg=SUCCESS, font=F_MAIN, relief="flat",
+               padx=10, pady=4, cursor="hand2",
+               activebackground="#2d6a2d", activeforeground="white").pack(side=LEFT, padx=(0, 6))
+        Button(mark_row, text="✗ Sai  [Del]",
+               command=lambda: self._mark_current("incorrect"),
+               bg="#3a1a1a", fg="#f05050", font=F_MAIN, relief="flat",
+               padx=10, pady=4, cursor="hand2",
+               activebackground="#6a2d2d", activeforeground="white").pack(side=LEFT, padx=(0, 6))
+        Button(mark_row, text="↺ Bỏ đánh dấu",
+               command=lambda: self._mark_current(""),
+               bg=CARD, fg=DIM, font=F_MAIN, relief="flat",
+               padx=8, pady=4, cursor="hand2",
+               activebackground="#252540", activeforeground=TEXT).pack(side=LEFT, padx=(0, 12))
+        self._mark_lbl = Label(mark_row, text="", bg=BG, fg=DIM, font=F_MONO)
+        self._mark_lbl.pack(side=LEFT)
+
+        # ── Preview ───────────────────────────────────────────────────────
         pv = Frame(parent, bg=CARD)
-        pv.pack(fill=X, padx=8, pady=(2, 2))
+        pv.pack(fill=X, padx=8, pady=(2, 4))
         self._prev_lbl = Label(pv, text="(chọn dòng trong bảng để xem ảnh)",
                                 bg=CARD, fg=DIM, font=F_MONO)
         self._prev_lbl.pack(anchor=W, padx=6, pady=(4, 2))
-
         img_row = Frame(pv, bg=CARD)
         img_row.pack(fill=X, padx=6, pady=(0, 4))
         self._pic_fv = Label(img_row, bg=CARD, fg=DIM, text="(ảnh xe)",
@@ -359,59 +485,35 @@ class LprTesterTab(Frame):
         self._pic_fp.pack(side=LEFT, fill=BOTH, expand=True)
         self._pic_fp.bind("<Double-Button-1>", lambda e: self._zoom_fp())
 
-        # GT buttons
-        gt = Frame(pv, bg=CARD)
-        gt.pack(fill=X, padx=6, pady=(0, 6))
-        self._btn_ok = Button(gt, text="✓ Đúng", command=self._save_correct,
-                               bg="#2d6a2d", fg="white", activebackground=SUCCESS,
-                               activeforeground="white", font=F_MAIN,
-                               relief="flat", padx=12, pady=4, cursor="hand2", state=DISABLED)
-        self._btn_ok.pack(side=LEFT, padx=(0, 8))
-        self._btn_wrong = Button(gt, text="✗ Sai", command=self._save_wrong,
-                                  bg="#6a2d2d", fg="white", activebackground="#f05050",
-                                  activeforeground="white", font=F_MAIN,
-                                  relief="flat", padx=12, pady=4, cursor="hand2", state=DISABLED)
-        self._btn_wrong.pack(side=LEFT, padx=(0, 12))
-        Label(gt, text="Lưu ảnh vào _gt/dung hoặc _gt/sai",
-              bg=CARD, fg=DIM, font=("Segoe UI", 8)).pack(side=LEFT)
-
     # ═══════════════════════════ CONFIG ACTIONS ═══════════════════════════
 
-    def _on_type_change(self, _=None):
-        t = self._type_var.get()
-        curr = self._url_var.get()
-        if "HTTP REST" in t and "localhost:8000" not in curr:
-            self._url_var.set("http://localhost:8000/read-plate")
-        elif "Kztek" in t and "localhost:8000" in curr:
-            self._url_var.set("http://localhost:5001/api/lpr/detect")
-        elif "OpenALPR" in t and "localhost:8000" in curr:
-            self._url_var.set("http://localhost:8080/v2/recognize")
+    def _on_mode_change(self, _=None):
+        key  = (self._type_var.get(), self._detect_mode.get())
+        hint = _URL_HINTS.get(key, "")
+        curr = self._url_var.get().strip()
+        if curr in _URL_HINTS.values() or not curr:
+            self._url_var.set(hint)
 
     def _test_connection(self):
         if not _REQ_OK:
-            messagebox.showerror("Lỗi", "Thư viện 'requests' chưa cài.\npip install requests")
-            return
+            messagebox.showerror("Lỗi", "pip install requests"); return
         url = self._url_var.get().strip()
         if not url:
-            messagebox.showwarning("Thông báo", "Vui lòng nhập URL.")
-            return
+            messagebox.showwarning("Thông báo", "Vui lòng nhập URL."); return
         self._conn_var.set("Đang kiểm tra...")
         self._conn_lbl.config(fg="#f0c040")
 
         def _chk():
-            # Probe the base host with a GET / HEAD
             try:
-                parts = url.split("/")
-                base = "/".join(parts[:3])          # scheme://host:port
-                r = requests.head(base, timeout=self._timeout_var.get())
+                base = "/".join(url.split("/")[:3])
+                r = _get_session().head(base, timeout=self._timeout_var.get())
                 ok = r.status_code < 500
             except Exception:
                 try:
-                    r = requests.get(base, timeout=self._timeout_var.get())
+                    r = _get_session().get(base, timeout=self._timeout_var.get())
                     ok = r.status_code < 500
                 except Exception:
                     ok = False
-
             def _upd():
                 if ok:
                     self._conn_var.set("✔ Server sẵn sàng")
@@ -420,113 +522,117 @@ class LprTesterTab(Frame):
                 else:
                     self._conn_var.set("✗ Không phản hồi")
                     self._conn_lbl.config(fg="#f05050")
-                    _append_log(self._log, f"[LỖI] Kết nối thất bại — {url}")
+                    _append_log(self._log, f"[LỖI] Không kết nối được — {url}")
             self.root.after(0, _upd)
-
         threading.Thread(target=_chk, daemon=True).start()
 
     # ═══════════════════════════ SINGLE IMAGE ═════════════════════════════
 
     def _load_image(self, _=None):
         if not _PIL_OK:
-            messagebox.showerror("Lỗi", "Pillow chưa cài.\npip install Pillow")
-            return
+            messagebox.showerror("Lỗi", "pip install Pillow"); return
         path = filedialog.askopenfilename(
             title="Chọn ảnh xe",
-            initialdir=_CFG.get("lpr.last_dir", "") or None,
+            initialdir=_CFG.get("lpr.last_dir") or None,
             filetypes=[("Ảnh", "*.jpg *.jpeg *.png *.bmp *.webp *.gif *.tiff"),
                        ("Tất cả", "*.*")],
         )
-        if not path:
-            return
+        if path:
+            self._load_from_path(path)
+
+    def _on_drop(self, event):
+        paths = _dnd_parse(event.data)
+        if not paths: return
+        path = paths[0]
+        if os.path.isfile(path) and os.path.splitext(path)[1].lower() in _IMG_EXTS:
+            self._load_from_path(path)
+        else:
+            _append_log(self._log, f"⚠ File không hợp lệ: {path}")
+
+    def _load_from_path(self, path: str):
+        if not _PIL_OK: return
         _CFG["lpr.last_dir"] = os.path.dirname(path)
         _cfg_save()
         try:
             img = Image.open(path)
-            self._pil_single = img.copy()
+            self._pil_single  = img.copy()
+            self._loaded_path = path
             img.close()
-            self._show_img(self._pic_vehicle, self._pil_single, 360, 210)
-            self._img_name_lbl.config(text=os.path.basename(path))
+            self._show_img(self._pic_vehicle, self._pil_single, 400, 290)
+            self._img_lbl.config(text=os.path.basename(path))
             self._clear_single_result()
             _append_log(self._log, f"✔ Đã tải: {path}")
+            if self._auto_var.get():
+                self.root.after(50, self._detect_single)
         except Exception as ex:
             _append_log(self._log, f"[LỖI] Không tải được ảnh: {ex}")
 
     def _detect_single(self):
         if not _REQ_OK:
-            messagebox.showerror("Lỗi", "Thư viện 'requests' chưa cài.")
-            return
-        if self._pil_single is None:
-            messagebox.showwarning("Thông báo", "Chưa tải ảnh. Nhấn Load ảnh trước.")
-            return
+            messagebox.showerror("Lỗi", "pip install requests"); return
+        if self._pil_single is None and not self._loaded_path:
+            messagebox.showwarning("Thông báo", "Chưa tải ảnh."); return
         url = self._url_var.get().strip()
         if not url:
-            messagebox.showwarning("Thông báo", "Chưa nhập URL server.")
-            return
+            messagebox.showwarning("Thông báo", "Chưa nhập URL."); return
 
         self._btn_detect.config(state=DISABLED, text="Đang nhận dạng...")
         self._clear_single_result()
-        _append_log(self._log, f"⠿ Gửi ảnh → {url} ...")
-
-        pil_copy = self._pil_single.copy()
-        timeout = self._timeout_var.get()
+        path     = self._loaded_path
+        pil_copy = self._pil_single.copy() if self._pil_single else None
+        timeout  = self._timeout_var.get()
+        mode     = self._detect_mode.get()
         lpr_type = self._type_var.get()
+        _append_log(self._log, f"⠿ [{mode}] → {url}")
 
         def _run():
             import time
-            t0 = time.time()
-            result, err = _api_call_pil(pil_copy, url, timeout, lpr_type)
-            elapsed = int((time.time() - t0) * 1000)
-            pil_copy.close()
+            t0 = time.perf_counter()
+            if path and os.path.isfile(path):
+                result, err = _api_call_file(path, url, timeout, mode, lpr_type)
+            elif pil_copy:
+                result, err = _api_call_pil(pil_copy, url, timeout, mode, lpr_type)
+                pil_copy.close()
+            else:
+                result, err = {}, "Không có ảnh"
+            elapsed = int((time.perf_counter() - t0) * 1000)
 
             def _upd():
                 self._btn_detect.config(state=NORMAL, text="🔍 Nhận dạng (F5)")
                 if err:
-                    _append_log(self._log, f"[LỖI] {err}")
-                    return
+                    _append_log(self._log, f"[LỖI] {err}"); return
                 plate = result.get("plate", "")
-                self._res_vars["plate"].set(plate or "(không nhận dạng)")
-                self._res_vars["original"].set(result.get("original") or "-")
-                self._res_vars["vehicle_type"].set(result.get("vehicle_type") or "-")
+                self._res["plate"].set(plate or "(không nhận dạng)")
+                self._res["original"].set(result.get("original") or "-")
+                self._res["vehicle_type"].set(result.get("vehicle_type") or "-")
                 conf = result.get("confidence", 0)
-                self._res_vars["confidence"].set(f"{conf:.1%}" if conf else "-")
-                self._res_vars["elapsed_ms"].set(f"{elapsed} ms")
-                bbox = result.get("bbox")
-                self._res_vars["bbox"].set(_fmt_bbox(bbox))
-
-                # LPR crop
+                self._res["confidence"].set(f"{conf:.1%}" if conf else "-")
+                self._res["elapsed_ms"].set(f"{elapsed} ms")
+                self._res["bbox"].set(_fmt_bbox(result.get("bbox")))
                 b64 = result.get("lpr_image_b64")
                 if b64 and _PIL_OK:
                     try:
                         import base64
-                        self._pil_lpr_single = Image.open(BytesIO(base64.b64decode(b64)))
-                        self._show_img(self._pic_lpr, self._pil_lpr_single, 360, 80)
-                    except Exception:
-                        pass
-
-                _append_log(self._log,
-                    f'✔ Biển số: "{plate}" | {elapsed}ms'
-                    + (f" | Conf: {conf:.1%}" if conf else ""))
+                        self._pil_lpr = Image.open(BytesIO(base64.b64decode(b64)))
+                        self._show_img(self._pic_lpr, self._pil_lpr, 360, 80)
+                    except Exception: pass
+                log_msg = f'✔ "{plate}"  {elapsed}ms'
+                if conf: log_msg += f"  conf:{conf:.1%}"
+                _append_log(self._log, log_msg)
             self.root.after(0, _upd)
-
         threading.Thread(target=_run, daemon=True).start()
 
     def _clear_single_result(self):
-        for v in self._res_vars.values():
-            v.set("-")
+        for v in self._res.values(): v.set("-")
         self._pic_lpr.config(image="", text="(chưa nhận dạng)")
-        self._pil_lpr_single = None
-
-    def _zoom_single(self):
-        _zoom_image_window(self.root, self._pil_single, "Ảnh xe")
+        self._pil_lpr = None
 
     # ═══════════════════════════ FOLDER BATCH ═════════════════════════════
 
     def _browse_folder(self):
         p = filedialog.askdirectory(
             title="Chọn thư mục ảnh",
-            initialdir=self._folder_var.get() or _cfg_dir("lpr.folder") or None,
-        )
+            initialdir=self._folder_var.get() or _cfg_dir("lpr.folder") or None)
         if p:
             self._folder_var.set(p)
             _push_history("h.lpr.folder", p)
@@ -534,48 +640,20 @@ class LprTesterTab(Frame):
 
     def _open_folder(self):
         p = self._folder_var.get().strip()
-        if p and os.path.isdir(p):
-            os.startfile(p)
+        if p and os.path.isdir(p): os.startfile(p)
 
     def _start(self):
         if not _REQ_OK:
-            messagebox.showerror("Lỗi", "Thư viện 'requests' chưa cài.")
-            return
+            messagebox.showerror("Lỗi", "pip install requests"); return
         folder = self._folder_var.get().strip()
         if not folder or not os.path.isdir(folder):
-            messagebox.showwarning("Thông báo", "Thư mục không hợp lệ.")
-            return
+            messagebox.showwarning("Thông báo", "Thư mục không hợp lệ."); return
         url = self._url_var.get().strip()
         if not url:
-            messagebox.showwarning("Thông báo", "Chưa nhập URL server.")
-            return
+            messagebox.showwarning("Thông báo", "Chưa nhập URL."); return
 
-        # Reset
-        self._cancel = False
-        for pil in self._folder_lpr.values():
-            try: pil.close()
-            except Exception: pass
-        self._folder_lpr.clear()
-        self._tree.delete(*self._tree.get_children())
-        self._clear_fpreview()
-        self._btn_start.config(state=DISABLED)
-        self._btn_stop.config(state=NORMAL)
-        self._pb.config(value=0)
-
-        threading.Thread(
-            target=self._run_folder_worker,
-            args=(folder, url, self._timeout_var.get(), self._type_var.get(),
-                  self._subfolder_var.get()),
-            daemon=True,
-        ).start()
-
-    def _stop(self):
-        self._cancel = True
-        _append_log(self._log, "⚠ Đang dừng...")
-
-    def _run_folder_worker(self, folder, url, timeout, lpr_type, include_sub):
-        import time
-
+        # Thu thập danh sách file
+        include_sub = self._subfolder_var.get()
         if include_sub:
             files = []
             for rt, _, fnames in os.walk(folder):
@@ -583,132 +661,201 @@ class LprTesterTab(Frame):
                     if os.path.splitext(f)[1].lower() in _IMG_EXTS:
                         files.append(os.path.join(rt, f))
         else:
-            files = [
-                os.path.join(folder, f) for f in os.listdir(folder)
-                if os.path.splitext(f)[1].lower() in _IMG_EXTS
-            ]
+            files = [os.path.join(folder, f) for f in os.listdir(folder)
+                     if os.path.splitext(f)[1].lower() in _IMG_EXTS]
         files.sort()
-        total = len(files)
+        if not files:
+            messagebox.showinfo("Thông báo", "Không tìm thấy ảnh nào trong thư mục."); return
 
-        if total == 0:
-            self.root.after(0, lambda: (
-                _append_log(self._log, "⚠ Không tìm thấy ảnh nào."),
-                self._btn_start.config(state=NORMAL),
-                self._btn_stop.config(state=DISABLED),
-            ))
-            return
+        self._cancel = False
+        self._all_queued_files = files
+        self._resume_from = 0
+        self._batch_folder = folder
+        for pil in self._folder_lpr.values():
+            try: pil.close()
+            except Exception: pass
+        self._folder_lpr.clear()
+        self._folder_files.clear()
+        self._all_tree_order.clear()
+        self._tree.delete(*self._tree.get_children())
+        self._clear_fpreview()
+        self._mark_lbl.config(text="")
+        self._btn_start.config(state=DISABLED)
+        self._btn_stop.config(state=NORMAL)
+        self._btn_resume.config(state=DISABLED)
+        self._pb.config(value=0, maximum=len(files))
+        self._active_filter = "all"
+        self._detect_filter = "all"
+        self._kw_var.set("")
+        for code, btn in self._filter_btns.items():
+            btn.config(relief="sunken" if code == "all" else "flat",
+                       bg="#252540" if code == "all" else CARD)
+        for code, btn in self._detect_btns.items():
+            btn.config(relief="sunken" if code == "all" else "flat",
+                       bg="#252540" if code == "all" else CARD)
 
-        self.root.after(0, lambda: (
-            self._pb.config(maximum=total),
-            _append_log(self._log, f"⠿ Bắt đầu: {total} ảnh | {url}"),
-        ))
+        _append_log(self._log, f"⠿ [{self._detect_mode.get()}] {len(files)} ảnh → {url}")
+        threading.Thread(
+            target=self._folder_worker,
+            args=(files, folder, url, self._timeout_var.get(),
+                  self._detect_mode.get(), self._type_var.get(),
+                  0, 0, 0, 0),
+            daemon=True).start()
 
-        ok_n = fail_n = 0
-        total_ms = 0
+    def _resume(self):
+        """Tiếp tục từ vị trí đã dừng."""
+        if not self._all_queued_files or self._resume_from >= len(self._all_queued_files):
+            messagebox.showinfo("Thông báo", "Không có gì để tiếp tục."); return
+        url = self._url_var.get().strip()
+        if not url:
+            messagebox.showwarning("Thông báo", "Chưa nhập URL."); return
 
-        for i, fpath in enumerate(files):
+        self._cancel = False
+        self._btn_start.config(state=DISABLED)
+        self._btn_stop.config(state=NORMAL)
+        self._btn_resume.config(state=DISABLED)
+
+        # Tính lại ok/fail/ms từ tree hiện tại
+        all_iids = [iid for iid, _ in self._all_tree_order]
+        init_ok = init_fail = init_ms = 0
+        for iid in all_iids:
+            vals = self._tree.item(iid, "values")
+            if not vals: continue
+            st = str(vals[6])
+            ms_val = str(vals[5])
+            if st == "OK": init_ok += 1
+            elif st != "GT: Đúng ✓": init_fail += 1
+            try: init_ms += int(ms_val)
+            except Exception: pass
+
+        remaining = self._all_queued_files[self._resume_from:]
+        _append_log(self._log, (
+            f"▶ Tiếp tục từ #{self._resume_from + 1} — còn {len(remaining)} ảnh"))
+        threading.Thread(
+            target=self._folder_worker,
+            args=(self._all_queued_files, self._batch_folder, url,
+                  self._timeout_var.get(), self._detect_mode.get(),
+                  self._type_var.get(),
+                  self._resume_from, init_ok, init_fail, init_ms),
+            daemon=True).start()
+
+    def _stop(self):
+        self._cancel = True
+        _append_log(self._log, "⚠ Đang dừng...")
+
+    def _folder_worker(self, all_files, folder, url, timeout, mode, lpr_type,
+                       start_from, init_ok, init_fail, init_ms):
+        import time
+        total   = len(all_files)
+        ok_n    = init_ok
+        fail_n  = init_fail
+        total_ms = init_ms
+
+        self.root.after(0, lambda: self._pb.config(maximum=total))
+
+        for i in range(start_from, total):
             if self._cancel:
+                self._resume_from = i   # lưu điểm tiếp tục
                 break
-            fname = os.path.relpath(fpath, folder) if include_sub else os.path.basename(fpath)
-            t0 = time.time()
+            fpath = all_files[i]
+            fname = os.path.relpath(fpath, folder) if folder else os.path.basename(fpath)
+            t0 = time.perf_counter()
             try:
-                result, err = _api_call_file(fpath, url, timeout, lpr_type)
-                elapsed = int((time.time() - t0) * 1000)
+                result, err = _api_call_file(fpath, url, timeout, mode, lpr_type)
+                elapsed = int((time.perf_counter() - t0) * 1000)
                 if err:
-                    plate = orig = vtype = ""
-                    status = f"Lỗi: {err}"
-                    fail_n += 1
-                    lpr_pil = None
+                    plate = orig = vtype = ""; status = f"Lỗi: {err}"; fail_n += 1; lpr_pil = None
                 else:
-                    plate = result.get("plate", "")
-                    orig  = result.get("original", "")
+                    plate = result.get("plate", ""); orig = result.get("original", "")
                     vtype = result.get("vehicle_type", "")
                     status = "OK" if plate else "Không nhận dạng"
-                    if plate:
-                        ok_n += 1
-                    else:
-                        fail_n += 1
+                    if plate: ok_n += 1
+                    else: fail_n += 1
                     lpr_pil = None
                     b64 = result.get("lpr_image_b64")
                     if b64 and _PIL_OK:
                         try:
                             import base64
                             lpr_pil = Image.open(BytesIO(base64.b64decode(b64)))
-                        except Exception:
-                            pass
+                        except Exception: pass
                 total_ms += elapsed
             except Exception as ex:
-                elapsed = 0
-                plate = orig = vtype = ""
-                status = f"Lỗi: {ex}"
-                fail_n += 1
-                lpr_pil = None
+                elapsed = 0; plate = orig = vtype = ""; status = f"Lỗi: {ex}"
+                fail_n += 1; lpr_pil = None
 
-            # Closure-safe copies
             _i, _f, _pl, _or, _vt = i + 1, fname, plate, orig, vtype
-            _ms, _st, _lpi = elapsed, status, lpr_pil
+            _ms, _st, _lpi, _fp = elapsed, status, lpr_pil, fpath
             _ok, _nk, _tms = ok_n, fail_n, total_ms
 
             def _ui(i=_i, f=_f, pl=_pl, orig=_or, vt=_vt,
-                    ms=_ms, st=_st, lpi=_lpi, ok=_ok, nk=_nk, tms=_tms):
-                iid = self._tree.insert("", END, values=(i, f, pl, orig, vt, ms or "-", st))
-                if st == "OK":
-                    self._tree.item(iid, tags=("ok",))
-                elif st.startswith("Lỗi"):
-                    self._tree.item(iid, tags=("err",))
-                else:
-                    self._tree.item(iid, tags=("warn",))
-                if lpi:
-                    self._folder_lpr[iid] = lpi
+                    ms=_ms, st=_st, lpi=_lpi, fp=_fp,
+                    ok=_ok, nk=_nk, tms=_tms):
+                tag = "ok" if st == "OK" else ("err" if st.startswith("Lỗi") else "warn")
+                iid = self._tree.insert("", END, values=(i, f, pl, orig, vt, ms or "-", st, "📂", "📋"))
+                self._tree.item(iid, tags=(tag,))
+                self._folder_files[iid] = fp
+                self._all_tree_order.append((iid, fp))
+                if lpi: self._folder_lpr[iid] = lpi
                 self._tree.see(iid)
                 self._pb["value"] = i
                 self._prog_lbl.config(text=f"Đang xử lý: {i}/{total}  ({int(i/total*100)}%)")
                 done = ok + nk
-                avg = tms // done if done else 0
+                avg  = tms // done if done else 0
                 rate = f"{ok/done:.1%}" if done else "—"
                 self._stats_lbl.config(
                     text=f"OK: {ok}  |  Thất bại: {nk}  |  TB: {avg}ms  |  Tỉ lệ: {rate}")
             self.root.after(0, _ui)
+        else:
+            # Vòng lặp kết thúc tự nhiên (không bị cancel)
+            self._resume_from = total
+
+        _cancelled = self._cancel
+        _ok_n, _fail_n, _total_ms = ok_n, fail_n, total_ms
 
         def _done():
             self._btn_start.config(state=NORMAL)
             self._btn_stop.config(state=DISABLED)
-            done = ok_n + fail_n
-            avg = total_ms // done if done else 0
-            rate = f"{ok_n/done:.1%}" if done else "—"
-            msg = (f"{'Dừng' if self._cancel else 'Hoàn thành'}: {done}/{total}  "
-                   f"OK:{ok_n}  Thất bại:{fail_n}  TB:{avg}ms  Tỉ lệ:{rate}")
+            has_remaining = _cancelled and self._resume_from < total
+            self._btn_resume.config(state=NORMAL if has_remaining else DISABLED)
+            done = _ok_n + _fail_n
+            avg  = _total_ms // done if done else 0
+            rate = f"{_ok_n/done:.1%}" if done else "—"
+            if _cancelled and has_remaining:
+                msg = (f"Đã dừng: {self._resume_from}/{total}  "
+                       f"OK:{_ok_n}  Thất bại:{_fail_n}  TB:{avg}ms  "
+                       f"— còn {total - self._resume_from} ảnh chưa xử lý")
+            else:
+                msg = (f"Hoàn thành: {done}/{total}  "
+                       f"OK:{_ok_n}  Thất bại:{_fail_n}  TB:{avg}ms  Tỉ lệ:{rate}")
             self._prog_lbl.config(text=msg)
             _append_log(self._log, f"✔ {msg}")
+            self._update_filter_counts()
         self.root.after(0, _done)
 
     def _retry_failed(self):
         url = self._url_var.get().strip()
         folder = self._folder_var.get().strip()
         if not url:
-            messagebox.showwarning("Thông báo", "Chưa nhập URL.")
-            return
+            messagebox.showwarning("Thông báo", "Chưa nhập URL."); return
         rows = [
-            (iid, os.path.join(folder, str(self._tree.item(iid)["values"][1])))
+            (iid, self._folder_files.get(iid, ""))
             for iid in self._tree.get_children()
             if str(self._tree.item(iid)["values"][6]) in ("Không nhận dạng",)
             or str(self._tree.item(iid)["values"][6]).startswith("Lỗi")
         ]
         if not rows:
-            messagebox.showinfo("Thông báo", "Không có dòng nào cần retry.")
-            return
+            messagebox.showinfo("Thông báo", "Không có dòng nào cần retry."); return
         _append_log(self._log, f"⠿ Retry {len(rows)} ảnh...")
-        timeout = self._timeout_var.get()
+        timeout  = self._timeout_var.get()
+        mode     = self._detect_mode.get()
         lpr_type = self._type_var.get()
 
         def _run():
             for iid, fpath in rows:
-                if self._cancel or not os.path.isfile(fpath):
-                    continue
-                result, err = _api_call_file(fpath, url, timeout, lpr_type)
-                plate = "" if err else result.get("plate", "")
+                if self._cancel or not os.path.isfile(fpath): continue
+                result, err = _api_call_file(fpath, url, timeout, mode, lpr_type)
+                plate  = "" if err else result.get("plate", "")
                 status = ("OK" if plate else "Không nhận dạng") if not err else f"Lỗi: {err}"
-
                 def _upd(iid=iid, pl=plate, st=status):
                     vals = list(self._tree.item(iid)["values"])
                     vals[2] = pl; vals[6] = st
@@ -717,8 +864,199 @@ class LprTesterTab(Frame):
                     self._tree.item(iid, tags=(tag,))
                 self.root.after(0, _upd)
             self.root.after(0, lambda: _append_log(self._log, "✔ Retry xong."))
-
         threading.Thread(target=_run, daemon=True).start()
+
+    # ═══════════════════════════ MARK / REVIEW (YOLO style) ═══════════════
+
+    def _mark_current(self, state: str):
+        """Đánh dấu đúng/sai/bỏ cho ảnh đang chọn. state='correct'|'incorrect'|''."""
+        sel = self._tree.selection()
+        if not sel: return
+        iid  = sel[0]
+        vals = self._tree.item(iid)["values"]
+        if not vals: return
+
+        fname  = str(vals[1])
+        plate  = str(vals[2])
+        fpath  = self._folder_files.get(iid, "")
+        folder = self._folder_var.get().strip()
+
+        if not fpath and folder:
+            fpath = os.path.join(folder, fname)
+
+        # Cập nhật review_state
+        if state:
+            self._review_state[fpath] = state
+        else:
+            self._review_state.pop(fpath, None)
+        _CFG["lpr.review_states"] = self._review_state
+        _cfg_save()
+
+        if state in ("correct", "incorrect"):
+            # Di chuyển file vào _gt/dung hoặc _gt/sai
+            sub = "dung" if state == "correct" else "sai"
+            dest_dir = os.path.join(folder or os.path.dirname(fpath), "_gt", sub)
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = os.path.join(dest_dir, os.path.basename(fname))
+            try:
+                shutil.copy2(fpath, dest)
+                if state == "correct" and plate and plate not in ("-", "(không nhận dạng)"):
+                    with open(os.path.splitext(dest)[0] + ".txt", "w", encoding="utf-8") as f:
+                        f.write(plate)
+                _append_log(self._log, f"✔ {os.path.basename(fname)} → _gt/{sub}/  | {plate}")
+            except Exception as ex:
+                _append_log(self._log, f"[LỖI] Copy: {ex}")
+
+            # Cập nhật tag + status
+            label = "GT: Đúng ✓" if state == "correct" else "GT: Sai ✗"
+            new_vals = list(vals); new_vals[6] = label
+            self._tree.item(iid, values=new_vals)
+            new_tag = "gt_ok" if state == "correct" else "gt_err"
+            self._tree.item(iid, tags=(new_tag,))
+
+            # Cập nhật mark_lbl
+            icons = {"correct": "✓ Đúng", "incorrect": "✗ Sai"}
+            self._mark_lbl.config(
+                text=icons[state],
+                fg=(SUCCESS if state == "correct" else "#f05050"))
+
+            self._update_filter_counts()
+
+            # Auto-advance sang ảnh kế tiếp
+            ch = self._tree.get_children()
+            if ch:
+                try:
+                    idx = list(ch).index(iid)
+                    # Tìm ảnh kế tiếp chưa có mark
+                    next_iid = None
+                    for j in range(idx + 1, len(ch)):
+                        tags = self._tree.item(ch[j], "tags")
+                        if "gt_ok" not in tags and "gt_err" not in tags:
+                            next_iid = ch[j]; break
+                    if next_iid is None and idx > 0:
+                        next_iid = ch[idx - 1]
+                    elif next_iid is None:
+                        next_iid = ch[min(idx, len(ch) - 1)]
+                    if next_iid:
+                        self._tree.selection_set(next_iid)
+                        self._tree.see(next_iid)
+                except (ValueError, IndexError): pass
+        else:
+            # Bỏ đánh dấu
+            old_st = str(vals[6])
+            if old_st.startswith("GT:"):
+                # Khôi phục tag gốc từ plate/status
+                orig_plate = str(vals[2])
+                restored_st = "OK" if orig_plate and orig_plate not in ("-", "") else "Không nhận dạng"
+                new_vals = list(vals); new_vals[6] = restored_st
+                self._tree.item(iid, values=new_vals)
+                tag = "ok" if restored_st == "OK" else "warn"
+                self._tree.item(iid, tags=(tag,))
+            self._mark_lbl.config(text="↺ Bỏ đánh dấu", fg=DIM)
+            self._update_filter_counts()
+
+    def _update_filter_counts(self):
+        """Cập nhật số đếm trong nút filter — tính từ _all_tree_order (bỏ qua detach)."""
+        all_iids = [iid for iid, _ in self._all_tree_order]
+        n_ok  = sum(1 for iid in all_iids if "gt_ok"  in self._tree.item(iid, "tags"))
+        n_err = sum(1 for iid in all_iids if "gt_err" in self._tree.item(iid, "tags"))
+        n_all = len(all_iids)
+        n_un  = n_all - n_ok - n_err
+
+        has_plate_count  = 0
+        no_plate_count   = 0
+        for iid in all_iids:
+            vals = self._tree.item(iid, "values")
+            plate = str(vals[2]).strip() if vals else ""
+            has = plate and plate not in ("-", "", "(không nhận dạng)")
+            if has: has_plate_count += 1
+            else: no_plate_count += 1
+
+        for code, btn in self._filter_btns.items():
+            btn.config(text={
+                "all":        f"Tất cả ({n_all})",
+                "correct":    f"✓ Đúng ({n_ok})",
+                "incorrect":  f"✗ Sai ({n_err})",
+                "unreviewed": f"? Chưa ({n_un})",
+            }[code])
+        for code, btn in self._detect_btns.items():
+            btn.config(text={
+                "all":        f"Tất cả ({n_all})",
+                "detected":   f"Đọc được ({has_plate_count})",
+                "undetected": f"Không đọc ({no_plate_count})",
+            }[code])
+
+    def _set_review_filter(self, filter_type: str):
+        self._active_filter = filter_type
+        for code, btn in self._filter_btns.items():
+            btn.config(relief="sunken" if code == filter_type else "flat",
+                       bg="#252540" if code == filter_type else CARD)
+        self._apply_all_filters()
+
+    def _set_detect_filter(self, filter_type: str):
+        self._detect_filter = filter_type
+        for code, btn in self._detect_btns.items():
+            btn.config(relief="sunken" if code == filter_type else "flat",
+                       bg="#252540" if code == filter_type else CARD)
+        self._apply_all_filters()
+
+    def _clear_kw(self):
+        self._kw_var.set("")
+        self._apply_all_filters()
+
+    def _apply_all_filters(self):
+        """Tổng hợp 3 filter: review state + detection + keyword wildcard."""
+        import fnmatch
+        review_f = self._active_filter
+        detect_f = self._detect_filter
+        kw = self._kw_var.get().strip()
+        # Nếu không có * hay ? thì wrap thành *kw* để search substring
+        if kw and "*" not in kw and "?" not in kw:
+            kw_pat = f"*{kw}*"
+        else:
+            kw_pat = kw
+
+        for iid in list(self._tree.get_children()):
+            self._tree.detach(iid)
+
+        for iid, _ in self._all_tree_order:
+            vals = self._tree.item(iid, "values")
+            tags = self._tree.item(iid, "tags")
+            if not vals:
+                continue
+
+            plate  = str(vals[2]).strip()
+            status = str(vals[6]).strip()
+            is_gt_ok  = "gt_ok"  in tags
+            is_gt_err = "gt_err" in tags
+            has_plate = bool(plate and plate not in ("-", "", "(không nhận dạng)"))
+
+            # --- Review filter ---
+            review_ok = (
+                review_f == "all" or
+                (review_f == "correct"    and is_gt_ok) or
+                (review_f == "incorrect"  and is_gt_err) or
+                (review_f == "unreviewed" and not is_gt_ok and not is_gt_err)
+            )
+            if not review_ok:
+                continue
+
+            # --- Detection filter ---
+            detect_ok = (
+                detect_f == "all" or
+                (detect_f == "detected"   and has_plate) or
+                (detect_f == "undetected" and not has_plate)
+            )
+            if not detect_ok:
+                continue
+
+            # --- Keyword filter (wildcard trên cột biển số) ---
+            if kw_pat:
+                kw_ok = fnmatch.fnmatch(plate.upper(), kw_pat.upper())
+                if not kw_ok:
+                    continue
+
+            self._tree.reattach(iid, "", "end")
 
     # ═══════════════════════════ FOLDER PREVIEW ═══════════════════════════
 
@@ -726,64 +1064,113 @@ class LprTesterTab(Frame):
         sel = self._tree.selection()
         if not sel:
             self._clear_fpreview()
-            self._btn_ok.config(state=DISABLED)
-            self._btn_wrong.config(state=DISABLED)
-            return
-
-        iid = sel[0]
+            self._mark_lbl.config(text=""); return
+        iid  = sel[0]
         vals = self._tree.item(iid)["values"]
-        if not vals:
-            return
-
-        fname = str(vals[1])
-        plate = str(vals[2])
-        ms    = str(vals[5])
+        if not vals: return
+        fname  = str(vals[1]); plate = str(vals[2]); ms = str(vals[5])
+        fpath  = self._folder_files.get(iid, "")
         folder = self._folder_var.get().strip()
-
-        has_file = bool(fname and folder)
-        self._btn_ok.config(state=NORMAL if has_file else DISABLED)
-        self._btn_wrong.config(state=NORMAL if has_file else DISABLED)
+        if not fpath and folder: fpath = os.path.join(folder, fname)
 
         info = plate if plate and plate not in ("-", "") else "(không nhận dạng)"
-        if ms and ms != "-":
-            info += f"   {ms}ms"
+        if ms and ms != "-": info += f"   {ms}ms"
         self._prev_lbl.config(text=info)
 
-        # Plate crop
+        # Cập nhật mark label
+        state = self._review_state.get(fpath, "")
+        if state == "correct":
+            self._mark_lbl.config(text="✓ Đúng", fg=SUCCESS)
+        elif state == "incorrect":
+            self._mark_lbl.config(text="✗ Sai", fg="#f05050")
+        else:
+            tags = self._tree.item(iid, "tags")
+            if "gt_ok" in tags:
+                self._mark_lbl.config(text="✓ Đúng", fg=SUCCESS)
+            elif "gt_err" in tags:
+                self._mark_lbl.config(text="✗ Sai", fg="#f05050")
+            else:
+                self._mark_lbl.config(text="○ Chưa đánh dấu", fg=DIM)
+
         lpi = self._folder_lpr.get(iid)
         if lpi and _PIL_OK:
             self._show_img(self._pic_fp, lpi, 200, 80)
         else:
             self._pic_fp.config(image="", text="(biển số)")
 
-        # Vehicle image
-        if has_file:
-            fpath = os.path.join(folder, fname)
-            if os.path.isfile(fpath) and _PIL_OK:
-                try:
-                    img = Image.open(fpath)
-                    self._show_img(self._pic_fv, img, 300, 180)
-                    img.close()
-                    return
-                except Exception:
-                    pass
+        if fpath and os.path.isfile(fpath) and _PIL_OK:
+            try:
+                img = Image.open(fpath)
+                self._show_img(self._pic_fv, img, 300, 180)
+                img.close(); return
+            except Exception: pass
         self._pic_fv.config(image="", text="(ảnh xe)")
 
     def _on_tree_dbl(self, _=None):
         sel = self._tree.selection()
-        if not sel:
-            return
-        vals = self._tree.item(sel[0])["values"]
-        fname = str(vals[1]) if vals else ""
-        folder = self._folder_var.get().strip()
-        if fname and folder and _PIL_OK:
-            fpath = os.path.join(folder, fname)
-            if os.path.isfile(fpath):
-                try:
-                    img = Image.open(fpath)
-                    _zoom_image_window(self.root, img, fname)
-                except Exception:
-                    pass
+        if not sel or not _PIL_OK: return
+        iid   = sel[0]
+        fpath = self._folder_files.get(iid, "")
+        if fpath and os.path.isfile(fpath):
+            try: _zoom_image_window(self.root, Image.open(fpath), os.path.basename(fpath))
+            except Exception: pass
+
+    def _on_tree_click(self, event):
+        """Xử lý click vào cột 📂 hoặc 📋."""
+        col_id = self._tree.identify_column(event.x)   # '#1', '#2', ...
+        row_id = self._tree.identify_row(event.y)
+        if not row_id: return
+        col_num = int(col_id.lstrip("#"))               # 1-based
+        cols = self._tree["columns"]
+        if col_num < 1 or col_num > len(cols): return
+        col_name = cols[col_num - 1]
+        if col_name == "📂":
+            self._open_file_location(row_id)
+        elif col_name == "📋":
+            self._copy_file_to_clipboard(row_id)
+
+    def _open_file_location(self, iid: str):
+        """Mở Explorer đến thư mục chứa file và chọn file đó."""
+        fpath = self._folder_files.get(iid, "")
+        if not fpath:
+            vals = self._tree.item(iid, "values")
+            fname = str(vals[1]) if vals else ""
+            fpath = os.path.join(self._batch_folder, fname)
+        if os.path.isfile(fpath):
+            import subprocess
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(fpath)])
+        elif os.path.isdir(os.path.dirname(fpath)):
+            os.startfile(os.path.dirname(fpath))
+
+    def _copy_file_to_clipboard(self, iid: str):
+        """Copy ảnh vào Windows clipboard (CF_DIB format)."""
+        fpath = self._folder_files.get(iid, "")
+        if not fpath:
+            vals = self._tree.item(iid, "values")
+            fname = str(vals[1]) if vals else ""
+            fpath = os.path.join(self._batch_folder, fname)
+        if not os.path.isfile(fpath):
+            _append_log(self._log, f"⚠ Không tìm thấy file: {fpath}"); return
+        try:
+            import ctypes, io as _io
+            from PIL import Image as _Img
+            img = _Img.open(fpath).convert("RGB")
+            buf = _io.BytesIO()
+            img.save(buf, format="BMP")
+            data = buf.getvalue()[14:]   # bỏ 14-byte BMP file header
+            buf.close()
+            CF_DIB = 8
+            ctypes.windll.user32.OpenClipboard(None)
+            ctypes.windll.user32.EmptyClipboard()
+            hMem = ctypes.windll.kernel32.GlobalAlloc(0x2002, len(data))
+            pMem = ctypes.windll.kernel32.GlobalLock(hMem)
+            ctypes.memmove(pMem, data, len(data))
+            ctypes.windll.kernel32.GlobalUnlock(hMem)
+            ctypes.windll.user32.SetClipboardData(CF_DIB, hMem)
+            ctypes.windll.user32.CloseClipboard()
+            _append_log(self._log, f"📋 Đã copy: {os.path.basename(fpath)}")
+        except Exception as ex:
+            _append_log(self._log, f"[LỖI] Copy clipboard: {ex}")
 
     def _clear_fpreview(self):
         self._pic_fv.config(image="", text="(ảnh xe)")
@@ -792,99 +1179,38 @@ class LprTesterTab(Frame):
 
     def _zoom_fv(self):
         sel = self._tree.selection()
-        if not sel or not _PIL_OK:
-            return
-        vals = self._tree.item(sel[0])["values"]
-        fname = str(vals[1]) if vals else ""
-        folder = self._folder_var.get().strip()
-        if fname and folder:
-            fpath = os.path.join(folder, fname)
-            if os.path.isfile(fpath):
-                try:
-                    _zoom_image_window(self.root, Image.open(fpath), fname)
-                except Exception:
-                    pass
+        if not sel or not _PIL_OK: return
+        fpath = self._folder_files.get(sel[0], "")
+        if fpath and os.path.isfile(fpath):
+            try: _zoom_image_window(self.root, Image.open(fpath), os.path.basename(fpath))
+            except Exception: pass
 
     def _zoom_fp(self):
         sel = self._tree.selection()
-        if not sel:
-            return
+        if not sel: return
         lpi = self._folder_lpr.get(sel[0])
-        if lpi:
-            _zoom_image_window(self.root, lpi, "Biển số")
-
-    # ═══════════════════════════ GT SAVE ══════════════════════════════════
-
-    def _save_correct(self):
-        self._save_gt(True)
-
-    def _save_wrong(self):
-        self._save_gt(False)
-
-    def _save_gt(self, is_correct: bool):
-        sel = self._tree.selection()
-        if not sel:
-            return
-        vals = self._tree.item(sel[0])["values"]
-        if not vals:
-            return
-        fname = str(vals[1])
-        plate = str(vals[2])
-        folder = self._folder_var.get().strip()
-        if not fname or not folder:
-            return
-        src = os.path.join(folder, fname)
-        if not os.path.isfile(src):
-            _append_log(self._log, f"[LỖI] Không tìm thấy: {src}")
-            return
-
-        sub = "dung" if is_correct else "sai"
-        dest_dir = os.path.join(folder, "_gt", sub)
-        os.makedirs(dest_dir, exist_ok=True)
-        dest = os.path.join(dest_dir, os.path.basename(fname))
-        try:
-            shutil.copy2(src, dest)
-            if is_correct and plate and plate not in ("-", "(không nhận dạng)"):
-                with open(os.path.splitext(dest)[0] + ".txt", "w", encoding="utf-8") as f:
-                    f.write(plate)
-        except Exception as ex:
-            _append_log(self._log, f"[LỖI] Copy: {ex}")
-            return
-
-        label = "GT: Đúng ✓" if is_correct else "GT: Sai ✗"
-        new_vals = list(vals); new_vals[6] = label
-        self._tree.item(sel[0], values=new_vals)
-        tag = "gt_ok" if is_correct else "gt_err"
-        self._tree.tag_configure(
-            "gt_ok",  background="#1a2e1a", foreground=SUCCESS)
-        self._tree.tag_configure(
-            "gt_err", background="#2e1a1a", foreground="#f08080")
-        self._tree.item(sel[0], tags=(tag,))
-        _append_log(self._log, f"✔ {os.path.basename(fname)} → _gt/{sub}/ | {plate}")
+        if lpi: _zoom_image_window(self.root, lpi, "Biển số")
 
     # ═══════════════════════════ EXPORT ═══════════════════════════════════
 
     def _export(self, _=None):
         if not self._tree.get_children():
-            messagebox.showinfo("Thông báo", "Không có dữ liệu để xuất.")
-            return
+            messagebox.showinfo("Thông báo", "Không có dữ liệu để xuất."); return
         from datetime import datetime
         path = filedialog.asksaveasfilename(
-            title="Xuất kết quả CSV",
-            defaultextension=".csv",
+            title="Xuất kết quả CSV", defaultextension=".csv",
             filetypes=[("CSV", "*.csv"), ("Tất cả", "*.*")],
-            initialfile=f"lpr_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        )
-        if not path:
-            return
+            initialfile=f"lpr_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        if not path: return
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.writer(f)
                 w.writerow(["STT", "Tên file", "Biển số", "Biển gốc",
                              "Loại xe", "Thời gian (ms)", "Trạng thái"])
-                for iid in self._tree.get_children():
-                    w.writerow(self._tree.item(iid)["values"])
-            n = len(self._tree.get_children())
+                for iid in self._all_tree_order:
+                    iid = iid[0]
+                    w.writerow(self._tree.item(iid)["values"][:7])  # bỏ cột 📂 📋
+            n = len(self._all_tree_order)
             _append_log(self._log, f"✔ Đã xuất {n} dòng → {path}")
             messagebox.showinfo("Xuất CSV", f"Xuất thành công {n} dòng.")
         except Exception as ex:
@@ -894,130 +1220,111 @@ class LprTesterTab(Frame):
 
     @staticmethod
     def _show_img(widget: Label, pil_img, max_w: int, max_h: int):
-        if not _PIL_OK or pil_img is None:
-            return
+        if not _PIL_OK or pil_img is None: return
         try:
             img = pil_img.copy()
             img.thumbnail((max_w, max_h), Image.LANCZOS)
             tk_img = ImageTk.PhotoImage(img)
             widget.config(image=tk_img, text="")
             widget._tk_img = tk_img
-        except Exception:
-            pass
+        except Exception: pass
 
-    # ═══════════════════════ APP SHORTCUT HOOKS ═══════════════════════════
+    def _is_active(self) -> bool:
+        try:
+            w = self
+            while w is not None:
+                p = getattr(w, "master", None)
+                if p is None: break
+                if isinstance(p, ttk.Notebook):
+                    return p.select() == str(w)
+                w = p
+        except Exception: pass
+        return False
+
+    # ═══════════════════════════ APP SHORTCUTS ════════════════════════════
 
     def _run(self):
-        """F5 — nhận dạng ảnh đơn (nếu đã load) hoặc test thư mục."""
-        if self._pil_single is not None:
+        if self._pil_single is not None or self._loaded_path:
             self._detect_single()
         else:
             self._start()
 
-    def _browse(self):
-        """Ctrl+O — load ảnh đơn."""
-        self._load_image()
+    def _browse(self):   self._load_image()
+    def _save(self):     self._export()
 
-    def _save(self):
-        """Ctrl+S — xuất CSV."""
-        self._export()
+    def _on_return(self):
+        """Enter → đánh dấu Đúng (chỉ khi tab này active)."""
+        if self._is_active():
+            self._mark_current("correct")
+
+    def _on_delete(self):
+        """Del → đánh dấu Sai (chỉ khi tab này active)."""
+        if self._is_active():
+            self._mark_current("incorrect")
 
     def _prev_image(self):
-        """← — dòng trước trong tree."""
         ch = self._tree.get_children()
-        if not ch:
-            return
+        if not ch: return
         sel = self._tree.selection()
-        idx = list(ch).index(sel[0]) if sel else 0
-        target = ch[max(0, idx - 1)]
-        self._tree.selection_set(target)
-        self._tree.see(target)
+        idx = list(ch).index(sel[0]) if sel else 1
+        t = ch[max(0, idx - 1)]
+        self._tree.selection_set(t); self._tree.see(t)
 
     def _next_image(self):
-        """→ — dòng sau trong tree."""
         ch = self._tree.get_children()
-        if not ch:
-            return
+        if not ch: return
         sel = self._tree.selection()
         idx = list(ch).index(sel[0]) if sel else -1
-        target = ch[min(len(ch) - 1, idx + 1)]
-        self._tree.selection_set(target)
-        self._tree.see(target)
+        t = ch[min(len(ch) - 1, idx + 1)]
+        self._tree.selection_set(t); self._tree.see(t)
 
 
 # ════════════════════════ MODULE-LEVEL API HELPERS ════════════════════════
 
-def _api_call_pil(pil_img, url: str, timeout: int, lpr_type: str) -> tuple:
-    """Gửi PIL Image lên API, trả về (result_dict, error_str|None)."""
+def _api_call_pil(pil_img, url, timeout, mode, lpr_type) -> tuple:
     if not _REQ_OK or not _PIL_OK:
         return {}, "requests hoặc Pillow chưa cài"
     try:
         buf = BytesIO()
-        img = pil_img
-        if img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
-        img.save(buf, format="JPEG")
+        img = pil_img if pil_img.mode in ("RGB", "L") else pil_img.convert("RGB")
+        img.save(buf, format="JPEG", quality=90)
         buf.seek(0)
-        return _api_call_bytes(buf.read(), url, timeout, lpr_type, ".jpg")
+        return _api_call_bytes(buf.read(), url, timeout, mode, lpr_type, ".jpg")
     except Exception as ex:
         return {}, str(ex)
 
 
-def _api_call_file(fpath: str, url: str, timeout: int, lpr_type: str) -> tuple:
-    """Gửi file ảnh theo đường dẫn lên API."""
+def _api_call_file(fpath, url, timeout, mode, lpr_type) -> tuple:
     if not _REQ_OK:
         return {}, "requests chưa cài"
     try:
         with open(fpath, "rb") as f:
             data = f.read()
         ext = os.path.splitext(fpath)[1].lower()
-        return _api_call_bytes(data, url, timeout, lpr_type, ext)
+        return _api_call_bytes(data, url, timeout, mode, lpr_type, ext)
     except Exception as ex:
         return {}, str(ex)
 
 
 def _api_call_bytes(data: bytes, url: str, timeout: int,
-                    lpr_type: str, ext: str) -> tuple:
-    """HTTP POST multipart/form-data lên endpoint."""
-    _MIME = {
-        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-        ".png": "image/png", ".bmp": "image/bmp", ".webp": "image/webp",
-    }
-    mime = _MIME.get(ext, "image/jpeg")
+                    mode: str, lpr_type: str, ext: str) -> tuple:
+    mime  = _MIME.get(ext, "image/jpeg")
+    field = "upload" if mode == _MODE_DIRECT else "image"
     try:
-        if "OpenALPR" in lpr_type:
-            files = {"image": (f"img{ext}", data, mime)}
-        else:
-            # HTTP REST API (/read-plate) uses field 'upload'
-            # Kztek LPR AI Server — thử field 'image' nếu không phải REST
-            field = "upload" if "HTTP REST" in lpr_type else "image"
-            files = {field: (f"img{ext}", data, mime)}
-
-        resp = requests.post(url, files=files, timeout=timeout)
+        files = {field: (f"img{ext}", data, mime)}
+        resp  = _get_session().post(url, files=files, timeout=timeout)
         resp.raise_for_status()
-
         try:
             raw = resp.json()
         except Exception:
-            # Plain text response → treat as plate number
             raw = {"plate": resp.text.strip()}
-
         return _parse_lpr_response(raw), None
-
     except requests.Timeout:
         return {}, f"Timeout ({timeout}s)"
     except requests.ConnectionError:
         return {}, "Không kết nối được server"
     except requests.HTTPError as ex:
-        return {}, f"HTTP {ex.response.status_code}: {ex.response.text[:120]}"
+        body = ex.response.text[:120] if ex.response is not None else ""
+        return {}, f"HTTP {ex.response.status_code}: {body}"
     except Exception as ex:
         return {}, str(ex)
-
-
-def _fmt_bbox(bbox) -> str:
-    if isinstance(bbox, dict):
-        return (f"({bbox.get('xmin',0)}, {bbox.get('ymin',0)}) → "
-                f"({bbox.get('xmax',0)}, {bbox.get('ymax',0)})")
-    if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
-        return f"({bbox[0]}, {bbox[1]}) → ({bbox[2]}, {bbox[3]})"
-    return "-"

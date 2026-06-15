@@ -1,8 +1,13 @@
+import sys
 import json
 from pathlib import Path
 
-# Settings file lives next to train-image-tool.py (parent of this package)
-_SETTINGS_FILE = Path(__file__).parent.parent / ".kztek_tools_settings.json"
+if getattr(sys, "frozen", False):
+    # Chay tu EXE (PyInstaller): luu config canh file .exe
+    _SETTINGS_FILE = Path(sys.executable).parent / ".kztek_tools_settings.json"
+else:
+    # Chay tu script: luu config o thu muc goc du an (parent cua tool/)
+    _SETTINGS_FILE = Path(__file__).parent.parent / ".kztek_tools_settings.json"
 _CFG: dict = {}
 
 

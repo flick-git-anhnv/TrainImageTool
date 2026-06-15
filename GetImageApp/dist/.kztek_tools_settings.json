@@ -1,0 +1,20 @@
+{
+  "ip.page_size": 100,
+  "ip.max_pages": 10000,
+  "ip.max_per_lane": 0,
+  "ip.max_per_cat": 150,
+  "ip.max_per_hour": 15,
+  "ip.parallel": 4,
+  "ip.out": "C:/Users/nguye/Desktop/CheckTool/v6",
+  "h.ip.out": [
+    "C:/Users/nguye/Desktop/CheckTool/v6"
+  ],
+  "ip.source": "Parkingv8",
+  "lotte.kw_xe_may": "xe máy,motor",
+  "p8.cfg_login_url": "http://14.160.26.45:3000",
+  "p8.cfg_api_url": "http://14.160.26.45:5000",
+  "p8.grant_type": "password",
+  "p8.cfg_user": "admin",
+  "p8.cfg_pass": "123456",
+  "ip.sleep": 0.01
+}

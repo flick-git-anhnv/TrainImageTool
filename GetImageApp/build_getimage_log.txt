@@ -1,0 +1,6 @@
+[15/06/2026 18:42:53.65] Build started 
+[OK] Python 3.10.11 
+[OK] PyInstaller 6.20.0 
+[15/06/2026 18:42:55.57] PyInstaller start 
+[15/06/2026 18:57:34.39] PyInstaller exit code: 0 
+[LOI] BUILD THAT BAI - exit code 0 

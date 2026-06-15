@@ -1,2 +1,0 @@
-obj\x64\Debug\netstandard2.1/Lpr.cs \
-obj\x64\Debug\netstandard2.1/LprGrpc.cs: lpr.proto
