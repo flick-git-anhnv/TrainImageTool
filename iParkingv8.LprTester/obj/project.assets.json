@@ -1,0 +1,674 @@
+{
+  "version": 3,
+  "targets": {
+    "net8.0-windows7.0": {
+      "Microsoft.Win32.SystemEvents/10.0.3": {
+        "type": "package",
+        "compile": {
+          "lib/net8.0/Microsoft.Win32.SystemEvents.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net8.0/Microsoft.Win32.SystemEvents.dll": {
+            "related": ".xml"
+          }
+        },
+        "build": {
+          "buildTransitive/net8.0/_._": {}
+        },
+        "runtimeTargets": {
+          "runtimes/win/lib/net8.0/Microsoft.Win32.SystemEvents.dll": {
+            "assetType": "runtime",
+            "rid": "win"
+          }
+        }
+      },
+      "Newtonsoft.Json/13.0.3": {
+        "type": "package",
+        "compile": {
+          "lib/net6.0/Newtonsoft.Json.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net6.0/Newtonsoft.Json.dll": {
+            "related": ".xml"
+          }
+        }
+      },
+      "OpenCvSharp4/4.13.0.20260302": {
+        "type": "package",
+        "dependencies": {
+          "System.Memory": "4.6.3"
+        },
+        "compile": {
+          "lib/net8.0/OpenCvSharp.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net8.0/OpenCvSharp.dll": {
+            "related": ".xml"
+          }
+        }
+      },
+      "OpenCvSharp4.Extensions/4.13.0.20260302": {
+        "type": "package",
+        "dependencies": {
+          "OpenCvSharp4": "4.13.0.20260302",
+          "System.Drawing.Common": "10.0.3"
+        },
+        "compile": {
+          "lib/net8.0/OpenCvSharp.Extensions.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net8.0/OpenCvSharp.Extensions.dll": {
+            "related": ".xml"
+          }
+        }
+      },
+      "OpenCvSharp4.runtime.win/4.13.0.20260302": {
+        "type": "package",
+        "build": {
+          "build/net8.0/_._": {}
+        },
+        "runtimeTargets": {
+          "runtimes/win-x64/native/OpenCvSharpExtern.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/opencv_videoio_ffmpeg4130_64.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          }
+        }
+      },
+      "OpenCvSharp4.Windows/4.13.0.20260302": {
+        "type": "package",
+        "dependencies": {
+          "OpenCvSharp4": "4.13.0.20260302",
+          "OpenCvSharp4.WpfExtensions": "4.13.0.20260302",
+          "OpenCvSharp4.runtime.win": "4.13.0.20260302"
+        }
+      },
+      "OpenCvSharp4.WpfExtensions/4.13.0.20260302": {
+        "type": "package",
+        "dependencies": {
+          "OpenCvSharp4": "4.13.0.20260302",
+          "System.Drawing.Common": "10.0.3"
+        },
+        "compile": {
+          "lib/net8.0-windows7.0/OpenCvSharp.WpfExtensions.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net8.0-windows7.0/OpenCvSharp.WpfExtensions.dll": {
+            "related": ".xml"
+          }
+        },
+        "frameworkReferences": [
+          "Microsoft.WindowsDesktop.App.WPF"
+        ]
+      },
+      "OpenVINO.CSharp.API/2024.0.0.1": {
+        "type": "package",
+        "compile": {
+          "lib/net8.0/OpenVINO_CSharp_API.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net8.0/OpenVINO_CSharp_API.dll": {
+            "related": ".xml"
+          }
+        }
+      },
+      "OpenVINO.CSharp.Windows/2024.0.0.1": {
+        "type": "package",
+        "dependencies": {
+          "OpenVINO.CSharp.API": "2024.0.0.1",
+          "OpenVINO.runtime.win": "2024.0.0.2"
+        }
+      },
+      "OpenVINO.runtime.win/2024.0.0.2": {
+        "type": "package",
+        "build": {
+          "build/net/_._": {}
+        },
+        "runtimeTargets": {
+          "runtimes/win-x64/native/cache.json": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/openvino.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/openvino_auto_batch_plugin.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/openvino_auto_plugin.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/openvino_c.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/openvino_hetero_plugin.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/openvino_intel_cpu_plugin.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/openvino_intel_gpu_plugin.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/openvino_intel_npu_plugin.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/openvino_ir_frontend.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/openvino_onnx_frontend.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/openvino_paddle_frontend.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/openvino_pytorch_frontend.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/openvino_tensorflow_frontend.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/openvino_tensorflow_lite_frontend.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/tbb12.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/tbbbind_2_5.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/tbbmalloc.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          },
+          "runtimes/win-x64/native/tbbmalloc_proxy.dll": {
+            "assetType": "native",
+            "rid": "win-x64"
+          }
+        }
+      },
+      "System.Drawing.Common/10.0.3": {
+        "type": "package",
+        "dependencies": {
+          "Microsoft.Win32.SystemEvents": "10.0.3"
+        },
+        "compile": {
+          "lib/net8.0/System.Drawing.Common.dll": {
+            "related": ".pdb;.xml"
+          },
+          "lib/net8.0/System.Private.Windows.Core.dll": {
+            "related": ".xml"
+          },
+          "lib/net8.0/System.Private.Windows.GdiPlus.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net8.0/System.Drawing.Common.dll": {
+            "related": ".pdb;.xml"
+          },
+          "lib/net8.0/System.Private.Windows.Core.dll": {
+            "related": ".xml"
+          },
+          "lib/net8.0/System.Private.Windows.GdiPlus.dll": {
+            "related": ".xml"
+          }
+        },
+        "build": {
+          "buildTransitive/net8.0/_._": {}
+        }
+      },
+      "System.Memory/4.6.3": {
+        "type": "package",
+        "compile": {
+          "lib/netcoreapp2.1/_._": {}
+        },
+        "runtime": {
+          "lib/netcoreapp2.1/_._": {}
+        }
+      },
+      "iParkingv5.Lpr/1.0.0.3": {
+        "type": "project",
+        "framework": ".NETStandard,Version=v2.1",
+        "dependencies": {
+          "Newtonsoft.Json": "13.0.3",
+          "OpenCvSharp4.Extensions": "4.13.0.20260302",
+          "OpenCvSharp4.Windows": "4.13.0.20260302",
+          "OpenVINO.CSharp.Windows": "2024.0.0.1",
+          "System.Drawing.Common": "10.0.3"
+        },
+        "compile": {
+          "bin/placeholder/iParkingv5.Lpr.dll": {}
+        },
+        "runtime": {
+          "bin/placeholder/iParkingv5.Lpr.dll": {}
+        }
+      }
+    }
+  },
+  "libraries": {
+    "Microsoft.Win32.SystemEvents/10.0.3": {
+      "sha512": "gYpwz5Gl0rs9pEFHBKctLbSi7SUGR4L1uRjXkU488nizWd2hvo2JP2+ATUsv0th7v6LDiXfdlUsnTbvC2MauFA==",
+      "type": "package",
+      "path": "microsoft.win32.systemevents/10.0.3",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "Icon.png",
+        "PACKAGE.md",
+        "THIRD-PARTY-NOTICES.TXT",
+        "buildTransitive/net461/Microsoft.Win32.SystemEvents.targets",
+        "buildTransitive/net462/_._",
+        "buildTransitive/net8.0/_._",
+        "buildTransitive/netcoreapp2.0/Microsoft.Win32.SystemEvents.targets",
+        "lib/net10.0/Microsoft.Win32.SystemEvents.dll",
+        "lib/net10.0/Microsoft.Win32.SystemEvents.xml",
+        "lib/net462/Microsoft.Win32.SystemEvents.dll",
+        "lib/net462/Microsoft.Win32.SystemEvents.xml",
+        "lib/net8.0/Microsoft.Win32.SystemEvents.dll",
+        "lib/net8.0/Microsoft.Win32.SystemEvents.xml",
+        "lib/net9.0/Microsoft.Win32.SystemEvents.dll",
+        "lib/net9.0/Microsoft.Win32.SystemEvents.xml",
+        "lib/netstandard2.0/Microsoft.Win32.SystemEvents.dll",
+        "lib/netstandard2.0/Microsoft.Win32.SystemEvents.xml",
+        "microsoft.win32.systemevents.10.0.3.nupkg.sha512",
+        "microsoft.win32.systemevents.nuspec",
+        "runtimes/win/lib/net10.0/Microsoft.Win32.SystemEvents.dll",
+        "runtimes/win/lib/net10.0/Microsoft.Win32.SystemEvents.xml",
+        "runtimes/win/lib/net8.0/Microsoft.Win32.SystemEvents.dll",
+        "runtimes/win/lib/net8.0/Microsoft.Win32.SystemEvents.xml",
+        "runtimes/win/lib/net9.0/Microsoft.Win32.SystemEvents.dll",
+        "runtimes/win/lib/net9.0/Microsoft.Win32.SystemEvents.xml",
+        "useSharedDesignerContext.txt"
+      ]
+    },
+    "Newtonsoft.Json/13.0.3": {
+      "sha512": "HrC5BXdl00IP9zeV+0Z848QWPAoCr9P3bDEZguI+gkLcBKAOxix/tLEAAHC+UvDNPv4a2d18lOReHMOagPa+zQ==",
+      "type": "package",
+      "path": "newtonsoft.json/13.0.3",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "LICENSE.md",
+        "README.md",
+        "lib/net20/Newtonsoft.Json.dll",
+        "lib/net20/Newtonsoft.Json.xml",
+        "lib/net35/Newtonsoft.Json.dll",
+        "lib/net35/Newtonsoft.Json.xml",
+        "lib/net40/Newtonsoft.Json.dll",
+        "lib/net40/Newtonsoft.Json.xml",
+        "lib/net45/Newtonsoft.Json.dll",
+        "lib/net45/Newtonsoft.Json.xml",
+        "lib/net6.0/Newtonsoft.Json.dll",
+        "lib/net6.0/Newtonsoft.Json.xml",
+        "lib/netstandard1.0/Newtonsoft.Json.dll",
+        "lib/netstandard1.0/Newtonsoft.Json.xml",
+        "lib/netstandard1.3/Newtonsoft.Json.dll",
+        "lib/netstandard1.3/Newtonsoft.Json.xml",
+        "lib/netstandard2.0/Newtonsoft.Json.dll",
+        "lib/netstandard2.0/Newtonsoft.Json.xml",
+        "newtonsoft.json.13.0.3.nupkg.sha512",
+        "newtonsoft.json.nuspec",
+        "packageIcon.png"
+      ]
+    },
+    "OpenCvSharp4/4.13.0.20260302": {
+      "sha512": "lfXmyTu2o7szCcgouTeDF26Rn34BIsCyfPKC9lTatbQILrKGaFze2QloYizm5aQZW4m1rrlCH1rBkKwJ5jitiQ==",
+      "type": "package",
+      "path": "opencvsharp4/4.13.0.20260302",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "README.managed.md",
+        "lib/net8.0/OpenCvSharp.dll",
+        "lib/net8.0/OpenCvSharp.xml",
+        "lib/netstandard2.0/OpenCvSharp.dll",
+        "lib/netstandard2.0/OpenCvSharp.xml",
+        "lib/netstandard2.1/OpenCvSharp.dll",
+        "lib/netstandard2.1/OpenCvSharp.xml",
+        "opencvsharp.png",
+        "opencvsharp4.4.13.0.20260302.nupkg.sha512",
+        "opencvsharp4.nuspec"
+      ]
+    },
+    "OpenCvSharp4.Extensions/4.13.0.20260302": {
+      "sha512": "aZTt4HIELyFDkEPg4NvrI+gWKF+Q+LtFTkRs6Pl06ALnJ/w1jvWhgvs6cj+vEOceSS5I9sZj4IizFptb+DTJBQ==",
+      "type": "package",
+      "path": "opencvsharp4.extensions/4.13.0.20260302",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "README.managed.md",
+        "lib/net8.0/OpenCvSharp.Extensions.dll",
+        "lib/net8.0/OpenCvSharp.Extensions.xml",
+        "lib/netstandard2.0/OpenCvSharp.Extensions.dll",
+        "lib/netstandard2.0/OpenCvSharp.Extensions.xml",
+        "lib/netstandard2.1/OpenCvSharp.Extensions.dll",
+        "lib/netstandard2.1/OpenCvSharp.Extensions.xml",
+        "opencvsharp.png",
+        "opencvsharp4.extensions.4.13.0.20260302.nupkg.sha512",
+        "opencvsharp4.extensions.nuspec"
+      ]
+    },
+    "OpenCvSharp4.runtime.win/4.13.0.20260302": {
+      "sha512": "VC2n9CVZQvAm+p0NXW077e/MGkDBraT3ye4FdInRPpxTVK64DwGnLuIncS8mwrkVcKhqh82/KgcDgKXNWDndAA==",
+      "type": "package",
+      "path": "opencvsharp4.runtime.win/4.13.0.20260302",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "README.runtime.md",
+        "build/net8.0/OpenCvSharp4.runtime.win.props",
+        "build/netcoreapp/OpenCvSharp4.runtime.win.props",
+        "build/netstandard/OpenCvSharp4.runtime.win.props",
+        "opencvsharp.png",
+        "opencvsharp4.runtime.win.4.13.0.20260302.nupkg.sha512",
+        "opencvsharp4.runtime.win.nuspec",
+        "runtimes/win-x64/native/OpenCvSharpExtern.dll",
+        "runtimes/win-x64/native/opencv_videoio_ffmpeg4130_64.dll"
+      ]
+    },
+    "OpenCvSharp4.Windows/4.13.0.20260302": {
+      "sha512": "w1ERU3njYJRCxM1wdkt7Gg9tD7NJE4J2jSuYX1YD9nrVaOTZl69gsr+wfPH62vKlwg9gd4wDIGN4VLfAxGL73A==",
+      "type": "package",
+      "path": "opencvsharp4.windows/4.13.0.20260302",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "README.managed.md",
+        "opencvsharp.png",
+        "opencvsharp4.windows.4.13.0.20260302.nupkg.sha512",
+        "opencvsharp4.windows.nuspec"
+      ]
+    },
+    "OpenCvSharp4.WpfExtensions/4.13.0.20260302": {
+      "sha512": "CqKYxZlfPlL+Em/GCqa00KJqpMlu/hdZYMR/ldovrKE6A7b0xCO7PZTtB/mQBd/FvENmwRp4R1R0T/Uqw17RfQ==",
+      "type": "package",
+      "path": "opencvsharp4.wpfextensions/4.13.0.20260302",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "README.managed.md",
+        "lib/net48/OpenCvSharp.WpfExtensions.dll",
+        "lib/net48/OpenCvSharp.WpfExtensions.xml",
+        "lib/net8.0-windows7.0/OpenCvSharp.WpfExtensions.dll",
+        "lib/net8.0-windows7.0/OpenCvSharp.WpfExtensions.xml",
+        "opencvsharp.png",
+        "opencvsharp4.wpfextensions.4.13.0.20260302.nupkg.sha512",
+        "opencvsharp4.wpfextensions.nuspec"
+      ]
+    },
+    "OpenVINO.CSharp.API/2024.0.0.1": {
+      "sha512": "/vNMthbyjcpNxk2zzYDFhNMdb4LixZC3MakqbPuZxuA9dMgqAlqpTzUTuuy+JuZHWLAipluWPyQYj3pEHRn8cg==",
+      "type": "package",
+      "path": "openvino.csharp.api/2024.0.0.1",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "LICENSE.txt",
+        "README.md",
+        "lib/net46/OpenVINO_CSharp_API.dll",
+        "lib/net46/OpenVINO_CSharp_API.xml",
+        "lib/net472/OpenVINO_CSharp_API.dll",
+        "lib/net472/OpenVINO_CSharp_API.xml",
+        "lib/net48/OpenVINO_CSharp_API.dll",
+        "lib/net48/OpenVINO_CSharp_API.xml",
+        "lib/net5.0/OpenVINO_CSharp_API.dll",
+        "lib/net5.0/OpenVINO_CSharp_API.xml",
+        "lib/net6.0/OpenVINO_CSharp_API.dll",
+        "lib/net6.0/OpenVINO_CSharp_API.xml",
+        "lib/net8.0/OpenVINO_CSharp_API.dll",
+        "lib/net8.0/OpenVINO_CSharp_API.xml",
+        "lib/netcoreapp3.1/OpenVINO_CSharp_API.dll",
+        "lib/netcoreapp3.1/OpenVINO_CSharp_API.xml",
+        "logo.png",
+        "openvino.csharp.api.2024.0.0.1.nupkg.sha512",
+        "openvino.csharp.api.nuspec"
+      ]
+    },
+    "OpenVINO.CSharp.Windows/2024.0.0.1": {
+      "sha512": "PInMztLEREAwyetJ1yVRs7wuY5hf2TeVseIAkmC+o0vkSaHIu9h6YRLrs8gY1tSeoaqtJKRRt4K8ystY5Bf7cg==",
+      "type": "package",
+      "path": "openvino.csharp.windows/2024.0.0.1",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "logo.png",
+        "openvino.csharp.windows.2024.0.0.1.nupkg.sha512",
+        "openvino.csharp.windows.nuspec"
+      ]
+    },
+    "OpenVINO.runtime.win/2024.0.0.2": {
+      "sha512": "82ATsxK0rvT29IhdD6Ywo0dacCU+0WM4Zqfgmy83TgbCo4W2mwQfV/+gMSmXBdknse7/1GYur7P7GCp9+lKMYA==",
+      "type": "package",
+      "path": "openvino.runtime.win/2024.0.0.2",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "LICENSE.txt",
+        "README.md",
+        "build/net/OpenVINO.runtime.win.props",
+        "logo.png",
+        "openvino.runtime.win.2024.0.0.2.nupkg.sha512",
+        "openvino.runtime.win.nuspec",
+        "runtimes/win-x64/native/cache.json",
+        "runtimes/win-x64/native/openvino.dll",
+        "runtimes/win-x64/native/openvino_auto_batch_plugin.dll",
+        "runtimes/win-x64/native/openvino_auto_plugin.dll",
+        "runtimes/win-x64/native/openvino_c.dll",
+        "runtimes/win-x64/native/openvino_hetero_plugin.dll",
+        "runtimes/win-x64/native/openvino_intel_cpu_plugin.dll",
+        "runtimes/win-x64/native/openvino_intel_gpu_plugin.dll",
+        "runtimes/win-x64/native/openvino_intel_npu_plugin.dll",
+        "runtimes/win-x64/native/openvino_ir_frontend.dll",
+        "runtimes/win-x64/native/openvino_onnx_frontend.dll",
+        "runtimes/win-x64/native/openvino_paddle_frontend.dll",
+        "runtimes/win-x64/native/openvino_pytorch_frontend.dll",
+        "runtimes/win-x64/native/openvino_tensorflow_frontend.dll",
+        "runtimes/win-x64/native/openvino_tensorflow_lite_frontend.dll",
+        "runtimes/win-x64/native/tbb12.dll",
+        "runtimes/win-x64/native/tbbbind_2_5.dll",
+        "runtimes/win-x64/native/tbbmalloc.dll",
+        "runtimes/win-x64/native/tbbmalloc_proxy.dll"
+      ]
+    },
+    "System.Drawing.Common/10.0.3": {
+      "sha512": "bJlT89G7EqMpiLCvIPmb7BHpcSxjVeFsahRyQk3/mrUt5YgHKiFcEv88db97gKcpRn5opxfBwI0ohUmJlxuGJg==",
+      "type": "package",
+      "path": "system.drawing.common/10.0.3",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "Icon.png",
+        "LICENSE.TXT",
+        "PACKAGE.md",
+        "THIRD-PARTY-NOTICES.TXT",
+        "buildTransitive/net461/System.Drawing.Common.targets",
+        "buildTransitive/net462/_._",
+        "buildTransitive/net8.0/_._",
+        "buildTransitive/netcoreapp2.0/System.Drawing.Common.targets",
+        "lib/MonoAndroid10/_._",
+        "lib/MonoTouch10/_._",
+        "lib/net10.0/System.Drawing.Common.dll",
+        "lib/net10.0/System.Drawing.Common.pdb",
+        "lib/net10.0/System.Drawing.Common.xml",
+        "lib/net10.0/System.Private.Windows.Core.dll",
+        "lib/net10.0/System.Private.Windows.Core.xml",
+        "lib/net10.0/System.Private.Windows.GdiPlus.dll",
+        "lib/net10.0/System.Private.Windows.GdiPlus.xml",
+        "lib/net462/System.Drawing.Common.dll",
+        "lib/net462/System.Drawing.Common.pdb",
+        "lib/net462/System.Drawing.Common.xml",
+        "lib/net8.0/System.Drawing.Common.dll",
+        "lib/net8.0/System.Drawing.Common.pdb",
+        "lib/net8.0/System.Drawing.Common.xml",
+        "lib/net8.0/System.Private.Windows.Core.dll",
+        "lib/net8.0/System.Private.Windows.Core.xml",
+        "lib/net8.0/System.Private.Windows.GdiPlus.dll",
+        "lib/net8.0/System.Private.Windows.GdiPlus.xml",
+        "lib/net9.0/System.Drawing.Common.dll",
+        "lib/net9.0/System.Drawing.Common.pdb",
+        "lib/net9.0/System.Drawing.Common.xml",
+        "lib/net9.0/System.Private.Windows.Core.dll",
+        "lib/net9.0/System.Private.Windows.Core.xml",
+        "lib/net9.0/System.Private.Windows.GdiPlus.dll",
+        "lib/net9.0/System.Private.Windows.GdiPlus.xml",
+        "lib/netstandard2.0/System.Drawing.Common.dll",
+        "lib/netstandard2.0/System.Drawing.Common.pdb",
+        "lib/netstandard2.0/System.Drawing.Common.xml",
+        "lib/xamarinios10/_._",
+        "lib/xamarinmac20/_._",
+        "lib/xamarintvos10/_._",
+        "lib/xamarinwatchos10/_._",
+        "system.drawing.common.10.0.3.nupkg.sha512",
+        "system.drawing.common.nuspec",
+        "useSharedDesignerContext.txt"
+      ]
+    },
+    "System.Memory/4.6.3": {
+      "sha512": "qdcDOgnFZY40+Q9876JUHnlHu7bosOHX8XISRoH94fwk6hgaeQGSgfZd8srWRZNt5bV9ZW2TljcegDNxsf+96A==",
+      "type": "package",
+      "path": "system.memory/4.6.3",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "Icon.png",
+        "PACKAGE.md",
+        "buildTransitive/net461/System.Memory.targets",
+        "buildTransitive/net462/_._",
+        "lib/net462/System.Memory.dll",
+        "lib/net462/System.Memory.xml",
+        "lib/netcoreapp2.1/_._",
+        "lib/netstandard2.0/System.Memory.dll",
+        "lib/netstandard2.0/System.Memory.xml",
+        "lib/netstandard2.1/_._",
+        "system.memory.4.6.3.nupkg.sha512",
+        "system.memory.nuspec"
+      ]
+    },
+    "iParkingv5.Lpr/1.0.0.3": {
+      "type": "project",
+      "path": "../iParkingv5.Lpr/iParkingv5.Lpr.csproj",
+      "msbuildProject": "../iParkingv5.Lpr/iParkingv5.Lpr.csproj"
+    }
+  },
+  "projectFileDependencyGroups": {
+    "net8.0-windows7.0": [
+      "iParkingv5.Lpr >= 1.0.0.3"
+    ]
+  },
+  "packageFolders": {
+    "C:\\Users\\nguye\\.nuget\\packages\\": {}
+  },
+  "project": {
+    "version": "1.0.0",
+    "restore": {
+      "projectUniqueName": "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv8.LprTester\\iParkingv8.LprTester.csproj",
+      "projectName": "iParkingv8.LprTester",
+      "projectPath": "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv8.LprTester\\iParkingv8.LprTester.csproj",
+      "packagesPath": "C:\\Users\\nguye\\.nuget\\packages\\",
+      "outputPath": "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv8.LprTester\\obj\\",
+      "projectStyle": "PackageReference",
+      "configFilePaths": [
+        "C:\\Users\\nguye\\AppData\\Roaming\\NuGet\\NuGet.Config",
+        "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+      ],
+      "originalTargetFrameworks": [
+        "net8.0-windows"
+      ],
+      "sources": {
+        "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+        "https://api.nuget.org/v3/index.json": {}
+      },
+      "frameworks": {
+        "net8.0-windows7.0": {
+          "targetAlias": "net8.0-windows",
+          "projectReferences": {
+            "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj": {
+              "projectPath": "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj"
+            }
+          }
+        }
+      },
+      "warningProperties": {
+        "warnAsError": [
+          "NU1605"
+        ]
+      },
+      "restoreAuditProperties": {
+        "enableAudit": "true",
+        "auditLevel": "low",
+        "auditMode": "direct"
+      },
+      "SdkAnalysisLevel": "9.0.300"
+    },
+    "frameworks": {
+      "net8.0-windows7.0": {
+        "targetAlias": "net8.0-windows",
+        "imports": [
+          "net461",
+          "net462",
+          "net47",
+          "net471",
+          "net472",
+          "net48",
+          "net481"
+        ],
+        "assetTargetFallback": true,
+        "warn": true,
+        "frameworkReferences": {
+          "Microsoft.NETCore.App": {
+            "privateAssets": "all"
+          },
+          "Microsoft.WindowsDesktop.App.WindowsForms": {
+            "privateAssets": "none"
+          }
+        },
+        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.314/PortableRuntimeIdentifierGraph.json"
+      }
+    }
+  },
+  "logs": [
+    {
+      "code": "NU1701",
+      "level": "Warning",
+      "warningLevel": 1,
+      "message": "Package 'OpenVINO.runtime.win 2024.0.0.2' was restored using '.NETFramework,Version=v4.6.1, .NETFramework,Version=v4.6.2, .NETFramework,Version=v4.7, .NETFramework,Version=v4.7.1, .NETFramework,Version=v4.7.2, .NETFramework,Version=v4.8, .NETFramework,Version=v4.8.1' instead of the project target framework 'net8.0-windows7.0'. This package may not be fully compatible with your project.",
+      "libraryId": "OpenVINO.runtime.win",
+      "targetGraphs": [
+        "net8.0-windows7.0"
+      ]
+    }
+  ]
+}

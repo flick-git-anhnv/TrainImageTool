@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("iParkingv5.Lpr")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.3")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0.3+073b6e89831d2f1c33cbcd42cd73cf231c26c631")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0.3+6b2de80b7a4e39a82e2eb434bc98e8bafa3b7e39")]
 [assembly: System.Reflection.AssemblyProductAttribute("iParkingv5.Lpr")]
 [assembly: System.Reflection.AssemblyTitleAttribute("iParkingv5.Lpr")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.3")]

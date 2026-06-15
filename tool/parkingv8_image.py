@@ -350,26 +350,45 @@ class Parkingv8ApiClient:
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+class _P8SharedLaneState:
+    __slots__ = ("_lock", "lane_total", "lane_warned", "hist_lock")
+
+    def __init__(self):
+        self._lock        = threading.Lock()
+        self.lane_total:  dict = {}
+        self.lane_warned: set  = set()
+        self.hist_lock    = threading.Lock()
+
+
 class Parkingv8Worker:
     _HISTORY_FILE = ".p8_done.json"
 
     def __init__(self, cfg: dict, log_q: queue.Queue, stat_q: queue.Queue,
-                 pause_event: threading.Event = None):
+                 pause_event: threading.Event = None,
+                 thread_id: int = 0,
+                 days_list: list = None,
+                 shared: _P8SharedLaneState = None,
+                 send_done: bool = True,
+                 global_total_days: int = None):
         self.cfg    = cfg
         self.log_q  = log_q
         self.stat_q = stat_q
         self._stop  = threading.Event()
         self._pause = pause_event or threading.Event()
         self._pause.set()
+        self._thread_id         = thread_id
+        self._days_list         = days_list
+        self._shared            = shared if shared is not None else _P8SharedLaneState()
+        self._send_done         = send_done
+        self._global_total_days = global_total_days
         self.stats: dict = {
             "page": 0, "event": 0, "found": 0,
             "saved": 0, "skipped": 0, "error": 0, "bad_saved": 0,
             "day_idx": 0, "total_days": 0, "day_label": "",
+            "thread_id": thread_id,
         }
-        self._lane_total:  dict = {}   # {lane: count}
         self._lane_cat:    dict = {}   # {(lane, vtype, "YYYY-MM-DD"): count} ← daily
         self._lane_hourly: dict = {}   # {(lane, "YYYY-MM-DD HH"): count}
-        self._lane_warned: set  = set()
         self._done_days:   set  = set()
         self._vtype_cfg:   dict = self._parse_vtype_cfg()
 
@@ -401,9 +420,18 @@ class Parkingv8Worker:
     def _history_mark(self, out: Path, label: str):
         self._done_days.add(label)
         try:
-            (out / self._HISTORY_FILE).write_text(
-                json.dumps(sorted(self._done_days), ensure_ascii=False),
-                encoding="utf-8")
+            with self._shared.hist_lock:
+                hist_f = out / self._HISTORY_FILE
+                existing: set = set()
+                if hist_f.exists():
+                    try:
+                        existing = set(json.loads(hist_f.read_text(encoding="utf-8")))
+                    except Exception:
+                        pass
+                existing.update(self._done_days)
+                hist_f.write_text(
+                    json.dumps(sorted(existing), ensure_ascii=False),
+                    encoding="utf-8")
         except Exception:
             pass
 
@@ -456,10 +484,12 @@ class Parkingv8Worker:
         to_d      = cfg["to_date"].strip().replace("T", " ")
         size      = cfg.get("page_size", 100)
         sleep_s   = cfg.get("sleep", 0.05)
-        days      = self._day_list(from_d, to_d)
-        total_days = len(days)
-        self._log(f"Khoảng thời gian: {from_d} → {to_d}")
-        self._log(f"Tổng: {total_days} ngày | page size={size} | nguồn={', '.join(endpoints)}")
+        days      = self._days_list if self._days_list is not None \
+                    else self._day_list(from_d, to_d)
+        total_days = self._global_total_days if self._global_total_days else len(days)
+        prefix    = f"[T{self._thread_id}] " if self._thread_id else ""
+        self._log(f"{prefix}Khoảng thời gian: {from_d} → {to_d}")
+        self._log(f"{prefix}Tổng: {len(days)} ngày | page size={size} | nguồn={', '.join(endpoints)}")
 
         max_lane = cfg.get("max_per_lane", 0)
         max_cat  = cfg.get("max_per_cat",  0)
@@ -502,7 +532,8 @@ class Parkingv8Worker:
             f"{self.stats['error']} lỗi."
         )
         self._push()
-        self.log_q.put("__DONE__")
+        if self._send_done:
+            self.log_q.put("__DONE__")
 
     def _collect_day(self, api: Parkingv8ApiClient, endpoint: str,
                      d_from: str, d_to: str,
@@ -645,14 +676,16 @@ class Parkingv8Worker:
                 self.stats["error"] += 1
             return
 
-        # giới hạn tổng ảnh/làn
+        # giới hạn tổng ảnh/làn (dùng shared state để đồng bộ đa luồng)
         max_lane = self.cfg.get("max_per_lane", 0)
-        if max_lane > 0 and self._lane_total.get(lane, 0) >= max_lane:
-            if lane not in self._lane_warned:
-                self._log(f"      ⏭ Làn [{lane}] đủ {max_lane} ảnh — bỏ qua")
-                self._lane_warned.add(lane)
-            self.stats["skipped"] += 1
-            return
+        if max_lane > 0:
+            with self._shared._lock:
+                if self._shared.lane_total.get(lane, 0) >= max_lane:
+                    if lane not in self._shared.lane_warned:
+                        self._log(f"      ⏭ Làn [{lane}] đủ {max_lane} ảnh — bỏ qua")
+                        self._shared.lane_warned.add(lane)
+                    self.stats["skipped"] += 1
+                    return
 
         # giới hạn ảnh/loại/làn/ngày → mỗi ngày đều có đủ mẫu
         max_cat = self.cfg.get("max_per_cat", 0)
@@ -696,7 +729,8 @@ class Parkingv8Worker:
         if ok_enc:
             fpath.write_bytes(buf.tobytes())
             self.stats["saved"] += 1
-            self._lane_total[lane] = self._lane_total.get(lane, 0) + 1
+            with self._shared._lock:
+                self._shared.lane_total[lane] = self._shared.lane_total.get(lane, 0) + 1
             cat_key  = (lane, vtype, dt.strftime("%Y-%m-%d"))
             self._lane_cat[cat_key] = self._lane_cat.get(cat_key, 0) + 1
             hour_key = (lane, dt.strftime("%Y-%m-%d %H"))

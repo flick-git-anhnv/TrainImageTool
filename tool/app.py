@@ -1,24 +1,24 @@
 import sys
 from tkinter import *
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
 from .imports import _DND_OK, _dnd_mod
 from .ui_helpers import _style_all
-from .constants import BG
+from .constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD
+from .settings import _CFG, _cfg_save
 
 from .tab_split        import SplitTab
 from .tab_rename       import RenameTab
 from .tab_crop         import CropByLabelTab
 from .tab_labelnorm    import LabelNormTab
 from .tab_bbox         import BBoxEditorTab
-from .tab_lotte        import LotteImageTab
-from .tab_parkingv8    import Parkingv8ImageTab
-from .tab_parkingv6    import Parkingv6ImageTab
+from .tab_iparking_image import IParkingImageTab
 from .tab_checker      import CheckerTab
 from .tab_stats        import StatsTab
 from .tab_plate_search import PlateSearchTab
 from .tab_yolo         import YoloTab
 from .tab_train        import TrainTab
+from .tab_lpr_tester   import LprTesterTab
 
 _AppBase = _dnd_mod.Tk if _DND_OK else Tk
 
@@ -78,6 +78,23 @@ class App(_AppBase):
         self.configure(bg=BG)
         _style_all()
 
+        # ── Toolbar ───────────────────────────────────────────────────────────
+        topbar = Frame(self, bg=CARD, height=36)
+        topbar.pack(fill=X, padx=0, pady=(0, 0))
+        topbar.pack_propagate(False)
+
+        Label(topbar, text="KZTEK Image Tools",
+              bg=CARD, fg=TEXT, font=F_BOLD).pack(side=LEFT, padx=12)
+
+        btn_cfg = Button(
+            topbar, text="⚙  Cài đặt Tab",
+            bg=ACCENT2, fg="white", activebackground=ACCENT, activeforeground="white",
+            relief=FLAT, bd=0, padx=10, pady=0, cursor="hand2",
+            font=F_MAIN, command=self._open_tab_config,
+        )
+        btn_cfg.pack(side=RIGHT, padx=8, pady=4)
+
+        # ── Notebook ──────────────────────────────────────────────────────────
         self._nb = ttk.Notebook(self)
         self._nb.pack(fill=BOTH, expand=True, padx=6, pady=6)
         nb = self._nb
@@ -89,24 +106,147 @@ class App(_AppBase):
             ("🖼 Crop",           CropByLabelTab,    ()),
             ("⚙ LabelNorm",      LabelNormTab,      ()),
             ("🖊 BBox Editor",    BBoxEditorTab,     ()),
-            ("🅻 LotteImage",     LotteImageTab,     ()),
-            ("🅿 Parkingv8Image", Parkingv8ImageTab, ()),
-            ("🅿 Parkingv6Image", Parkingv6ImageTab, ()),
+            ("📷 iParking Image", IParkingImageTab,  ()),
             ("✔ Checker",        CheckerTab,        (nb,)),
             ("📊 Stats",          StatsTab,          ()),
             ("🔎 Plate Search",   PlateSearchTab,    ()),
             ("🤖 YOLO Detect",    YoloTab,           ()),
             ("🚀 Train",          TrainTab,          ()),
+            ("🔬 LPR Tester",     LprTesterTab,      ()),
         ]
 
-        self._tab_objects = []
+        # Khởi tạo lookup structures
+        self._all_tabs: list = []        # [(title, outer, tab_obj), ...]
+        self._tab_outers: dict = {}      # title -> outer Frame
+        self._outer_to_tab: dict = {}    # outer Frame -> tab_obj
+        self._tab_shown: dict = {}       # title -> bool
+
+        saved_enabled = _CFG.get("app.enabled_tabs", {})
+
         for title, TabClass, extra in _tab_defs:
             outer, tab_obj = _wrap_scrollable(nb, TabClass, self, *extra)
+            self._all_tabs.append((title, outer, tab_obj))
+            self._tab_outers[title] = outer
+            self._outer_to_tab[outer] = tab_obj
+            enabled = bool(saved_enabled.get(title, True))
+            self._tab_shown[title] = enabled
             nb.add(outer, text=f"  {title}  ")
-            self._tab_objects.append(tab_obj)
+
+        # Ẩn các tab bị tắt sau khi đã add tất cả
+        for title, outer, _ in self._all_tabs:
+            if not self._tab_shown[title]:
+                nb.tab(outer, state="hidden")
+
+        # Compat list (dùng ở một số nơi còn lại)
+        self._tab_objects = [t for _, _, t in self._all_tabs]
 
         self._bind_shortcuts()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ── Config Tab Dialog ─────────────────────────────────────────────────────
+
+    def _set_tab_visible(self, title: str, visible: bool):
+        outer = self._tab_outers[title]
+        self._nb.tab(outer, state="normal" if visible else "hidden")
+        self._tab_shown[title] = visible
+
+    def _open_tab_config(self):
+        win = Toplevel(self)
+        win.title("Cài đặt Tab hiển thị")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.transient(self)
+        win.grab_set()
+
+        # ── Header ────────────────────────────────────────────────────────────
+        hdr = Frame(win, bg=ACCENT2, height=40)
+        hdr.pack(fill=X)
+        hdr.pack_propagate(False)
+        Label(hdr, text="  Chọn tab muốn hiển thị",
+              bg=ACCENT2, fg="white", font=F_BOLD).pack(side=LEFT, padx=8)
+
+        # ── Checkboxes ────────────────────────────────────────────────────────
+        body = Frame(win, bg=BG, padx=24, pady=12)
+        body.pack(fill=BOTH)
+
+        Label(body, text="Bật/tắt từng tab — phải giữ ít nhất 1 tab.",
+              bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor=W, pady=(0, 10))
+
+        chk_vars: dict = {}
+        for title, _, _ in self._all_tabs:
+            var = BooleanVar(value=self._tab_shown.get(title, True))
+            chk_vars[title] = var
+            row = Frame(body, bg=BG)
+            row.pack(fill=X, pady=2)
+            cb = Checkbutton(
+                row, text=f"  {title}", variable=var,
+                bg=BG, fg=TEXT, selectcolor=CARD,
+                activebackground=BG, activeforeground=ACCENT,
+                font=F_MAIN, anchor=W,
+            )
+            cb.pack(side=LEFT)
+
+        # ── Nút Chọn tất / Bỏ tất ────────────────────────────────────────────
+        quick = Frame(body, bg=BG)
+        quick.pack(anchor=W, pady=(6, 2))
+
+        def _select_all():
+            for v in chk_vars.values():
+                v.set(True)
+
+        def _deselect_all():
+            # Chừa lại tab đầu tiên
+            first = True
+            for v in chk_vars.values():
+                v.set(first)
+                first = False
+
+        Button(quick, text="Chọn tất cả", bg=CARD, fg=TEXT, relief=FLAT,
+               padx=6, font=F_MAIN, command=_select_all).pack(side=LEFT, padx=(0, 6))
+        Button(quick, text="Bỏ tất cả (giữ 1)", bg=CARD, fg=TEXT, relief=FLAT,
+               padx=6, font=F_MAIN, command=_deselect_all).pack(side=LEFT)
+
+        # ── Buttons Apply / Cancel ─────────────────────────────────────────────
+        sep = Frame(win, bg=ACCENT2, height=1)
+        sep.pack(fill=X, pady=(8, 0))
+
+        btn_row = Frame(win, bg=CARD, pady=8)
+        btn_row.pack(fill=X)
+
+        def _apply():
+            # Validate: ít nhất 1 tab được bật
+            if not any(v.get() for v in chk_vars.values()):
+                messagebox.showwarning(
+                    "Không hợp lệ",
+                    "Phải giữ ít nhất 1 tab được bật.",
+                    parent=win,
+                )
+                return
+
+            new_state = {t: v.get() for t, v in chk_vars.items()}
+            for title, visible in new_state.items():
+                self._set_tab_visible(title, visible)
+
+            _CFG["app.enabled_tabs"] = new_state
+            _cfg_save()
+            win.destroy()
+
+        Button(btn_row, text="✔  Áp dụng",
+               bg=ACCENT, fg="white", activebackground="#d04510",
+               relief=FLAT, padx=14, pady=4, font=F_BOLD,
+               command=_apply).pack(side=RIGHT, padx=(6, 12))
+        Button(btn_row, text="Hủy",
+               bg=CARD, fg=TEXT, activebackground=ACCENT2,
+               relief=FLAT, padx=14, pady=4, font=F_MAIN,
+               command=win.destroy).pack(side=RIGHT, padx=4)
+
+        # Center dialog relative to main window
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 380) // 2
+        y = self.winfo_y() + (self.winfo_height() - 520) // 2
+        win.geometry(f"380x{12 + 40 + 32 + len(self._all_tabs) * 30 + 120}+{x}+{y}")
+        win.lift()
+        win.focus_set()
 
     # ── Phím tắt toàn cục ─────────────────────────────────────────────────
 
@@ -129,16 +269,22 @@ class App(_AppBase):
 
     def _current_tab(self):
         try:
-            idx = self._nb.index(self._nb.select())
-            return self._tab_objects[idx]
+            selected_path = self._nb.select()
+            outer = self.nametowidget(selected_path)
+            return self._outer_to_tab.get(outer)
         except Exception:
             return None
 
     def _tab_step(self, delta):
         try:
-            n = len(self._nb.tabs())
-            idx = (self._nb.index(self._nb.select()) + delta) % n
-            self._nb.select(idx)
+            all_tabs = self._nb.tabs()
+            visible = [t for t in all_tabs
+                       if self._nb.tab(t, "state") != "hidden"]
+            if not visible:
+                return
+            cur = self._nb.select()
+            idx = visible.index(cur) if cur in visible else 0
+            self._nb.select(visible[(idx + delta) % len(visible)])
         except Exception:
             pass
 
@@ -271,7 +417,6 @@ class App(_AppBase):
 
     # F1 — hiện bảng phím tắt
     def _global_f1(self, e=None):
-        from tkinter import messagebox
         tab = self._current_tab()
         if tab:
             for m in ("_show_help",):
@@ -326,7 +471,6 @@ class App(_AppBase):
 
     def _on_close(self):
         try:
-            from .settings import _cfg_save
             _cfg_save()
         except Exception:
             pass

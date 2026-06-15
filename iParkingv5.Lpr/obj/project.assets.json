@@ -501,11 +501,11 @@
   "project": {
     "version": "1.0.0.3",
     "restore": {
-      "projectUniqueName": "H:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj",
+      "projectUniqueName": "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj",
       "projectName": "iParkingv5.Lpr",
-      "projectPath": "H:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj",
+      "projectPath": "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\iParkingv5.Lpr.csproj",
       "packagesPath": "C:\\Users\\nguye\\.nuget\\packages\\",
-      "outputPath": "H:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\obj\\",
+      "outputPath": "h:\\Software\\2.AI-Tranining\\3.Tools\\iParkingv5.Lpr\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\nguye\\AppData\\Roaming\\NuGet\\NuGet.Config",

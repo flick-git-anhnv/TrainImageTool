@@ -165,11 +165,29 @@ class TrainTab(Frame):
               font=F_BOLD).grid(row=0, column=0, columnspan=10, sticky=W, pady=(0, 6))
         Label(pf, text="Model:", bg=CARD, fg=DIM, font=F_MAIN).grid(
             row=1, column=0, sticky=W)
-        mc = ttk.Combobox(pf, textvariable=self._model_var, width=13,
+        _mc_frame = Frame(pf, bg=CARD)
+        _mc_frame.grid(row=1, column=1, sticky=W, padx=(4, 16))
+
+        mc = ttk.Combobox(_mc_frame, textvariable=self._model_var, width=13,
                           state="readonly", font=F_MAIN,
                           values=[m for m, _ in self._MODELS])
-        mc.grid(row=1, column=1, sticky=W, padx=(4, 16))
+        mc.pack(side=LEFT)
         mc.current(0)
+
+        def _browse_model():
+            p = filedialog.askopenfilename(
+                title="Chọn model .pt",
+                filetypes=[("PyTorch model", "*.pt"), ("All files", "*.*")],
+                initialdir=str(Path(self._model_var.get()).parent)
+                           if Path(self._model_var.get()).is_file() else ".")
+            if p:
+                self._model_var.set(p)
+                self._model_desc.config(text=f"Custom: {Path(p).name}")
+
+        Button(_mc_frame, text="📂", command=_browse_model,
+               bg=CARD, fg=TEXT, activebackground=ACCENT2, activeforeground="white",
+               font=F_MAIN, relief="flat", padx=4, cursor="hand2").pack(side=LEFT, padx=(2, 0))
+
         self._model_desc = Label(pf, text=self._MODELS[0][1],
                                   bg=CARD, fg=DIM,
                                   font=("Segoe UI", 8, "italic"))
