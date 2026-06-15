@@ -15,7 +15,32 @@ from .constants import (
 )
 from .imports import _req_mod, _REQUESTS_OK, _cv2_mod, _np_mod, _CV2_OK
 
-# Mapping from image field name → short suffix used in saved filename
+# EmImageType int → suffix (exit direction)
+# 0=FULL(toàn cảnh), 1=VEHICLE, 2=PLATE
+_IMG_TYPE_SUFFIX_EXIT  = {0: "fo", 1: "vo", 2: "po"}   # full-out, vehicle-out, plate-out
+_IMG_TYPE_SUFFIX_ENTRY = {0: "fi", 1: "vi", 2: "pi"}   # full-in,  vehicle-in,  plate-in
+
+# Suffix nào là ảnh toàn cảnh → bỏ qua khi lưu ảnh xấu
+_FULL_SUFFIXES  = {"fo", "fi"}
+
+# Suffix ảnh biển số cắt (plate crop)
+_PLATE_SUFFIXES = {"po", "pi"}
+
+
+def _p8_suffix_to_imgtype(suffix: str, vtype: str) -> str:
+    """Ánh xạ suffix ảnh → tên thư mục lưu.
+
+    fo/fi → toan_canh
+    po/pi → <vtype>_bsx_cut  (plate crop)
+    vo/vi → <vtype>           (vehicle image)
+    """
+    if suffix in _FULL_SUFFIXES:
+        return "toan_canh"
+    if suffix in _PLATE_SUFFIXES:
+        return f"{vtype}_bsx_cut"
+    return vtype
+
+# Mapping từ field name cũ → suffix (fallback nếu server không dùng PresignedUrl)
 _IMG_SUFFIX: dict = {
     "imageFullIn":  "fi",  "imageFullOut":  "fo",
     "imagePlateIn": "pi",  "imagePlateOut": "po",
@@ -25,7 +50,7 @@ _IMG_SUFFIX: dict = {
     "imageUrls":    "img",
 }
 
-# All image fields to probe on a record (ordered: full→plate→fallback)
+# All image fields to probe on a record (fallback)
 _IMG_FIELDS = [
     "imageFullIn", "imageFullOut",
     "imagePlateIn", "imagePlateOut",
@@ -208,20 +233,34 @@ class Parkingv8ApiClient:
                     time.sleep(2 * (attempt + 1))
         return False, {}
 
-    def fetch_image(self, url: str):
-        """Download image from HTTP URL returned by the API.
+    def fetch_detail(self, endpoint: str, record_id: str) -> dict:
+        """GET {api_url}/{endpoint}/{id}?presignedUrl=true — trả về record kèm presigned URL ảnh."""
+        url = f"{self.api_url}/{endpoint}/{record_id}"
+        try:
+            r = self._session.get(
+                url, timeout=self.timeout,
+                headers={"Authorization": f"Bearer {self.token}"},
+                params={"presignedUrl": "true"})
+            if r.ok:
+                return r.json()
+        except Exception:
+            pass
+        return {}
 
-        Presigned URLs work without auth; bearer-protected ones need the token.
-        Try plain GET first, then retry with Authorization if the server rejects.
+    def fetch_image(self, url: str):
+        """Tải ảnh từ PresignedUrl.
+
+        Presigned URL: GET trực tiếp (không cần auth).
+        URL tương đối hoặc bearer-protected: thêm Authorization header.
         """
         if not url or not _CV2_OK:
             return None
         cv2, np = _cv2_mod, _np_mod
 
-        # Relative path → construct absolute URL
+        # Relative path → build absolute URL
         target = url if url.startswith("http") else f"{self.api_url}/{url.lstrip('/')}"
 
-        # 1st attempt: plain GET (works for presigned / public URLs)
+        # 1st attempt: plain GET (presigned / public URLs)
         try:
             r = self._session.get(target, timeout=self.timeout)
             if r.ok:
@@ -232,7 +271,7 @@ class Parkingv8ApiClient:
         except Exception:
             pass
 
-        # 2nd attempt: with Bearer token (bearer-protected endpoints)
+        # 2nd attempt: with Bearer token
         try:
             r = self._session.get(
                 target, timeout=self.timeout,
@@ -244,8 +283,48 @@ class Parkingv8ApiClient:
             return None
 
     @staticmethod
+    def extract_detail_images(detail: dict, endpoint: str) -> list:
+        """Trích ảnh từ detail record (GET /exits/{id} hoặc /entries/{id}).
+
+        Format: images = [{presignedUrl: str, type: int}, ...]
+        Trả về: [(presigned_url, suffix), ...]
+          - exit  images: type 0→"fo", 1→"vo", 2→"po"
+          - entry images: type 0→"fi", 1→"vi", 2→"pi"
+        Ảnh từ entry sub-record chỉ lấy khi endpoint="exits" (tránh duplicate khi "both").
+        """
+        images = []
+        main_map = (_IMG_TYPE_SUFFIX_EXIT if endpoint == "exits"
+                    else _IMG_TYPE_SUFFIX_ENTRY)
+
+        for img in (detail.get("images") or []):
+            if not isinstance(img, dict):
+                continue
+            url = (img.get("presignedUrl") or img.get("PresignedUrl") or
+                   img.get("url") or img.get("Url") or "")
+            if not url:
+                continue
+            typ = img.get("type")
+            suf = main_map.get(typ, f"t{typ}" if typ is not None else "img")
+            images.append((url, suf))
+
+        # Ảnh entry lồng trong exit record
+        if endpoint == "exits":
+            for img in (detail.get("entry") or {}).get("images") or []:
+                if not isinstance(img, dict):
+                    continue
+                url = (img.get("presignedUrl") or img.get("PresignedUrl") or
+                       img.get("url") or img.get("Url") or "")
+                if not url:
+                    continue
+                typ = img.get("type")
+                suf = _IMG_TYPE_SUFFIX_ENTRY.get(typ, f"t{typ}" if typ is not None else "img")
+                images.append((url, suf))
+
+        return images
+
+    @staticmethod
     def extract_images(rec: dict) -> list:
-        """Return list of (url_or_path, short_suffix) from a record."""
+        """Fallback: trích ảnh từ các field name cũ (server không dùng PresignedUrl)."""
         images = []
         for field in _IMG_FIELDS:
             val = rec.get(field)
@@ -272,11 +351,14 @@ class Parkingv8ApiClient:
 class Parkingv8Worker:
     _HISTORY_FILE = ".p8_done.json"
 
-    def __init__(self, cfg: dict, log_q: queue.Queue, stat_q: queue.Queue):
+    def __init__(self, cfg: dict, log_q: queue.Queue, stat_q: queue.Queue,
+                 pause_event: threading.Event = None):
         self.cfg    = cfg
         self.log_q  = log_q
         self.stat_q = stat_q
         self._stop  = threading.Event()
+        self._pause = pause_event or threading.Event()
+        self._pause.set()
         self.stats: dict = {
             "page": 0, "event": 0, "found": 0,
             "saved": 0, "skipped": 0, "error": 0, "bad_saved": 0,
@@ -427,6 +509,9 @@ class Parkingv8Worker:
         page, empty_n = 0, 0
         max_pages = self.cfg.get("max_pages", 10000)
         while not self._stop.is_set() and page < max_pages:
+            self._pause.wait()   # chờ nếu đang tạm dừng
+            if self._stop.is_set():
+                return
             self._log(f"  [{endpoint.upper()} PAGE {page}] Đang gọi API...")
             t0 = time.time()
             ok, data = api.search(endpoint, d_from, d_to, page, size)
@@ -462,7 +547,7 @@ class Parkingv8Worker:
             for rec in recs:
                 if self._stop.is_set():
                     return
-                self._process(api, rec, out)
+                self._process(api, rec, endpoint, out)
 
             self._push()
 
@@ -476,7 +561,7 @@ class Parkingv8Worker:
             if sleep_s > 0:
                 time.sleep(sleep_s)
 
-    def _process(self, api: Parkingv8ApiClient, rec: dict, out: Path):
+    def _process(self, api: Parkingv8ApiClient, rec: dict, endpoint: str, out: Path):
         event_id = str(rec.get("id") or rec.get("Id") or "")[:8]
         plate    = _p8_safe(re.sub(r"[^0-9A-Za-z]", "",
                                    str(rec.get("plateNumber") or
@@ -491,19 +576,27 @@ class Parkingv8Worker:
             _get_nested(rec, "Device.Name") or
             _get_nested(rec, "entry.device.name") or
             "unknown_lane")
-        # vehicle type from accessKey
+        # vehicle type: collection.vehicleType (int) từ search result
         vt_raw = (
+            _get_nested(rec, "collection.vehicleType") or
             _get_nested(rec, "accessKey.collection.vehicleType") or
             _get_nested(rec, "AccessKey.Collection.VehicleType") or "")
         vtype = _p8_categorize(str(vt_raw), self._vtype_cfg)
 
-        images = api.extract_images(rec)
+        # Gọi detail API để lấy ảnh (search result trả images=[])
+        full_id = str(rec.get("id") or rec.get("Id") or "")
+        detail = api.fetch_detail(endpoint, full_id)
+        if detail:
+            images = api.extract_detail_images(detail, endpoint)
+        else:
+            images = api.extract_images(rec)   # fallback nếu detail API lỗi
+
         bad_result = _p8_bad_reason(rec) if self.cfg.get("collect_bad") else None
         bad_reason = bad_result[0] if bad_result else None
         bad_label  = bad_result[1] if bad_result else ""
         self._log(
             f"  [{event_id}] {plate or '?':12s} | {lane} | "
-            f"{dt.strftime('%Y-%m-%d')} | vt={vtype} | {len(images)} ảnh"
+            f"{dt.strftime('%Y-%m-%d %H:%M')} | vt={vtype} | {len(images)} ảnh"
             + (f" | BAD:{bad_reason}[{bad_label}]" if bad_reason else ""))
 
         for img_url, img_suffix in images:
@@ -518,15 +611,15 @@ class Parkingv8Worker:
         self.stats["found"] += 1
 
         if bad_reason:
-            # chỉ lưu ảnh xe (bỏ ảnh full/toàn cảnh)
-            if suffix.lower() == "full":
+            # chỉ lưu ảnh xe (bỏ ảnh toàn cảnh: fo=full-out, fi=full-in)
+            if suffix in _FULL_SUFFIXES or suffix.lower() == "full":
                 self.stats["skipped"] += 1
                 return
             img = api.fetch_image(url)
             if img is None:
                 self.stats["error"] += 1
                 return
-            save_dir = out / lane / "bad" / bad_reason / dt.strftime("%Y-%m-%d")
+            save_dir = out / lane / "bad" / bad_reason / dt.strftime("%Y-%m-%d") / dt.strftime("%H")
             save_dir.mkdir(parents=True, exist_ok=True)
             ts = dt.strftime("%H%M%S")
             base = (f"{ts}_{bad_label}_{suffix}" if bad_label
@@ -578,8 +671,11 @@ class Parkingv8Worker:
             self._log(f"      ✗ Lỗi tải: {url[:80]}")
             return
 
-        # cấu trúc: <out>/<lane>/<vtype>/<YYYY-MM-DD>/HHmmss_BSX_suffix.jpg
-        save_dir = out / lane / vtype / dt.strftime("%Y-%m-%d")
+        # Xác định thư mục theo loại ảnh (overview/vehicle/plate)
+        img_type = _p8_suffix_to_imgtype(suffix, vtype)
+
+        # cấu trúc: <out>/<lane>/<img_type>/<YYYY-MM-DD>/<HH>/HHmmss_BSX_suffix.jpg
+        save_dir = out / lane / img_type / dt.strftime("%Y-%m-%d") / dt.strftime("%H")
         save_dir.mkdir(parents=True, exist_ok=True)
         base = f"{dt.strftime('%H%M%S')}_{plate}_{suffix}" if plate else \
                f"{dt.strftime('%H%M%S')}_{suffix}"
@@ -600,7 +696,11 @@ class Parkingv8Worker:
             self._lane_cat[cat_key] = self._lane_cat.get(cat_key, 0) + 1
             hour_key = (lane, dt.strftime("%Y-%m-%d %H"))
             self._lane_hourly[hour_key] = self._lane_hourly.get(hour_key, 0) + 1
-            self._log(f"      ✓ {lane}/{vtype}/{fpath.name}")
+            self._log(f"      ✓ {lane}/{img_type}/{fpath.name}")
+            # Tạo file GT cho ảnh biển số cắt: <tên_file>\t<biển_số>
+            if img_type.endswith("_bsx_cut") and plate:
+                fpath.with_suffix(".txt").write_text(
+                    f"{fpath.name}\t{plate}\n", encoding="utf-8")
         else:
             self.stats["error"] += 1
             self._log(f"      ✗ Lỗi encode: {url[:80]}")

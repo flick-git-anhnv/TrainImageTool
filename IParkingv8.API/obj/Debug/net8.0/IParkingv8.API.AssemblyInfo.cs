@@ -15,7 +15,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCopyrightAttribute("KZTEK")]
 [assembly: System.Reflection.AssemblyDescriptionAttribute("KZTEK")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("8.0.0.7")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("8.0.0.7")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("8.0.0.7+073b6e89831d2f1c33cbcd42cd73cf231c26c631")]
 [assembly: System.Reflection.AssemblyProductAttribute("IParkingv8.API")]
 [assembly: System.Reflection.AssemblyTitleAttribute("IParkingv8.API")]
 [assembly: System.Reflection.AssemblyVersionAttribute("8.0.0.7")]

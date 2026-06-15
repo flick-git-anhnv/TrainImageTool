@@ -1,6 +1,7 @@
 """
 Giao diện tổng hợp ảnh theo round-robin khung giờ.
-Cấu trúc nguồn: <src>/<làn>/<loại_xe>/<ngày>/HHmmss_BSX.jpg
+Cấu trúc nguồn: <src>/<làn>/<loại_xe>/<ngày>/<HH>/HHmmss_BSX.jpg  (mới)
+             hoặc <src>/<làn>/<loại_xe>/<ngày>/HHmmss_BSX.jpg       (cũ, vẫn hỗ trợ)
 Cấu trúc đích : <dest>/<loại_xe>/*.jpg
 """
 import queue
@@ -30,10 +31,18 @@ def _scan_source(src: Path) -> dict:
     for img in sorted(src.rglob("*.jpg")):
         try:
             parts = img.relative_to(src).parts
-            if len(parts) != 4 or parts[0] in _EXCLUDED:
+            if parts[0] in _EXCLUDED:
                 continue
-            lane, vtype, _, fname = parts
-            h_str = fname[:2]
+            if len(parts) == 5:
+                # cấu trúc mới: lane/vtype/date/HH/fname
+                lane, vtype, _, hour_folder, fname = parts
+                h_str = hour_folder
+            elif len(parts) == 4:
+                # cấu trúc cũ: lane/vtype/date/fname
+                lane, vtype, _, fname = parts
+                h_str = fname[:2]
+            else:
+                continue
             if not h_str.isdigit():
                 continue
             h = int(h_str)

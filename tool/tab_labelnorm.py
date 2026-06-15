@@ -2,12 +2,12 @@ import os
 import threading
 from pathlib import Path
 from tkinter import *
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 from .constants import (
     BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD, IMAGE_EXTENSIONS,
 )
-from .settings import _bind_cfg
+from .settings import _bind_cfg, _bind_history, _push_history, _get_history
 from .core_label_norm import run_label_norm
 from .ui_helpers import (
     _folder_row, _pb_row, _make_logbox, _append_log,
@@ -42,9 +42,9 @@ class LabelNormTab(Frame):
         _bind_cfg("labelnorm.img", self.v_img)
         _bind_cfg("labelnorm.lbl", self.v_lbl)
         _bind_cfg("labelnorm.out", self.v_out)
-        _folder_row(top, "📁  Thư mục ảnh",         self.v_img, 0)
-        _folder_row(top, "🏷  Thư mục label (.txt)", self.v_lbl, 1)
-        _folder_row(top, "💾  Thư mục output",       self.v_out, 2)
+        _folder_row(top, "📁  Thư mục ảnh",         self.v_img, 0, history_key="h.labelnorm.img")
+        _folder_row(top, "🏷  Thư mục label (.txt)", self.v_lbl, 1, history_key="h.labelnorm.lbl")
+        _folder_row(top, "💾  Thư mục output",       self.v_out, 2, history_key="h.labelnorm.out")
 
         cr = Frame(top, bg=BG)
         cr.grid(row=3, column=0, columnspan=3, sticky=EW, pady=(6, 0))
@@ -53,9 +53,10 @@ class LabelNormTab(Frame):
         self.v_classes = StringVar(
             value="car, motorbike, bus, truck, bicycle, license_plate")
         _bind_cfg("labelnorm.classes", self.v_classes)
-        Entry(cr, textvariable=self.v_classes, bg=CARD, fg=TEXT,
-              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).pack(
-              side=LEFT, fill=X, expand=True, padx=(8, 0))
+        _cls_combo = ttk.Combobox(cr, textvariable=self.v_classes,
+                                   style="Dark.TCombobox", font=F_MAIN)
+        _cls_combo.pack(side=LEFT, fill=X, expand=True, padx=(8, 0))
+        _bind_history("h.labelnorm.classes", _cls_combo)
         Button(cr, text="Cập nhật ↺", command=self._refresh_classes,
                bg=ACCENT2, fg="white", activebackground=ACCENT,
                activeforeground="white", font=F_MAIN, relief="flat",
@@ -79,7 +80,6 @@ class LabelNormTab(Frame):
         tools_f = LabelFrame(self, text=" Công cụ nhãn ",
                              bg=BG, fg=TEXT, font=F_BOLD, bd=1, relief="groove",
                              padx=12, pady=8)
-        tools_f.pack(fill=BOTH, expand=True, padx=20, pady=(0, 4))
         self._build_tools(tools_f)
 
         btn_row = Frame(self, bg=BG, padx=20, pady=6)
@@ -110,7 +110,7 @@ class LabelNormTab(Frame):
 
         btn_row.pack(fill=X, side=BOTTOM)
         pb_f.pack(fill=X, side=BOTTOM)
-        log_outer.pack(fill=BOTH, expand=True)
+        tools_f.pack(fill=BOTH, expand=True, padx=20, pady=(0, 4))
 
     def _build_tools(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -195,7 +195,7 @@ class LabelNormTab(Frame):
         self.file_listbox = Listbox(
             list_f, bg=CARD, fg=TEXT, font=("Consolas", 9),
             selectbackground=ACCENT2, selectforeground="white",
-            relief="flat", bd=0, width=30, height=7,
+            relief="flat", bd=0, width=30, height=5,
         )
         lb_sb = Scrollbar(list_f, command=self.file_listbox.yview)
         self.file_listbox.configure(yscrollcommand=lb_sb.set)
@@ -208,11 +208,13 @@ class LabelNormTab(Frame):
 
         self.preview_canvas = Canvas(
             canvas_f, bg=CARD, bd=0, highlightthickness=0,
-            width=520, height=180,
+            width=520, height=100,
         )
         self.preview_canvas.pack(fill=BOTH, expand=True)
         self.preview_canvas.bind("<Configure>", self._on_canvas_resize)
+        self.preview_canvas.bind("<Double-Button-1>", self._on_preview_zoom)
         self._pending_preview_file = None
+        self._preview_pil_full = None
 
     def _build_filters(self, p):
         def _cb(text, var, row, col=0, span=1):
@@ -220,7 +222,7 @@ class LabelNormTab(Frame):
                         activebackground=BG, activeforeground=TEXT,
                         selectcolor=CARD, font=F_MAIN).grid(
                             row=row, column=col, columnspan=span,
-                            sticky=W, padx=10, pady=2)
+                            sticky=W, padx=10, pady=1)
 
         def _ent(parent, var, w=6):
             return Entry(parent, textvariable=var, width=w, bg=CARD, fg=TEXT,
@@ -232,11 +234,11 @@ class LabelNormTab(Frame):
 
         r = 0
         Label(p, text="Nhãn lớp cần giữ:", bg=BG, fg=DIM, font=F_MAIN).grid(
-            row=r, column=0, columnspan=4, sticky=W, padx=10, pady=(8, 2)); r += 1
+            row=r, column=0, columnspan=4, sticky=W, padx=10, pady=(4, 2)); r += 1
         self._class_frame = Frame(p, bg=BG)
-        self._class_frame.grid(row=r, column=0, columnspan=4, sticky=W, padx=12, pady=(0, 4)); r += 1
+        self._class_frame.grid(row=r, column=0, columnspan=4, sticky=W, padx=12, pady=(0, 2)); r += 1
         Frame(p, bg=CARD, height=1).grid(row=r, column=0, columnspan=4,
-                                          sticky=EW, padx=10, pady=5); r += 1
+                                          sticky=EW, padx=10, pady=3); r += 1
 
         self.v_use_largest = BooleanVar(); self.v_largest_n = IntVar(value=1)
         _cb("Giữ", self.v_use_largest, r)
@@ -253,7 +255,7 @@ class LabelNormTab(Frame):
         _lbl("box NHỎ nhất / mỗi loại nhãn", r, 2, dim=False); r += 1
 
         Frame(p, bg=CARD, height=1).grid(row=r, column=0, columnspan=4,
-                                          sticky=EW, padx=10, pady=5); r += 1
+                                          sticky=EW, padx=10, pady=3); r += 1
 
         self.v_use_min_area = BooleanVar(); self.v_min_area = DoubleVar(value=0.5)
         _cb("Diện tích box tối thiểu:", self.v_use_min_area, r)
@@ -312,13 +314,13 @@ class LabelNormTab(Frame):
         ]:
             Radiobutton(p, text=text, variable=self.v_split_mode, value=val,
                         bg=BG, fg=TEXT, activebackground=BG, selectcolor=CARD,
-                        font=F_MAIN).pack(anchor=W, padx=10, pady=3)
+                        font=F_MAIN).pack(anchor=W, padx=10, pady=1)
 
-        Frame(p, bg=CARD, height=1).pack(fill=X, padx=10, pady=5)
+        Frame(p, bg=CARD, height=1).pack(fill=X, padx=10, pady=3)
 
         Label(p, text="Ngưỡng kích thước (S/M/L):",
               bg=BG, fg=DIM, font=F_MAIN).pack(anchor=W, padx=10)
-        tf = Frame(p, bg=BG); tf.pack(anchor=W, padx=14, pady=3)
+        tf = Frame(p, bg=BG); tf.pack(anchor=W, padx=14, pady=2)
         self.v_size_s = DoubleVar(value=3.0); self.v_size_l = DoubleVar(value=15.0)
         Label(tf, text="Small <", bg=BG, fg=DIM, font=F_MAIN).grid(row=0, column=0)
         Entry(tf, textvariable=self.v_size_s, width=5, bg=CARD, fg=TEXT,
@@ -329,8 +331,8 @@ class LabelNormTab(Frame):
         Label(tf, text="%  (Medium = giữa)", bg=BG, fg=DIM, font=F_MAIN).grid(row=0, column=4)
 
         Label(p, text="Ngưỡng vị trí gần viền (border):",
-              bg=BG, fg=DIM, font=F_MAIN).pack(anchor=W, padx=10, pady=(6, 0))
-        pf = Frame(p, bg=BG); pf.pack(anchor=W, padx=14, pady=3)
+              bg=BG, fg=DIM, font=F_MAIN).pack(anchor=W, padx=10, pady=(3, 0))
+        pf = Frame(p, bg=BG); pf.pack(anchor=W, padx=14, pady=2)
         self.v_pos_border = DoubleVar(value=25.0)
         Label(pf, text="Biên <", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT)
         Entry(pf, textvariable=self.v_pos_border, width=5, bg=CARD, fg=TEXT,
@@ -339,8 +341,8 @@ class LabelNormTab(Frame):
               bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT)
 
         Label(p, text="Ngưỡng tỉ lệ w/h (orientation):",
-              bg=BG, fg=DIM, font=F_MAIN).pack(anchor=W, padx=10, pady=(6, 0))
-        of = Frame(p, bg=BG); of.pack(anchor=W, padx=14, pady=3)
+              bg=BG, fg=DIM, font=F_MAIN).pack(anchor=W, padx=10, pady=(3, 0))
+        of = Frame(p, bg=BG); of.pack(anchor=W, padx=14, pady=2)
         self.v_orient_thr = DoubleVar(value=1.3)
         Label(of, text="Threshold:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT)
         Entry(of, textvariable=self.v_orient_thr, width=5, bg=CARD, fg=TEXT,
@@ -348,15 +350,9 @@ class LabelNormTab(Frame):
         Label(of, text="(w/h > t → landscape, h/w > t → portrait)",
               bg=BG, fg=DIM, font=("Consolas", 8)).pack(side=LEFT)
 
-        Frame(p, bg=CARD, height=1).pack(fill=X, padx=10, pady=5)
-        for hint in ["• size     → small/ medium/ large/",
-                     "• class    → car/ motorbike/ ...",
-                     "• count    → single/ multi/",
-                     "• position → border/ center/",
-                     "• region   → top_left/ center/ bottom_right/ ...",
-                     "• orient   → landscape/ portrait/ square/"]:
-            Label(p, text=hint, bg=BG, fg=DIM,
-                  font=("Consolas", 8)).pack(anchor=W, padx=14)
+        Frame(p, bg=CARD, height=1).pack(fill=X, padx=10, pady=3)
+        Label(p, text="• size/class/count/position/region/orient → subfolder name",
+              bg=BG, fg=DIM, font=("Consolas", 8)).pack(anchor=W, padx=14, pady=(2, 4))
 
     def _refresh_classes(self):
         for w in self._class_frame.winfo_children():
@@ -700,6 +696,7 @@ class LabelNormTab(Frame):
         self._pending_preview_file = label_path
         self.preview_canvas.delete("all")
         self._preview_photo = None
+        self._preview_pil_full = None  # reset zoom ref
 
         boxes = self._parse_label_boxes(label_path)
         img_path = self._find_image_for_label(label_path)
@@ -720,6 +717,7 @@ class LabelNormTab(Frame):
             self._draw_preview_fallback(boxes, cw, ch, img_path.name, no_img=True)
             return
 
+        self._preview_pil_full = img  # lưu ảnh gốc để zoom
         iw, ih = img.size
         scale = min(cw / iw, ch / ih, 1.0)
         nw, nh = max(1, int(iw * scale)), max(1, int(ih * scale))
@@ -779,3 +777,24 @@ class LabelNormTab(Frame):
     def _on_canvas_resize(self, event):
         if self._pending_preview_file:
             self._show_preview(self._pending_preview_file)
+
+    def _on_preview_zoom(self, _event=None):
+        """Double-click — phóng to ảnh gốc (không có bbox overlay)."""
+        if not hasattr(self, "_preview_pil_full") or self._preview_pil_full is None:
+            return
+        from .ui_helpers import _zoom_image_window
+        name = ""
+        if self._pending_preview_file:
+            name = self._pending_preview_file.stem
+        _zoom_image_window(self.root, self._preview_pil_full,
+                           f"Phóng to — {name}" if name else "Phóng to ảnh")
+
+    def _browse(self):
+        """Ctrl+O — mở hộp thoại chọn thư mục ảnh."""
+        from tkinter import filedialog
+        from .settings import _cfg_dir, _push_history
+        p = filedialog.askdirectory(title="Chọn thư mục ảnh",
+                                    initialdir=_cfg_dir("labelnorm.img"))
+        if p:
+            self.v_img.set(p)
+            _push_history("h.labelnorm.img", p)

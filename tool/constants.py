@@ -54,3 +54,10 @@ _P8_CLIENT_ID      = "kztek"
 _P8_CLIENT_SECRET  = "kztek_secret"
 _P8_USERNAME       = ""
 _P8_PASSWORD       = ""
+
+# Parkingv6Image API defaults (iParkingv5 ApiManagerv6, Bearer token, MinIO)
+_P6_API_URL      = "http://113.162.247.111:5000"
+_P6_MINIO_EP     = "113.162.247.111:9000"
+_P6_MINIO_BUCKET = "parking-images"
+_P6_MINIO_AK     = "admin"
+_P6_MINIO_SK     = "Pass1234!"

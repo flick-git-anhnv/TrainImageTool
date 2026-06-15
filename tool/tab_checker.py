@@ -12,7 +12,7 @@ from .constants import (
     BG, CARD, ACCENT, ACCENT2, TEXT, DIM, SUCCESS,
     F_MAIN, F_BOLD, F_MONO, _VI, _VI_FULL,
 )
-from .settings import _CFG, _cfg_save, _cfg_dir
+from .settings import _CFG, _cfg_save, _cfg_dir, _push_history
 from .core_gt import analyze_gt, _heat_color
 from .imports import _TTS_OK, _GTTS_OK, _gTTS
 
@@ -311,6 +311,7 @@ class CheckerTab(Frame):
             entry.bind("<FocusIn>",    lambda e, x=idx: self._set_focus(x, speak=False))
             inner.bind("<Button-1>",  lambda e, x=idx: self._set_focus(x))
             img_lbl.bind("<Button-1>", lambda e, x=idx: self._set_focus(x))
+            img_lbl.bind("<Double-Button-1>", lambda e, x=idx: self._zoom_cell_img(x))
 
         self._focus_idx = 0
 
@@ -414,6 +415,7 @@ class CheckerTab(Frame):
         if not folder:
             return
         _CFG["checker.folder"] = folder; _cfg_save()
+        _push_history("h.checker.folder", folder)
         self.img_dir = os.path.join(folder, "raw_images")
         self.gt_path = os.path.join(folder, "gt.txt")
         if not os.path.exists(self.img_dir) or not os.path.exists(self.gt_path):
@@ -955,6 +957,24 @@ class CheckerTab(Frame):
             try: self._prefetch_q.put_nowait(cache_key)
             except queue.Full: pass
 
+    def _zoom_cell_img(self, idx):
+        if idx >= len(self._cells):
+            return
+        cell = self._cells[idx]
+        filename = cell.get("filename", "")
+        if not filename or not self.img_dir:
+            return
+        img_path = os.path.join(self.img_dir, filename)
+        if not os.path.exists(img_path):
+            return
+        try:
+            from PIL import Image
+            img = Image.open(img_path).convert("RGB")
+            from .ui_helpers import _zoom_image_window
+            _zoom_image_window(self.root, img, filename)
+        except Exception:
+            pass
+
     def _speak(self, text):
         if not _TTS_OK or not self.var_audio.get() or not text: return
         clean  = text.upper().replace("-","").replace(" ","")
@@ -1053,3 +1073,24 @@ class CheckerTab(Frame):
             lbl_ch.config(bg=bg, fg=fg)
             lbl_cnt.config(bg=bg, fg=fgn, text=f"{cnt:,}" if cnt else "")
         self._update_session_progress()
+
+    # ── Navigation aliases cho app.py global ←/→ routing ─────────────────
+
+    def _prev_image(self):
+        """← — quay lại batch trước (go_back)."""
+        self.go_back()
+
+    def _next_image(self):
+        """→ — di chuyển focus sang cell tiếp theo trong grid."""
+        src_list = self._active_list()
+        if not src_list:
+            return
+        n_active = min(self._n_show, len(src_list) - self.current_idx)
+        if n_active > 1:
+            new_focus = (self._focus_idx + 1) % n_active
+            self._focus_idx = new_focus
+            # Re-render focus highlight nếu method tồn tại
+            for m in ("_set_focus", "_highlight_cell", "set_focus"):
+                if hasattr(self, m) and callable(getattr(self, m)):
+                    getattr(self, m)(new_focus)
+                    break

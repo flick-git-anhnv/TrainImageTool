@@ -8,10 +8,12 @@ from tkinter import *
 from tkinter import filedialog, messagebox, ttk
 
 from .constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD, F_MONO
-from .settings import _bind_cfg, _cfg_dir
+from .settings import _bind_cfg, _cfg_dir, _bind_history, _push_history, _get_history
 from .imports import _REQUESTS_OK, _CV2_OK
-from .lotte_image import LotteWorker
+from .lotte_image import LotteWorker, _SharedLaneState
 from .bad_image_viewer import BadImageViewer
+from .migrate_structure import open_migrate_window as _open_migrate_window
+from .ui_helpers import DateTimePicker
 
 
 class LotteImageTab(Frame):
@@ -31,6 +33,8 @@ class LotteImageTab(Frame):
         self._done_count = 0
         self._total_estimate = 0
         self._last_stat = {}
+        self._all_thread_stats: dict = {}   # {thread_id: last_stat}
+        self._parallel_workers: list = []   # [LotteWorker, ...] cho parallel mode
         self._build()
         self._poll()
 
@@ -71,19 +75,14 @@ class LotteImageTab(Frame):
             row=0, column=0, padx=(0, 4), sticky=W)
         self.from_var = StringVar(value="2026-05-01 00:00:00")
         _bind_cfg("lotte.from", self.from_var)
-        Entry(f, textvariable=self.from_var, width=22,
-              bg=CARD, fg=TEXT, insertbackground=TEXT,
-              relief="flat", font=F_MAIN, bd=4).grid(row=0, column=1, padx=4)
+        DateTimePicker(f, textvariable=self.from_var, mode="datetime").grid(
+            row=0, column=1, padx=4)
         Label(f, text="Đến:", bg=BG, fg=TEXT, font=F_MAIN).grid(
             row=0, column=2, padx=(14, 4))
         self.to_var = StringVar(value=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         _bind_cfg("lotte.to", self.to_var)
-        Entry(f, textvariable=self.to_var, width=22,
-              bg=CARD, fg=TEXT, insertbackground=TEXT,
-              relief="flat", font=F_MAIN, bd=4).grid(row=0, column=3, padx=4)
-        Label(f, text="Định dạng: YYYY-MM-DD HH:MM:SS",
-              font=("Segoe UI", 8), fg=DIM, bg=BG).grid(
-            row=1, column=1, columnspan=3, sticky=W, pady=(2, 0))
+        DateTimePicker(f, textvariable=self.to_var, mode="datetime").grid(
+            row=0, column=3, padx=4)
 
     def _build_output(self, p):
         self._sep(p, "Thư mục lưu ảnh")
@@ -92,16 +91,16 @@ class LotteImageTab(Frame):
         f.columnconfigure(0, weight=1)
         self.out_var = StringVar(value=str(Path.cwd() / "images"))
         _bind_cfg("lotte.out", self.out_var)
-        Entry(f, textvariable=self.out_var,
-              bg=CARD, fg=TEXT, insertbackground=TEXT,
-              relief="flat", font=F_MAIN, bd=4).grid(
-            row=0, column=0, sticky=EW, padx=(0, 8))
+        self._out_combo = ttk.Combobox(f, textvariable=self.out_var,
+              style="Dark.TCombobox", font=F_MAIN)
+        self._out_combo.grid(row=0, column=0, sticky=EW, padx=(0, 8))
+        _bind_history("h.lotte.out", self._out_combo)
         Button(f, text="Chọn…", command=self._browse,
                bg=ACCENT2, fg="white", font=F_MAIN,
                activebackground=ACCENT, activeforeground="white",
                relief="flat", padx=10, cursor="hand2").grid(row=0, column=1)
         Label(p,
-              text="Cấu trúc: <thư mục> / <tên làn> / <loại xe> / <YYYY-MM-DD> / HHmmss_BSX.jpg"
+              text="Cấu trúc: <thư mục> / <tên làn> / <loại xe> / <YYYY-MM-DD> / <HH> / HHmmss_BSX.jpg"
                    "   (loại xe: toan_canh | xe_may | xe_dap | o_to)",
               font=("Segoe UI", 8), fg=DIM, bg=BG, anchor=W).pack(
             fill=X, pady=(3, 0))
@@ -139,6 +138,14 @@ class LotteImageTab(Frame):
                     bg=BG, fg=TEXT, selectcolor=CARD,
                     activebackground=BG, font=F_MAIN).grid(
             row=0, column=6, padx=(14, 0))
+        Label(f, text="Luồng:", bg=BG, fg=TEXT, font=F_MAIN).grid(
+            row=0, column=7, padx=(14, 4))
+        self.parallel_var = IntVar(value=1)
+        _bind_cfg("lotte.parallel", self.parallel_var)
+        Spinbox(f, from_=1, to=8, textvariable=self.parallel_var,
+                width=4, font=F_MAIN, bg=CARD, fg=TEXT,
+                insertbackground=TEXT, buttonbackground=ACCENT2,
+                relief="flat").grid(row=0, column=8, padx=4)
 
         Label(f, text="Max ảnh/làn:", bg=BG, fg=TEXT, font=F_MAIN).grid(
             row=1, column=0, padx=(0, 4), sticky=W, pady=(6, 0))
@@ -302,6 +309,12 @@ class LotteImageTab(Frame):
             relief="flat", padx=12, pady=4, cursor="hand2",
         )
         self.merge_btn.pack(side=LEFT, padx=(8, 0))
+        Button(
+            f, text="Hiệu chỉnh", command=self._migrate_folder,
+            bg="#2d4a1e", fg="#a0d080", font=F_MAIN,
+            activebackground="#3a6028", activeforeground="white",
+            relief="flat", padx=12, pady=4, cursor="hand2",
+        ).pack(side=LEFT, padx=(8, 0))
         self.status_lbl = Label(f, text="Sẵn sàng",
                                 font=F_MAIN, fg=ACCENT2, bg=BG)
         self.status_lbl.pack(side=RIGHT)
@@ -375,6 +388,10 @@ class LotteImageTab(Frame):
             self._dash_frame.pack_forget()
             self._dash_visible = False
 
+    # Màu log theo luồng: T1=cam, T2=xanh dương, T3=xanh lá, T4=vàng, ...
+    _THREAD_COLORS = ["#F05922", "#4fc3f7", "#81c784", "#ffb74d",
+                      "#f06292", "#ba68c8", "#4dd0e1", "#ff8a65"]
+
     def _build_log(self, p):
         self._sep(p, "Nhật ký")
         f = Frame(p, bg=BG)
@@ -387,6 +404,9 @@ class LotteImageTab(Frame):
             relief="flat", wrap=WORD,
             insertbackground="#d4d4d4", state=DISABLED)
         self.log_txt.grid(row=0, column=0, sticky=NSEW)
+        # Đăng ký tag màu cho từng luồng
+        for i, color in enumerate(self._THREAD_COLORS, 1):
+            self.log_txt.tag_configure(f"T{i}", foreground=color)
         sb = ttk.Scrollbar(f, command=self.log_txt.yview)
         sb.grid(row=0, column=1, sticky=NS)
         self.log_txt["yscrollcommand"] = sb.set
@@ -403,6 +423,8 @@ class LotteImageTab(Frame):
                                     initialdir=_cfg_dir("lotte.out"))
         if d:
             self.out_var.set(d)
+            _push_history("h.lotte.out", d)
+            self._out_combo["values"] = _get_history("h.lotte.out")
 
     # ── pause/resume ──────────────────────────────────────────────────────────
 
@@ -552,16 +574,19 @@ class LotteImageTab(Frame):
             for img in out_path.rglob("*.jpg"):
                 try:
                     p = img.relative_to(out_path).parts
-                    if len(p) != 4:
+                    if len(p) == 5:
+                        lane, vtype, date_s, hour_s, fname = p
+                    elif len(p) == 4:
+                        lane, vtype, date_s, fname = p
+                        hour_s = fname[:2]
+                    else:
                         continue
-                    lane, vtype, date_s, fname = p
                 except Exception:
                     continue
                 lt[lane][vtype]  += 1
                 bd[date_s][lane] += 1
-                h = fname[:2]
-                if h.isdigit() and 0 <= int(h) <= 23:
-                    bhl[int(h)][lane] += 1
+                if hour_s.isdigit() and 0 <= int(hour_s) <= 23:
+                    bhl[int(hour_s)][lane] += 1
         return {"lt": dict(lt), "date": dict(bd), "hour": dict(bhl)}
 
     @staticmethod
@@ -730,12 +755,19 @@ class LotteImageTab(Frame):
 
     # ─────────────────────────────────────────────────────────────────────────
 
-    _LOG_MAX = 1000
+    _LOG_MAX = 2000
 
     def _log(self, msg):
+        import re as _re
         self.log_txt.configure(state=NORMAL)
         ts = datetime.now().strftime("%H:%M:%S")
-        self.log_txt.insert(END, f"[{ts}] {msg}\n")
+        line = f"[{ts}] {msg}\n"
+        m = _re.match(r'\[T(\d+)\]', msg)
+        if m:
+            tag = f"T{m.group(1)}"
+            self.log_txt.insert(END, line, (tag,))
+        else:
+            self.log_txt.insert(END, line)
         lines = int(self.log_txt.index("end-1c").split(".")[0])
         if lines > self._LOG_MAX:
             self.log_txt.delete("1.0", f"{lines - self._LOG_MAX}.0")
@@ -772,6 +804,7 @@ class LotteImageTab(Frame):
             "max_per_cat":  self.max_per_cat_var.get(),
             "max_per_hour": self.max_per_hour_var.get(),
             "collect_bad":  self.collect_bad_var.get(),
+            "parallel":     self.parallel_var.get(),
             "api_base":     self.cfg_api.get().strip(),
             "username":     self.cfg_user.get().strip(),
             "password":     self.cfg_pass.get().strip(),
@@ -800,6 +833,8 @@ class LotteImageTab(Frame):
         self._run_start_time = time.monotonic()
         self._done_count = 0
         self._total_estimate = 0
+        self._all_thread_stats.clear()
+        self._parallel_workers.clear()
         self.start_btn.config(state=DISABLED)
         self.stop_btn.config(state=NORMAL)
         self.pause_btn.config(state=NORMAL, text="⏸  Tạm dừng", fg=TEXT)
@@ -810,10 +845,17 @@ class LotteImageTab(Frame):
         self.status_lbl.config(text="Đang chạy...", fg=ACCENT)
         self._log(f"Bắt đầu: {from_d}  →  {to_d}")
         self._log(f"Lưu vào: {out}")
-        self._worker = LotteWorker(cfg, self._log_q, self._stat_q,
-                                   pause_event=self._pause_event)
-        self._thread = threading.Thread(target=self._run_worker, daemon=True)
-        self._thread.start()
+
+        parallel = cfg.get("parallel", 1)
+        if parallel > 1:
+            self._thread = threading.Thread(
+                target=self._run_parallel, args=(cfg, parallel), daemon=True)
+            self._thread.start()
+        else:
+            self._worker = LotteWorker(cfg, self._log_q, self._stat_q,
+                                       pause_event=self._pause_event)
+            self._thread = threading.Thread(target=self._run_worker, daemon=True)
+            self._thread.start()
 
     def _run_worker(self):
         try:
@@ -822,9 +864,115 @@ class LotteImageTab(Frame):
             self._log_q.put(f"[LỖI] {exc}")
             self._log_q.put("__DONE__")
 
+    def _run_parallel(self, cfg: dict, n: int):
+        """Chia ngày ra n luồng, chạy song song, gộp kết quả."""
+        import json as _json
+        from pathlib import Path as _Path
+        try:
+            out = _Path(cfg["output_dir"])
+            from_d = cfg["from_date"].strip().replace(" ", "T")
+            to_d   = cfg["to_date"].strip().replace(" ", "T")
+
+            # Tính danh sách ngày
+            all_days = LotteWorker._day_list(from_d, to_d)
+
+            # Đọc lịch sử đã tải
+            done_days: set = set()
+            hist_f = out / LotteWorker._HISTORY_FILE
+            try:
+                if hist_f.exists():
+                    done_days = set(_json.loads(hist_f.read_text(encoding="utf-8")))
+                    self._log_q.put(f"Lịch sử: {len(done_days)} ngày đã tải trước đó.")
+            except Exception:
+                pass
+
+            # Lọc ngày chưa tải
+            pending = [d for d in all_days if d[2] not in done_days]
+            skipped_hist = len(all_days) - len(pending)
+
+            # Giới hạn limits
+            max_lane = cfg.get("max_per_lane", 0)
+            max_cat  = cfg.get("max_per_cat",  0)
+            max_hour = cfg.get("max_per_hour", 0)
+            limits = []
+            if max_lane: limits.append(f"{max_lane} ảnh/làn")
+            if max_cat:  limits.append(f"{max_cat} ảnh/loại/làn/ngày")
+            if max_hour: limits.append(f"{max_hour} ảnh/giờ/làn")
+            self._log_q.put(f"Tổng: {len(all_days)} ngày | {n} luồng | page size={cfg['page_size']}")
+            self._log_q.put(f"Giới hạn: {', '.join(limits) if limits else 'không'}")
+
+            if skipped_hist:
+                self._log_q.put(f"Bỏ qua {skipped_hist} ngày đã tải trước đó.")
+
+            if not pending:
+                self._log_q.put("Tất cả ngày đã tải. Không có việc gì để làm.")
+                self._log_q.put("__DONE__")
+                return
+
+            # Chia ngày round-robin cho n luồng
+            groups: list = [[] for _ in range(n)]
+            for i, day in enumerate(pending):
+                groups[i % n].append(day)
+
+            # Log phân công
+            for tid, g in enumerate(groups, 1):
+                if g:
+                    self._log_q.put(
+                        f"[T{tid}] Được giao {len(g)} ngày: {g[0][2]} → {g[-1][2]}")
+
+            # Tạo shared state và workers
+            shared = _SharedLaneState()
+            workers = []
+            for tid, day_group in enumerate(groups, 1):
+                if not day_group:
+                    continue
+                w = LotteWorker(
+                    cfg, self._log_q, self._stat_q,
+                    pause_event=self._pause_event,
+                    thread_id=tid,
+                    days_list=day_group,
+                    shared=shared,
+                    send_done=False,
+                    global_total_days=len(pending),
+                )
+                w._done_days = set(done_days)  # mỗi worker có bản sao lịch sử
+                workers.append(w)
+
+            self._parallel_workers = workers
+
+            # Chạy tất cả luồng
+            threads = [threading.Thread(target=w.run, daemon=True) for w in workers]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            # Tổng kết
+            total_ev  = sum(w.stats.get("event",    0) for w in workers)
+            total_fd  = sum(w.stats.get("found",    0) for w in workers)
+            total_sv  = sum(w.stats.get("saved",    0) for w in workers)
+            total_sk  = sum(w.stats.get("skipped",  0) for w in workers)
+            total_err = sum(w.stats.get("error",    0) for w in workers)
+            total_bad = sum(w.stats.get("bad_saved",0) for w in workers)
+            self._log_q.put(f"\n{'═'*52}")
+            self._log_q.put(
+                f"TỔNG KẾT ({n} luồng, {len(pending)} ngày"
+                f"{f', bỏ qua {skipped_hist} đã tải' if skipped_hist else ''}):")
+            self._log_q.put(
+                f"  SK: {total_ev}  |  Tìm: {total_fd}  |  Lưu: {total_sv}"
+                f"  |  Xấu: {total_bad}  |  Bỏ qua: {total_sk}  |  Lỗi: {total_err}")
+            self._log_q.put(f"{'═'*52}")
+
+        except Exception as exc:
+            self._log_q.put(f"[LỖI] {exc}")
+        finally:
+            self._log_q.put("__DONE__")
+
     def _stop(self):
         if self._worker:
             self._worker.stop()
+        for w in self._parallel_workers:
+            w.stop()
         self._running = False
         self._paused  = False
         self._pause_event.set()
@@ -902,6 +1050,14 @@ class LotteImageTab(Frame):
             return
         self._consolidate_win = ConsolidateWindow(self.root, out)
 
+    def _migrate_folder(self):
+        out = Path(self.out_var.get().strip())
+        if not out.exists():
+            messagebox.showerror("Lỗi", "Thư mục không tồn tại."); return
+        if hasattr(self, "_migrate_win") and self._migrate_win.winfo_exists():
+            self._migrate_win.lift(); return
+        self._migrate_win = _open_migrate_window(self.root, out)
+
     # ─────────────────────────────────────────────────────────────────────────
 
     def _poll(self):
@@ -917,21 +1073,60 @@ class LotteImageTab(Frame):
         try:
             while True:
                 s = self._stat_q.get_nowait()
-                self._update_progress(s)
-                day_info = (
-                    f"Ngày: {s['day_label']} ({s['day_idx']}/{s['total_days']})  |  "
-                    if s.get("total_days") else "")
-                bad_part = (f"  |  Xấu: {s['bad_saved']}"
-                            if s.get("bad_saved") else "")
-                self.stat_lbl.config(
-                    text=(f"{day_info}"
-                          f"Trang: {s['page']}  |  "
-                          f"SK: {s['event']}  |  "
-                          f"Tìm: {s['found']}  |  "
-                          f"Lưu: {s['saved']}"
-                          f"{bad_part}  |  "
-                          f"Bỏ qua: {s.get('skipped', 0)}  |  "
-                          f"Lỗi: {s['error']}"))
+                tid = s.get("thread_id", 0)
+                if tid > 0:
+                    self._all_thread_stats[tid] = s
+                # Lấy stats để hiển thị (gộp nếu nhiều luồng)
+                if self._all_thread_stats:
+                    disp = self._aggregate_stats()
+                else:
+                    disp = s
+                self._update_progress(disp)
+                self._refresh_stat_lbl(disp)
         except queue.Empty:
             pass
         self.root.after(200, self._poll)
+
+    def _aggregate_stats(self) -> dict:
+        """Gộp stats từ tất cả luồng đang chạy."""
+        all_s = list(self._all_thread_stats.values())
+        total_days = all_s[0].get("total_days", 0) if all_s else 0
+        items = [x.get("current_item", "") for x in all_s if x.get("current_item")]
+        return {
+            "event":    sum(x.get("event",    0) for x in all_s),
+            "found":    sum(x.get("found",    0) for x in all_s),
+            "saved":    sum(x.get("saved",    0) for x in all_s),
+            "skipped":  sum(x.get("skipped",  0) for x in all_s),
+            "error":    sum(x.get("error",    0) for x in all_s),
+            "bad_saved":sum(x.get("bad_saved",0) for x in all_s),
+            "page":     sum(x.get("page",     0) for x in all_s),
+            "day_idx":  sum(x.get("day_idx",  0) for x in all_s),
+            "total_days": total_days,
+            "day_label": f"{len(all_s)} luồng",
+            "thread_id": 0,
+            "current_item": " | ".join(
+                f"T{x.get('thread_id','?')}:{v}" for x, v in zip(all_s, items)),
+            "total_found": sum(x.get("total_found", x.get("found", 0)) for x in all_s),
+            "_parallel": len(all_s),
+        }
+
+    def _refresh_stat_lbl(self, s: dict):
+        n_threads = s.get("_parallel", 0)
+        day_idx   = s.get("day_idx", 0)
+        total_days = s.get("total_days", 0)
+        bad_part  = f"  |  Xấu: {s['bad_saved']}" if s.get("bad_saved") else ""
+        if n_threads > 1:
+            day_info = (f"[{n_threads} luồng] Ngày: {day_idx}/{total_days}  |  "
+                        if total_days else f"[{n_threads} luồng]  ")
+        else:
+            day_info = (f"Ngày: {s.get('day_label','')} ({day_idx}/{total_days})  |  "
+                        if total_days else "")
+        self.stat_lbl.config(
+            text=(f"{day_info}"
+                  f"Trang: {s.get('page',0)}  |  "
+                  f"SK: {s.get('event',0)}  |  "
+                  f"Tìm: {s.get('found',0)}  |  "
+                  f"Lưu: {s.get('saved',0)}"
+                  f"{bad_part}  |  "
+                  f"Bỏ qua: {s.get('skipped',0)}  |  "
+                  f"Lỗi: {s.get('error',0)}"))

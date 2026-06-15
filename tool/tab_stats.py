@@ -4,7 +4,7 @@ from tkinter import *
 from tkinter import filedialog, messagebox, ttk
 
 from .constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD, F_MONO
-from .settings import _CFG, _cfg_save, _cfg_dir
+from .settings import _CFG, _cfg_save, _cfg_dir, _push_history
 from .core_gt import analyze_gt, _heat_color
 
 HEATMAP_CHARS = list("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -273,6 +273,7 @@ class StatsTab(Frame):
             initialdir=_cfg_dir("stats.folder"))
         if folder:
             _CFG["stats.folder"] = folder; _cfg_save()
+            _push_history("h.stats.folder", folder)
             self._folder = folder
             self.lbl_path.config(text=folder)
             self._refresh()
@@ -283,6 +284,7 @@ class StatsTab(Frame):
             initialdir=_cfg_dir("stats.folder2"))
         if folder:
             _CFG["stats.folder2"] = folder; _cfg_save()
+            _push_history("h.stats.folder2", folder)
             self._folder2 = folder
             self.lbl_path2.config(text=folder)
             self._refresh()
@@ -625,6 +627,16 @@ class StatsTab(Frame):
         self.txt_len.configure(state=DISABLED)
 
     # ── EXPORT HEATMAP ────────────────────────────────────────────
+
+    # ── Shortcut aliases ─────────────────────────────────────────────
+
+    def _browse(self):
+        """Ctrl+O — chọn Dataset 1."""
+        self._load()
+
+    def _start(self):
+        """F5 — làm mới thống kê."""
+        self._refresh()
 
     def _export_heatmap(self):
         path = filedialog.asksaveasfilename(

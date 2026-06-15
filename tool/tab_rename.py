@@ -7,7 +7,7 @@ from tkinter import *
 from tkinter import filedialog, messagebox, ttk
 
 from .constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD
-from .settings import _bind_cfg, _cfg_dir
+from .settings import _bind_cfg, _cfg_dir, _bind_history, _push_history, _get_history
 from .core_rename import build_rename_plan, execute_rename_plan
 from .ui_helpers import _pb_row
 
@@ -38,6 +38,7 @@ class RenameTab(Frame):
         self.root  = root
         self._plan = []
         self._undo_map = {}
+        self._stop_flag = False
         self._build()
 
     def _build(self):
@@ -49,9 +50,10 @@ class RenameTab(Frame):
                bg=ACCENT2, fg="white", activebackground=ACCENT,
                activeforeground="white", font=F_BOLD,
                relief="flat", padx=14, pady=5, cursor="hand2").pack(side=LEFT)
-        Entry(row1, textvariable=self.v_folder, bg="#16162a", fg=TEXT,
-              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4,
-              width=52).pack(side=LEFT, padx=10)
+        self._folder_combo = ttk.Combobox(row1, textvariable=self.v_folder,
+                                           style="Dark.TCombobox", font=F_MAIN, width=52)
+        self._folder_combo.pack(side=LEFT, padx=10)
+        _bind_history("h.rename.src", self._folder_combo)
         Button(row1, text="🔍  Quét & Xem trước", command=self._scan,
                bg=ACCENT, fg="white", activebackground="#c04010",
                activeforeground="white", font=F_BOLD,
@@ -65,9 +67,10 @@ class RenameTab(Frame):
                bg="#2a4a2a", fg="white", activebackground="#3a6a3a",
                activeforeground="white", font=F_BOLD,
                relief="flat", padx=14, pady=5, cursor="hand2").pack(side=LEFT)
-        Entry(row2, textvariable=self.v_out, bg="#16162a", fg=TEXT,
-              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4,
-              width=52).pack(side=LEFT, padx=10)
+        self._out_combo = ttk.Combobox(row2, textvariable=self.v_out,
+                                        style="Dark.TCombobox", font=F_MAIN, width=52)
+        self._out_combo.pack(side=LEFT, padx=10)
+        _bind_history("h.rename.out", self._out_combo)
         Button(row2, text="✕  Xóa", command=lambda: self.v_out.set(""),
                bg=CARD, fg=DIM, font=F_MAIN,
                relief="flat", padx=8, pady=5, cursor="hand2").pack(side=LEFT)
@@ -138,16 +141,18 @@ class RenameTab(Frame):
               font=F_MAIN).grid(row=1, column=0, sticky=W)
         self.v_regex_find = StringVar()
         self.v_regex_find.trace_add("write", self._on_regex_change)
-        Entry(regex_frame, textvariable=self.v_regex_find, bg="#16162a", fg=TEXT,
-              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=3,
-              width=22).grid(row=1, column=1, padx=(6, 12), sticky=W)
+        _rf_combo = ttk.Combobox(regex_frame, textvariable=self.v_regex_find,
+                                  style="Dark.TCombobox", font=F_MAIN, width=22)
+        _rf_combo.grid(row=1, column=1, padx=(6, 12), sticky=W)
+        _bind_history("h.rename.regex_find", _rf_combo)
         Label(regex_frame, text="Thay bằng:", bg=CARD, fg=DIM,
               font=F_MAIN).grid(row=1, column=2, sticky=W)
         self.v_regex_replace = StringVar()
         self.v_regex_replace.trace_add("write", self._on_regex_change)
-        Entry(regex_frame, textvariable=self.v_regex_replace, bg="#16162a", fg=TEXT,
-              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=3,
-              width=22).grid(row=1, column=3, padx=(6, 0), sticky=W)
+        _rr_combo = ttk.Combobox(regex_frame, textvariable=self.v_regex_replace,
+                                  style="Dark.TCombobox", font=F_MAIN, width=22)
+        _rr_combo.grid(row=1, column=3, padx=(6, 0), sticky=W)
+        _bind_history("h.rename.regex_replace", _rr_combo)
         self.lbl_regex_err = Label(regex_frame, text="", bg=CARD,
                                    fg="#ff6060", font=("Segoe UI", 9))
         self.lbl_regex_err.grid(row=2, column=0, columnspan=4, sticky=W, pady=(2, 0))
@@ -160,9 +165,10 @@ class RenameTab(Frame):
               font=F_MAIN).grid(row=1, column=0, sticky=W)
         self.v_template = StringVar()
         self.v_template.trace_add("write", self._on_template_change)
-        Entry(tpl_frame, textvariable=self.v_template, bg="#16162a", fg=TEXT,
-              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=3,
-              width=32).grid(row=1, column=1, padx=(6, 0), sticky=W)
+        _tpl_combo = ttk.Combobox(tpl_frame, textvariable=self.v_template,
+                                   style="Dark.TCombobox", font=F_MAIN, width=32)
+        _tpl_combo.grid(row=1, column=1, padx=(6, 0), sticky=W)
+        _bind_history("h.rename.template", _tpl_combo)
         Label(tpl_frame, text="Tokens: {seq:04d}  {stem}  {ext}  {date}",
               bg=CARD, fg=DIM, font=("Segoe UI", 9)).grid(
               row=2, column=0, columnspan=2, sticky=W, pady=(2, 2))
@@ -208,14 +214,22 @@ class RenameTab(Frame):
         bot = Frame(self, bg=BG, padx=16, pady=8)
         bot.pack(fill=X)
 
-        self.btn_run = Button(bot, text="✏  Thực hiện đổi tên",
+        self.btn_run = Button(bot, text="✏  Thực hiện đổi tên  [Ctrl+S]",
                               command=self._run, state=DISABLED,
                               bg=ACCENT, fg="white", activebackground="#c04010",
                               activeforeground="white", font=F_BOLD,
                               relief="flat", padx=20, pady=8, cursor="hand2")
         self.btn_run.pack(side=LEFT)
 
-        self.btn_undo = Button(bot, text="↩  Hoàn tác", command=self._undo,
+        self.btn_stop = Button(bot, text="⏹  Dừng  [Esc]",
+                               command=self._stop, state=DISABLED,
+                               bg="#c0392b", fg="white",
+                               activebackground="#e74c3c",
+                               activeforeground="white", font=F_BOLD,
+                               relief="flat", padx=14, pady=8, cursor="hand2")
+        self.btn_stop.pack(side=LEFT, padx=(8, 0))
+
+        self.btn_undo = Button(bot, text="↩  Hoàn tác  [Ctrl+Z]", command=self._undo,
                                state=DISABLED,
                                bg=ACCENT2, fg="white",
                                activebackground="#6a5fac",
@@ -241,12 +255,18 @@ class RenameTab(Frame):
     def _browse(self):
         p = filedialog.askdirectory(title="Chọn folder nguồn",
                                     initialdir=_cfg_dir("rename.src"))
-        if p: self.v_folder.set(p)
+        if p:
+            self.v_folder.set(p)
+            _push_history("h.rename.src", p)
+            self._folder_combo["values"] = _get_history("h.rename.src")
 
     def _browse_out(self):
         p = filedialog.askdirectory(title="Chọn folder output",
                                     initialdir=_cfg_dir("rename.out"))
-        if p: self.v_out.set(p)
+        if p:
+            self.v_out.set(p)
+            _push_history("h.rename.out", p)
+            self._out_combo["values"] = _get_history("h.rename.out")
 
     def _open_out(self):
         p = self.v_out.get().strip()
@@ -442,7 +462,9 @@ class RenameTab(Frame):
             return
 
         pending_plan = list(self._plan)
+        self._stop_flag = False
         self.btn_run.config(state=DISABLED, text="⏳  Đang xử lý…")
+        self.btn_stop.config(state=NORMAL)
         self.btn_undo.config(state=DISABLED)
         self.pb["value"] = 0
 
@@ -450,10 +472,11 @@ class RenameTab(Frame):
             try:
                 execute_rename_plan(
                     pending_plan,
-                    action   = action,
-                    log      = lambda m: self.root.after(
+                    action      = action,
+                    log         = lambda m: self.root.after(
                         0, lambda msg=m: self.lbl_status.config(text=msg)),
-                    progress = lambda d, t: self.root.after(0, self._set_pb, d, t),
+                    progress    = lambda d, t: self.root.after(0, self._set_pb, d, t),
+                    stop_check  = lambda: self._stop_flag,
                 )
                 self.root.after(0, self._done, True, pending_plan, action)
             except Exception as e:
@@ -468,7 +491,8 @@ class RenameTab(Frame):
         self.pb_lbl.config(text=f"{done:,} / {total:,}  ({pct}%)")
 
     def _done(self, success, completed_plan, action):
-        self.btn_run.config(state=NORMAL, text="✏  Thực hiện đổi tên")
+        self.btn_run.config(state=NORMAL, text="✏  Thực hiện đổi tên  [Ctrl+S]")
+        self.btn_stop.config(state=DISABLED)
         if success:
             self.lbl_status.config(text="✅  Hoàn thành!")
             self._plan = []
@@ -519,6 +543,19 @@ class RenameTab(Frame):
             )
         else:
             self.lbl_status.config(text=f"↩  Đã hoàn tác {done_count} file.")
+
+    def _stop(self):
+        """Escape — dừng tiến trình đổi tên đang chạy."""
+        self._stop_flag = True
+        self.btn_stop.config(state=DISABLED)
+        self.lbl_status.config(text="⚠  Đang dừng…")
+
+    def _save(self):
+        """Ctrl+S — thực hiện đổi tên (nếu đã có plan), hoặc scan trước."""
+        if self._plan:
+            self._run()
+        else:
+            self._scan()
 
     def _clear(self):
         self.tree.delete(*self.tree.get_children())

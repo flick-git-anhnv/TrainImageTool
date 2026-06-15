@@ -16,6 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 from .constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD, F_MONO
 from .imports import _cv2_mod, _CV2_OK, _req_mod, _REQUESTS_OK
 from .settings import _bind_cfg
+from .ui_helpers import DateTimePicker
 
 try:
     from PIL import Image as _PIL, ImageTk as _ITk
@@ -352,11 +353,11 @@ class BadImageViewer(Toplevel):
         self._var_plate.trace_add("write", lambda *_: self._apply_filter())
 
         Label(tb, text="Từ:", bg=CARD, fg=TEXT, font=F_MAIN).pack(side=LEFT)
-        Entry(tb, textvariable=self._var_date_from, width=10, **_ENTRY_STYLE).pack(
-              side=LEFT, padx=(4, 4))
+        DateTimePicker(tb, textvariable=self._var_date_from, mode="date",
+                       bg=CARD).pack(side=LEFT, padx=(4, 4))
         Label(tb, text="→", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
-        Entry(tb, textvariable=self._var_date_to, width=10, **_ENTRY_STYLE).pack(
-              side=LEFT, padx=(4, 8))
+        DateTimePicker(tb, textvariable=self._var_date_to, mode="date",
+                       bg=CARD).pack(side=LEFT, padx=(4, 8))
         self._var_date_from.trace_add("write", lambda *_: self._apply_filter())
         self._var_date_to.trace_add("write",   lambda *_: self._apply_filter())
 

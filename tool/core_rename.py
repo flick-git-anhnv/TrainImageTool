@@ -56,8 +56,9 @@ def build_rename_plan(parent_dir, out_dir, per_folder, padding,
     return plan
 
 
-def execute_rename_plan(plan, action, log, progress):
-    """action: 'rename' | 'copy' | 'move'"""
+def execute_rename_plan(plan, action, log, progress, stop_check=None):
+    """action: 'rename' | 'copy' | 'move'. stop_check: callable() → bool để dừng sớm."""
+    _should_stop = stop_check if callable(stop_check) else lambda: False
     total = len(plan)
     if not total:
         log("⚠  Không có file nào cần xử lý."); return
@@ -72,6 +73,9 @@ def execute_rename_plan(plan, action, log, progress):
         done = 0
         lbl_done = 0
         for src, dst in plan:
+            if _should_stop():
+                log(f"⚠  Đã dừng sau {done}/{total} file.")
+                return
             if action == "copy":
                 shutil.copy2(src, dst)
             else:

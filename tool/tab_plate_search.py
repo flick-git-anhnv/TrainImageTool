@@ -9,7 +9,7 @@ from tkinter import *
 from tkinter import ttk, filedialog, messagebox
 
 from .constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD, F_MONO
-from .settings  import _bind_cfg, _CFG, _cfg_save
+from .settings  import _bind_cfg, _CFG, _cfg_save, _push_history
 
 try:
     from PIL import Image, ImageTk
@@ -250,6 +250,7 @@ class PlateSearchTab(Frame):
                                   cursor="crosshair")
         self.img_canvas.pack(fill=BOTH, expand=True)
         self.img_canvas.bind("<Configure>", lambda _: self._rerender())
+        self.img_canvas.bind("<Double-Button-1>", self._on_img_zoom)
 
         self.v_fname = StringVar(value="Chọn một dòng để xem ảnh")
         Label(frame, textvariable=self.v_fname,
@@ -273,6 +274,7 @@ class PlateSearchTab(Frame):
             parent=self.root,
         )
         if path:
+            _push_history("h.plate_search.gt", path)
             self._load_file_from_path(path)
 
     def _load_file_from_path(self, path: str):
@@ -300,6 +302,7 @@ class PlateSearchTab(Frame):
         if d:
             self.img_dir = d
             self.v_imgdir.set(d)
+            _push_history("h.plate_search.imgdir", d)
             sel = self.tree.selection()
             if sel:
                 vals = self.tree.item(sel[0], "values")
@@ -565,6 +568,17 @@ class PlateSearchTab(Frame):
         self.img_canvas.create_image(cw // 2, ch // 2, anchor=CENTER,
                                       image=self._photo_ref)
 
+    def _on_img_zoom(self, _event=None):
+        if not self._current_img_path or not _PIL_OK:
+            return
+        try:
+            img = Image.open(self._current_img_path).convert("RGB")
+        except Exception:
+            return
+        from .ui_helpers import _zoom_image_window
+        fname = os.path.basename(self._current_img_path)
+        _zoom_image_window(self.root, img, fname)
+
     def _draw_text(self, msg: str):
         self._photo_ref = None
         cw = self.img_canvas.winfo_width()  or 400
@@ -598,3 +612,35 @@ class PlateSearchTab(Frame):
     def _copy(self, text: str):
         self.clipboard_clear()
         self.clipboard_append(text)
+
+    # ── Navigation aliases cho app.py ←/→ routing ────────────────────
+
+    def _prev_image(self):
+        """← — chọn dòng trên trong bảng kết quả."""
+        sel = self.tree.selection()
+        if sel:
+            prev = self.tree.prev(sel[0])
+            if prev:
+                self.tree.selection_set(prev)
+                self.tree.see(prev)
+                self._on_row_select()
+        elif self.tree.get_children():
+            last = self.tree.get_children()[-1]
+            self.tree.selection_set(last)
+            self.tree.see(last)
+            self._on_row_select()
+
+    def _next_image(self):
+        """→ — chọn dòng dưới trong bảng kết quả."""
+        sel = self.tree.selection()
+        if sel:
+            nxt = self.tree.next(sel[0])
+            if nxt:
+                self.tree.selection_set(nxt)
+                self.tree.see(nxt)
+                self._on_row_select()
+        elif self.tree.get_children():
+            first = self.tree.get_children()[0]
+            self.tree.selection_set(first)
+            self.tree.see(first)
+            self._on_row_select()

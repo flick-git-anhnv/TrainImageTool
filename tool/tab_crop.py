@@ -3,10 +3,10 @@ import os
 import threading
 from pathlib import Path
 from tkinter import *
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 from .constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD
-from .settings import _bind_cfg
+from .settings import _bind_cfg, _bind_history, _push_history, _get_history
 from .core_crop import run_crop_by_label
 from .ui_helpers import (
     _folder_row, _pb_row, _make_logbox, _append_log,
@@ -41,9 +41,9 @@ class CropByLabelTab(Frame):
         _bind_cfg("crop.img", self.v_img)
         _bind_cfg("crop.lbl", self.v_lbl)
         _bind_cfg("crop.out", self.v_out)
-        _folder_row(top, "📁  Thư mục ảnh",         self.v_img, 0)
-        _folder_row(top, "🏷  Thư mục label (.txt)", self.v_lbl, 1)
-        _folder_row(top, "💾  Thư mục output",       self.v_out, 2)
+        _folder_row(top, "📁  Thư mục ảnh",         self.v_img, 0, history_key="h.crop.img")
+        _folder_row(top, "🏷  Thư mục label (.txt)", self.v_lbl, 1, history_key="h.crop.lbl")
+        _folder_row(top, "💾  Thư mục output",       self.v_out, 2, history_key="h.crop.out")
 
         cr = Frame(top, bg=BG)
         cr.grid(row=3, column=0, columnspan=3, sticky=EW, pady=(8, 0))
@@ -52,9 +52,10 @@ class CropByLabelTab(Frame):
         self.v_classes = StringVar(
             value="car, motorbike, bus, truck, bicycle, license_plate")
         _bind_cfg("crop.classes", self.v_classes)
-        Entry(cr, textvariable=self.v_classes, bg=CARD, fg=TEXT,
-              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).pack(
-              side=LEFT, fill=X, expand=True, padx=(8, 0))
+        _cls_combo = ttk.Combobox(cr, textvariable=self.v_classes,
+                                   style="Dark.TCombobox", font=F_MAIN)
+        _cls_combo.pack(side=LEFT, fill=X, expand=True, padx=(8, 0))
+        _bind_history("h.crop.classes", _cls_combo)
         Button(cr, text="Cập nhật ↺", command=self._refresh_classes,
                bg=ACCENT2, fg="white", activebackground=ACCENT,
                activeforeground="white", font=F_MAIN, relief="flat",
@@ -137,11 +138,18 @@ class CropByLabelTab(Frame):
         sb.config(command=self._file_listbox.yview)
         self._file_listbox.bind("<<ListboxSelect>>", self._on_file_select)
 
-        self._preview_label = Label(
-            parent, bg="#16162a", text="(chọn ảnh để xem)", fg=DIM,
-            font=("Consolas", 8), width=_PREVIEW_W, height=_PREVIEW_H,
+        self._preview_canvas = Canvas(
+            parent, bg="#16162a",
+            width=_PREVIEW_W, height=_PREVIEW_H,
+            bd=0, highlightthickness=0,
         )
-        self._preview_label.pack(padx=6, pady=(2, 6))
+        self._preview_canvas.pack(padx=6, pady=(2, 6))
+        self._preview_pil_full = None
+        self._preview_canvas.bind("<Double-Button-1>", self._on_preview_zoom)
+        self._preview_canvas.create_text(
+            _PREVIEW_W // 2, _PREVIEW_H // 2,
+            text="(chọn ảnh để xem)", fill=DIM, font=("Consolas", 8),
+        )
 
         self._preview_info = Label(
             parent, bg=BG, fg=DIM, font=("Consolas", 8), text="", anchor=W,
@@ -151,6 +159,19 @@ class CropByLabelTab(Frame):
         Button(parent, text="↺ Làm mới", command=self._refresh_file_list,
                bg=CARD, fg=DIM, font=F_MAIN, relief="flat",
                padx=8, pady=3, cursor="hand2").pack(pady=(0, 4))
+
+    def _on_preview_zoom(self, _event=None):
+        if self._preview_pil_full is None:
+            return
+        from .ui_helpers import _zoom_image_window
+        _zoom_image_window(self.root, self._preview_pil_full, "Phóng to ảnh gốc")
+
+    def _set_preview_msg(self, msg):
+        self._preview_canvas.delete("all")
+        self._preview_canvas.create_text(
+            _PREVIEW_W // 2, _PREVIEW_H // 2,
+            text=msg, fill=DIM, font=("Consolas", 8), width=_PREVIEW_W - 8,
+        )
 
     def _build_opts(self, p):
         def _row(label, var, unit="", row=0, w=6):
@@ -214,7 +235,7 @@ class CropByLabelTab(Frame):
     def _refresh_file_list(self):
         img_dir = self.v_img.get().strip()
         self._file_listbox.delete(0, END)
-        self._preview_label.config(image="", text="(chọn ảnh để xem)")
+        self._set_preview_msg("(chọn ảnh để xem)")
         self._preview_info.config(text="")
         if not img_dir or not Path(img_dir).is_dir():
             return
@@ -241,21 +262,22 @@ class CropByLabelTab(Frame):
 
     def _render_preview(self, img_path, lbl_path):
         if not _PIL_OK:
-            self._preview_label.config(image="", text="PIL không khả dụng")
+            self._set_preview_msg("PIL không khả dụng")
             return
         if not img_path.exists():
-            self._preview_label.config(image="", text="Ảnh không tồn tại")
+            self._set_preview_msg("Ảnh không tồn tại")
             return
 
         try:
             img = _PILImage.open(img_path).convert("RGB")
             iw, ih = img.size
         except Exception as e:
-            self._preview_label.config(image="", text=f"Lỗi ảnh:\n{e}")
+            self._set_preview_msg(f"Lỗi ảnh:\n{e}")
             return
+        self._preview_pil_full = img
 
         if not lbl_path.exists():
-            self._preview_label.config(image="", text="Không có label")
+            self._set_preview_msg("Không có label")
             self._preview_info.config(text=f"{img_path.name}  {iw}×{ih}")
             return
 
@@ -273,7 +295,7 @@ class CropByLabelTab(Frame):
             pass
 
         if not boxes:
-            self._preview_label.config(image="", text="Label rỗng")
+            self._set_preview_msg("Label rỗng")
             self._preview_info.config(text=f"{img_path.name}  {iw}×{ih}")
             return
 
@@ -309,7 +331,7 @@ class CropByLabelTab(Frame):
 
         cw, ch = x2 - x1, y2 - y1
         if cw <= 0 or ch <= 0:
-            self._preview_label.config(image="", text="Bbox không hợp lệ")
+            self._set_preview_msg("Bbox không hợp lệ")
             return
 
         crop = img.crop((x1, y1, x2, y2))
@@ -325,7 +347,8 @@ class CropByLabelTab(Frame):
         canvas.paste(crop_disp, (ox, oy))
 
         self._preview_photo = _ImageTk.PhotoImage(canvas)
-        self._preview_label.config(image=self._preview_photo, text="")
+        self._preview_canvas.delete("all")
+        self._preview_canvas.create_image(0, 0, anchor=NW, image=self._preview_photo)
 
         class_map = {i: name for i, (name, _) in self._class_vars.items()}
         cname = class_map.get(cid, f"class{cid}")
@@ -389,6 +412,16 @@ class CropByLabelTab(Frame):
         self._stop_event.set()
         self.btn_stop.config(state=DISABLED)
         _append_log(self.log, "⚠  Đang dừng sau ảnh hiện tại…")
+
+    def _browse(self):
+        """Ctrl+O — mở hộp thoại chọn thư mục ảnh."""
+        from tkinter import filedialog
+        from .settings import _cfg_dir, _push_history
+        p = filedialog.askdirectory(title="Chọn thư mục ảnh",
+                                    initialdir=_cfg_dir("crop.img"))
+        if p:
+            self.v_img.set(p)
+            _push_history("h.crop.img", p)
 
     def _reset_state(self):
         out = self.v_out.get().strip()

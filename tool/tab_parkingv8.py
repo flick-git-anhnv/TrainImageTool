@@ -12,10 +12,12 @@ from .constants import (
     _P8_LOGIN_URL, _P8_API_URL, _P8_CLIENT_ID, _P8_CLIENT_SECRET,
     _P8_USERNAME, _P8_PASSWORD,
 )
-from .settings import _bind_cfg, _cfg_dir
+from .settings import _bind_cfg, _cfg_dir, _bind_history, _push_history, _get_history
 from .imports import _REQUESTS_OK, _CV2_OK
 from .parkingv8_image import Parkingv8Worker
 from .bad_image_viewer import BadImageViewer
+from .migrate_structure import open_migrate_window as _open_migrate_window
+from .ui_helpers import DateTimePicker
 
 
 class Parkingv8ImageTab(Frame):
@@ -33,6 +35,8 @@ class Parkingv8ImageTab(Frame):
         self._failed_items = []
         self._run_start_time = None
         self._last_stat = {}
+        self._all_thread_stats: dict = {}
+        self._parallel_workers: list = []
         self._build()
         self._poll()
 
@@ -76,17 +80,15 @@ class Parkingv8ImageTab(Frame):
             row=0, column=0, padx=(0, 4), sticky=W)
         self.from_var = StringVar(value="2026-05-01 00:00:00")
         _bind_cfg("p8.from", self.from_var)
-        Entry(f, textvariable=self.from_var, width=22,
-              bg=CARD, fg=TEXT, insertbackground=TEXT,
-              relief="flat", font=F_MAIN, bd=4).grid(row=0, column=1, padx=4)
+        DateTimePicker(f, textvariable=self.from_var, mode="datetime").grid(
+            row=0, column=1, padx=4)
         Label(f, text="Đến:", bg=BG, fg=TEXT, font=F_MAIN).grid(
             row=0, column=2, padx=(14, 4))
         self.to_var = StringVar(value=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
         _bind_cfg("p8.to", self.to_var)
-        Entry(f, textvariable=self.to_var, width=22,
-              bg=CARD, fg=TEXT, insertbackground=TEXT,
-              relief="flat", font=F_MAIN, bd=4).grid(row=0, column=3, padx=4)
-        Label(f, text="Định dạng: YYYY-MM-DD HH:MM:SS  (giờ UTC — Việt Nam = UTC+7)",
+        DateTimePicker(f, textvariable=self.to_var, mode="datetime").grid(
+            row=0, column=3, padx=4)
+        Label(f, text="Chọn giờ UTC — Việt Nam = UTC+7",
               font=("Segoe UI", 8), fg=DIM, bg=BG).grid(
             row=1, column=1, columnspan=3, sticky=W, pady=(2, 0))
 
@@ -97,16 +99,16 @@ class Parkingv8ImageTab(Frame):
         f.columnconfigure(0, weight=1)
         self.out_var = StringVar(value=str(Path.cwd() / "images_p8"))
         _bind_cfg("p8.out", self.out_var)
-        Entry(f, textvariable=self.out_var,
-              bg=CARD, fg=TEXT, insertbackground=TEXT,
-              relief="flat", font=F_MAIN, bd=4).grid(
-            row=0, column=0, sticky=EW, padx=(0, 8))
+        self._out_combo = ttk.Combobox(f, textvariable=self.out_var,
+              style="Dark.TCombobox", font=F_MAIN)
+        self._out_combo.grid(row=0, column=0, sticky=EW, padx=(0, 8))
+        _bind_history("h.p8.out", self._out_combo)
         Button(f, text="Chọn…", command=self._browse,
                bg=ACCENT2, fg="white", font=F_MAIN,
                activebackground=ACCENT, activeforeground="white",
                relief="flat", padx=10, cursor="hand2").grid(row=0, column=1)
         Label(p,
-              text="Cấu trúc: <thư mục> / <tên làn> / <loại xe> / <YYYY-MM-DD> / HHmmss_BSX_type.jpg"
+              text="Cấu trúc: <thư mục> / <tên làn> / <loại xe> / <YYYY-MM-DD> / <HH> / HHmmss_BSX_type.jpg"
                    "   (loại xe: o_to | xe_may | xe_dap | xe_tai)",
               font=("Segoe UI", 8), fg=DIM, bg=BG, anchor=W).pack(
             fill=X, pady=(3, 0))
@@ -318,6 +320,12 @@ class Parkingv8ImageTab(Frame):
             activebackground="#5a4fa0", activeforeground="white",
             relief="flat", padx=12, pady=4, cursor="hand2",
         ).pack(side=LEFT, padx=(8, 0))
+        Button(
+            f, text="Hiệu chỉnh", command=self._migrate_folder,
+            bg="#2d4a1e", fg="#a0d080", font=F_MAIN,
+            activebackground="#3a6028", activeforeground="white",
+            relief="flat", padx=12, pady=4, cursor="hand2",
+        ).pack(side=LEFT, padx=(8, 0))
         self.status_lbl = Label(f, text="Sẵn sàng",
                                 font=F_MAIN, fg=ACCENT2, bg=BG)
         self.status_lbl.pack(side=RIGHT)
@@ -391,6 +399,10 @@ class Parkingv8ImageTab(Frame):
             self._dash_frame.pack_forget()
             self._dash_visible = False
 
+    # Màu log theo luồng: T1=cam, T2=xanh dương, T3=xanh lá, T4=vàng, ...
+    _THREAD_COLORS = ["#F05922", "#4fc3f7", "#81c784", "#ffb74d",
+                      "#f06292", "#ba68c8", "#4dd0e1", "#ff8a65"]
+
     def _build_log(self, p):
         self._sep(p, "Nhật ký")
         f = Frame(p, bg=BG)
@@ -403,6 +415,8 @@ class Parkingv8ImageTab(Frame):
             relief="flat", wrap=WORD,
             insertbackground="#d4d4d4", state=DISABLED)
         self.log_txt.grid(row=0, column=0, sticky=NSEW)
+        for i, color in enumerate(self._THREAD_COLORS, 1):
+            self.log_txt.tag_configure(f"T{i}", foreground=color)
         sb = ttk.Scrollbar(f, command=self.log_txt.yview)
         sb.grid(row=0, column=1, sticky=NS)
         self.log_txt["yscrollcommand"] = sb.set
@@ -421,6 +435,8 @@ class Parkingv8ImageTab(Frame):
                                     initialdir=_cfg_dir("p8.out"))
         if d:
             self.out_var.set(d)
+            _push_history("h.p8.out", d)
+            self._out_combo["values"] = _get_history("h.p8.out")
 
     # ── pause/resume ──────────────────────────────────────────────────────────
 
@@ -475,12 +491,19 @@ class Parkingv8ImageTab(Frame):
         self._thread = threading.Thread(target=self._run_worker, daemon=True)
         self._thread.start()
 
-    _LOG_MAX = 1000
+    _LOG_MAX = 2000
 
     def _log(self, msg):
+        import re as _re
         self.log_txt.configure(state=NORMAL)
         ts = datetime.now().strftime("%H:%M:%S")
-        self.log_txt.insert(END, f"[{ts}] {msg}\n")
+        line = f"[{ts}] {msg}\n"
+        m = _re.match(r'\[T(\d+)\]', msg)
+        if m:
+            tag = f"T{m.group(1)}"
+            self.log_txt.insert(END, line, (tag,))
+        else:
+            self.log_txt.insert(END, line)
         lines = int(self.log_txt.index("end-1c").split(".")[0])
         if lines > self._LOG_MAX:
             self.log_txt.delete("1.0", f"{lines - self._LOG_MAX}.0")
@@ -569,12 +592,15 @@ class Parkingv8ImageTab(Frame):
     def _stop(self):
         if self._worker:
             self._worker.stop()
+        for w in self._parallel_workers:
+            w.stop()
         self._running = False
         self._paused  = False
         self._pause_event.set()
         self.stop_btn.config(state=DISABLED)
         self.pause_btn.config(state=DISABLED, text="⏸  Tạm dừng", fg=TEXT)
         self.start_btn.config(state=NORMAL)
+        self.pbar.stop()
         self.pbar.config(value=0)
         self.pct_lbl.config(text="0%")
         self.eta_lbl.config(text="ETA: --:--")
@@ -647,23 +673,26 @@ class Parkingv8ImageTab(Frame):
             while True:
                 s = self._stat_q.get_nowait()
                 self._update_progress(s)
-                day_info = (
-                    f"Ngày: {s['day_label']} ({s['day_idx']}/{s['total_days']})  |  "
-                    if s.get("total_days") else "")
-                bad_part = (f"  |  Xấu: {s['bad_saved']}"
-                            if s.get("bad_saved") else "")
-                self.stat_lbl.config(
-                    text=(f"{day_info}"
-                          f"Trang: {s['page']}  |  "
-                          f"SK: {s['event']}  |  "
-                          f"Tìm: {s['found']}  |  "
-                          f"Lưu: {s['saved']}"
-                          f"{bad_part}  |  "
-                          f"Bỏ qua: {s.get('skipped', 0)}  |  "
-                          f"Lỗi: {s['error']}"))
+                self._refresh_stat_lbl(s)
         except queue.Empty:
             pass
         self.root.after(200, self._poll)
+
+    def _refresh_stat_lbl(self, s: dict):
+        day_info = (
+            f"Ngày: {s.get('day_label','')} ({s.get('day_idx',0)}/{s.get('total_days',0)})  |  "
+            if s.get("total_days") else "")
+        bad_part = (f"  |  Xấu: {s.get('bad_saved',0)}"
+                    if s.get("bad_saved") else "")
+        self.stat_lbl.config(
+            text=(f"{day_info}"
+                  f"Trang: {s.get('page',0)}  |  "
+                  f"SK: {s.get('event',0)}  |  "
+                  f"Tìm: {s.get('found',0)}  |  "
+                  f"Lưu: {s.get('saved',0)}"
+                  f"{bad_part}  |  "
+                  f"Bỏ qua: {s.get('skipped', 0)}  |  "
+                  f"Lỗi: {s.get('error',0)}"))
 
     # ── statistics popup ──────────────────────────────────────────────────────
 
@@ -673,6 +702,14 @@ class Parkingv8ImageTab(Frame):
             self._bad_win.lift()
             return
         self._bad_win = BadImageViewer(self.root, out)
+
+    def _migrate_folder(self):
+        out = Path(self.out_var.get().strip())
+        if not out.exists():
+            messagebox.showerror("Lỗi", "Thư mục không tồn tại."); return
+        if hasattr(self, "_migrate_win") and self._migrate_win.winfo_exists():
+            self._migrate_win.lift(); return
+        self._migrate_win = _open_migrate_window(self.root, out)
 
     _VTYPE_COLORS = {
         "o_to":   "#4A3F8C",
@@ -752,16 +789,19 @@ class Parkingv8ImageTab(Frame):
             for img in out_path.rglob("*.jpg"):
                 try:
                     p = img.relative_to(out_path).parts
-                    if len(p) != 4:
+                    if len(p) == 5:
+                        lane, vtype, date_s, hour_s, fname = p
+                    elif len(p) == 4:
+                        lane, vtype, date_s, fname = p
+                        hour_s = fname[:2]
+                    else:
                         continue
-                    lane, vtype, date_s, fname = p
                 except Exception:
                     continue
                 lt[lane][vtype]  += 1
                 bd[date_s][lane] += 1
-                h = fname[:2]
-                if h.isdigit() and 0 <= int(h) <= 23:
-                    bhl[int(h)][lane] += 1
+                if hour_s.isdigit() and 0 <= int(hour_s) <= 23:
+                    bhl[int(hour_s)][lane] += 1
         return {"lt": dict(lt), "date": dict(bd), "hour": dict(bhl)}
 
     @staticmethod

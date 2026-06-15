@@ -16,7 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from .constants import (BG, CARD, ACCENT, ACCENT2, TEXT, DIM, SUCCESS,
                          F_MAIN, F_BOLD, IMAGE_EXTENSIONS)
-from .settings import _bind_cfg, _cfg_dir
+from .settings import _bind_cfg, _cfg_dir, _bind_history, _push_history, _get_history
 from .ui_helpers import _folder_row, _make_logbox, _append_log
 
 try:
@@ -75,12 +75,29 @@ class TrainTab(Frame):
         self._device_var      = StringVar(value="0")
         self._project_var     = StringVar()
         self._name_var        = StringVar(value="kztek_train")
-        self._split_ratio_var = IntVar(value=90)
+        self._split_ratio_var = IntVar(value=80)
         self._recursive_var   = BooleanVar(value=False)
         _bind_cfg("train.project", self._project_var)
 
         self._early_stop_var     = BooleanVar(value=False)
         self._patience_var       = StringVar(value="10")
+
+        self._optimizer_var     = StringVar(value="AdamW")
+        self._lr0_var           = StringVar(value="0.01")
+        self._lrf_var           = StringVar(value="0.01")
+        self._close_mosaic_var  = StringVar(value="10")
+        self._cache_var         = StringVar(value="False")
+        self._workers_var       = StringVar(value="4")
+        self._cos_lr_var        = BooleanVar(value=False)
+        self._weight_decay_var  = StringVar(value="0.0005")
+        _bind_cfg("train.optimizer",    self._optimizer_var)
+        _bind_cfg("train.lr0",          self._lr0_var)
+        _bind_cfg("train.lrf",          self._lrf_var)
+        _bind_cfg("train.close_mosaic", self._close_mosaic_var)
+        _bind_cfg("train.cache",        self._cache_var)
+        _bind_cfg("train.workers",      self._workers_var)
+        _bind_cfg("train.cos_lr",       self._cos_lr_var)
+        _bind_cfg("train.weight_decay", self._weight_decay_var)
 
         self._proc       = None
         self._out_queue  = queue.Queue()
@@ -109,8 +126,8 @@ class TrainTab(Frame):
         g = Frame(top, bg=CARD)
         g.pack(fill=X)
         g.columnconfigure(1, weight=1)
-        _folder_row(g, "Thư mục train :", self.train_dir, 0, bg=CARD)
-        _folder_row(g, "Thư mục val   :", self.val_dir,   1, bg=CARD)
+        _folder_row(g, "Thư mục train :", self.train_dir, 0, bg=CARD, history_key="h.train.dir")
+        _folder_row(g, "Thư mục val   :", self.val_dir,   1, bg=CARD, history_key="h.train.val")
 
         Label(g, text="Tỷ lệ tự chia:", bg=CARD, fg=DIM,
               font=F_MAIN, width=26, anchor=W).grid(row=2, column=0, sticky=W, pady=4)
@@ -131,9 +148,10 @@ class TrainTab(Frame):
 
         Label(g, text="Danh sách nhãn:", bg=CARD, fg=DIM,
               font=F_MAIN, width=26, anchor=W).grid(row=3, column=0, sticky=W, pady=5)
-        Entry(g, textvariable=self._labels_var, bg=CARD, fg=TEXT,
-              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).grid(
-                  row=3, column=1, sticky=EW, padx=(8, 8))
+        _lbl_combo = ttk.Combobox(g, textvariable=self._labels_var,
+                                   style="Dark.TCombobox", font=F_MAIN)
+        _lbl_combo.grid(row=3, column=1, sticky=EW, padx=(8, 8))
+        _bind_history("h.train.labels", _lbl_combo)
         Button(g, text="📄 Tạo data.yaml", command=self._gen_yaml_only,
                bg=ACCENT2, fg="white", activebackground=ACCENT, activeforeground="white",
                font=F_MAIN, relief="flat", padx=10, cursor="hand2").grid(row=3, column=2)
@@ -178,17 +196,25 @@ class TrainTab(Frame):
             row=3, column=0, sticky=W, pady=(6, 0))
         pr = Frame(pf, bg=CARD)
         pr.grid(row=3, column=1, columnspan=9, sticky=EW, pady=(6, 0))
-        Entry(pr, textvariable=self._project_var, bg="#16162a", fg=TEXT,
-              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4, width=30).pack(side=LEFT)
-        Button(pr, text="…",
-               command=lambda: (p := filedialog.askdirectory(
-                   initialdir=_cfg_dir("train.project"))) and self._project_var.set(p),
+        _proj_combo = ttk.Combobox(pr, textvariable=self._project_var,
+                                    style="Dark.TCombobox", font=F_MAIN, width=30)
+        _proj_combo.pack(side=LEFT)
+        _bind_history("h.train.project", _proj_combo)
+
+        def _pick_project():
+            p = filedialog.askdirectory(initialdir=_cfg_dir("train.project"))
+            if p:
+                self._project_var.set(p)
+                _push_history("h.train.project", p)
+                _proj_combo["values"] = _get_history("h.train.project")
+        Button(pr, text="…", command=_pick_project,
                bg=ACCENT2, fg="white", font=F_MAIN, relief="flat",
                padx=8, cursor="hand2").pack(side=LEFT, padx=(4, 16))
         Label(pr, text="Run name:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
-        Entry(pr, textvariable=self._name_var, bg="#16162a", fg=TEXT,
-              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4, width=18).pack(
-                  side=LEFT, padx=(4, 0))
+        _name_combo = ttk.Combobox(pr, textvariable=self._name_var,
+                                    style="Dark.TCombobox", font=F_MAIN, width=18)
+        _name_combo.pack(side=LEFT, padx=(4, 0))
+        _bind_history("h.train.name", _name_combo)
 
         # ── Early stopping row ────────────────────────────────────────────
         es_row = Frame(pf, bg=CARD)
@@ -209,6 +235,44 @@ class TrainTab(Frame):
                                       font=("Segoe UI", 8, "italic"))
         self._early_note_lbl.pack(side=LEFT, padx=(14, 0))
         self._on_early_stop_toggle()
+
+        # ── Advanced hyperparameters ──────────────────────────────────────
+        Label(pf, text="Tham số nâng cao:", bg=CARD, fg=DIM,
+              font=F_BOLD).grid(row=5, column=0, sticky=W, pady=(8, 2))
+        adv1 = Frame(pf, bg=CARD)
+        adv1.grid(row=5, column=1, columnspan=9, sticky=W, pady=(8, 2))
+
+        Label(adv1, text="Optimizer:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        ttk.Combobox(adv1, textvariable=self._optimizer_var, width=8,
+                     state="readonly", font=F_MAIN,
+                     values=["auto", "SGD", "Adam", "AdamW"]
+                     ).pack(side=LEFT, padx=(4, 14))
+
+        for _lbl, _var, _w in [
+            ("LR0:",         self._lr0_var,          7),
+            ("LRF:",         self._lrf_var,          7),
+            ("Close Mosaic:",self._close_mosaic_var,  4),
+            ("Workers:",     self._workers_var,       4),
+            ("Weight Decay:",self._weight_decay_var,  9),
+        ]:
+            Label(adv1, text=_lbl, bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+            Entry(adv1, textvariable=_var, bg="#16162a", fg=TEXT,
+                  insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4,
+                  width=_w).pack(side=LEFT, padx=(4, 14))
+
+        adv2 = Frame(pf, bg=CARD)
+        adv2.grid(row=6, column=0, columnspan=10, sticky=W, pady=(2, 0))
+        Checkbutton(adv2, text="Cosine LR", variable=self._cos_lr_var,
+                    bg=CARD, fg=TEXT, activebackground=CARD, activeforeground=TEXT,
+                    selectcolor="#16162a", font=F_MAIN).pack(side=LEFT)
+        Label(adv2, text="  Cache:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        ttk.Combobox(adv2, textvariable=self._cache_var, width=6,
+                     state="readonly", font=F_MAIN,
+                     values=["False", "ram", "disk"]).pack(side=LEFT, padx=(4, 0))
+        Label(adv2,
+              text="   (ram = load toàn bộ ảnh vào RAM, tăng tốc đáng kể)",
+              bg=CARD, fg=DIM,
+              font=("Segoe UI", 8, "italic")).pack(side=LEFT, padx=(8, 0))
 
         # ── Control bar ───────────────────────────────────────────────────
         ctrl = Frame(self, bg=BG, padx=12, pady=6)
@@ -255,8 +319,16 @@ class TrainTab(Frame):
                activebackground=ACCENT, activeforeground="white",
                font=F_BOLD, relief="flat", padx=14, cursor="hand2").pack(side=LEFT, padx=(8, 0))
 
+        Button(ctrl, text="📈  Phân tích",
+               command=self._analyze_results,
+               bg=ACCENT2, fg="white",
+               activebackground=ACCENT, activeforeground="white",
+               font=F_BOLD, relief="flat", padx=14, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+
         self._status_lbl = Label(ctrl, text="", bg=BG, fg=DIM, font=F_MAIN)
         self._status_lbl.pack(side=LEFT, padx=16)
+
+        self._build_train_glossary()
 
         log_frame, self._log = _make_logbox(self)
         log_frame.pack(fill=BOTH, expand=True, padx=12, pady=(2, 0))
@@ -456,15 +528,15 @@ class TrainTab(Frame):
                 if len(src_drives) == 1
                 else Path(tempfile.gettempdir()) / "kztek_split")
         for split, imgs in splits.items():
-            (root / "images" / split).mkdir(parents=True, exist_ok=True)
-            (root / "labels" / split).mkdir(parents=True, exist_ok=True)
+            (root / split / "images").mkdir(parents=True, exist_ok=True)
+            (root / split / "labels").mkdir(parents=True, exist_ok=True)
             for img in imgs:
-                self._link_or_copy(img, root / "images" / split / img.name)
+                self._link_or_copy(img, root / split / "images" / img.name)
                 lbl = img.with_suffix(".txt")
                 if not lbl.exists():
                     lbl = img.parent.parent / "labels" / (img.stem + ".txt")
                 if lbl.exists():
-                    self._link_or_copy(lbl, root / "labels" / split / lbl.name)
+                    self._link_or_copy(lbl, root / split / "labels" / lbl.name)
         return root
 
     def _resolve_images(self):
@@ -516,10 +588,10 @@ class TrainTab(Frame):
         train_imgs, val_imgs, split_msg = self._resolve_images()
         nc        = len(labels)
         names_str = ", ".join(f"'{n}'" for n in labels)
-        root      = self._build_dataset_dir({"train": train_imgs, "val": val_imgs})
+        root      = self._build_dataset_dir({"train": train_imgs, "valid": val_imgs})
         yaml_path = str(root / "data.yaml")
         with open(yaml_path, "w", encoding="utf-8") as f:
-            f.write(f"path: {root}\ntrain: images/train\nval:   images/val\n"
+            f.write(f"path: {root}\ntrain: train/images\nval:   valid/images\n"
                     f"nc: {nc}\nnames: [{names_str}]\n")
         return yaml_path, split_msg, len(train_imgs), len(val_imgs)
 
@@ -599,6 +671,275 @@ class TrainTab(Frame):
         except Exception:
             pass
         return rows
+
+    # ── Phân tích kết quả ────────────────────────────────────────────
+
+    def _analyze_results(self):
+        """Đọc results.csv và hiển thị popup phân tích + đề xuất."""
+        csv_path = None
+        if self._output_dir:
+            p = Path(self._output_dir) / "results.csv"
+            if p.exists():
+                csv_path = p
+        if csv_path is None:
+            initial = str(Path(self._project_var.get().strip())) if self._project_var.get().strip() else "."
+            p = filedialog.askopenfilename(
+                title="Chọn file results.csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialdir=initial)
+            if not p:
+                return
+            csv_path = Path(p)
+        rows = []
+        try:
+            with open(csv_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    rows.append({k.strip(): v.strip() for k, v in row.items()})
+        except Exception as exc:
+            messagebox.showerror("Lỗi đọc CSV", str(exc))
+            return
+        if not rows:
+            messagebox.showwarning("Không có dữ liệu", "File results.csv trống hoặc chưa có epoch nào.")
+            return
+        report = self._build_analysis_report(rows, csv_path)
+        self._open_analysis_window(report)
+
+    def _build_analysis_report(self, rows, csv_path):
+        """Phân tích rows từ results.csv và trả về chuỗi report."""
+        def gf(row, *keys):
+            for k in keys:
+                try:
+                    v = float(row.get(k, ""))
+                    if v == v:  # not NaN
+                        return v
+                except (ValueError, TypeError):
+                    pass
+            return float("nan")
+
+        def isnan(x):
+            return x != x
+
+        n = len(rows)
+        epochs_data = []
+        for row in rows:
+            ep      = gf(row, "epoch")
+            map50   = gf(row, "metrics/mAP50(B)")
+            map5095 = gf(row, "metrics/mAP50-95(B)")
+            prec    = gf(row, "metrics/precision(B)")
+            rec     = gf(row, "metrics/recall(B)")
+            v_box   = gf(row, "val/box_loss")
+            v_cls   = gf(row, "val/cls_loss")
+            t_box   = gf(row, "train/box_loss")
+            fitness = (0.1 * map50 + 0.9 * map5095) if not (isnan(map50) or isnan(map5095)) else float("nan")
+            epochs_data.append(dict(ep=ep, map50=map50, map5095=map5095,
+                                    prec=prec, rec=rec, v_box=v_box, v_cls=v_cls,
+                                    t_box=t_box, fitness=fitness))
+
+        best = max(epochs_data, key=lambda x: x["fitness"] if not isnan(x["fitness"]) else -1)
+
+        last10 = [e for e in epochs_data[-10:] if not isnan(e["map50"])]
+        mid_start = max(0, n // 2 - 5)
+        mid10  = [e for e in epochs_data[mid_start:mid_start + 10] if not isnan(e["map50"])]
+
+        def avg(lst, key):
+            vals = [e[key] for e in lst if not isnan(e[key])]
+            return sum(vals) / len(vals) if vals else float("nan")
+
+        still_improving = (not isnan(avg(last10, "map50")) and not isnan(avg(mid10, "map50"))
+                           and avg(last10, "map50") > avg(mid10, "map50") + 0.005)
+
+        last10_v = [e["v_box"] for e in last10 if not isnan(e["v_box"])]
+        last10_t = [e["t_box"] for e in last10 if not isnan(e["t_box"])]
+        overfit = (len(last10_v) >= 5
+                   and last10_v[-1] - last10_v[0] > 0.01
+                   and (last10_t[-1] - last10_t[0] < -0.005 if last10_t else False))
+
+        last10_fit = [e["fitness"] for e in last10 if not isnan(e["fitness"])]
+        plateau = (len(last10_fit) >= 5
+                   and max(last10_fit) - min(last10_fit) < 0.003)
+
+        best_ep    = int(best["ep"]) if not isnan(best["ep"]) else "?"
+        best_map50 = best["map50"]
+        best_map95 = best["map5095"]
+        best_prec  = best["prec"]
+        best_rec   = best["rec"]
+        best_fit   = best["fitness"]
+
+        def fmt(v, digits=4):
+            return f"{v:.{digits}f}" if not isnan(v) else "—"
+
+        lines = []
+        SEP = "=" * 62
+        DIV = "─" * 62
+        lines += [SEP,
+                  "  KZTEK YOLO — PHÂN TÍCH KẾT QUẢ TRAINING",
+                  SEP,
+                  f"  File   : {csv_path}",
+                  f"  Epochs : {n}",
+                  ""]
+
+        lines += [f"  {'BEST MODEL':─<58}",
+                  f"  Epoch tốt nhất  : ep{best_ep}",
+                  f"  mAP50           : {fmt(best_map50)}",
+                  f"  mAP50-95        : {fmt(best_map95)}",
+                  f"  Precision       : {fmt(best_prec)}",
+                  f"  Recall          : {fmt(best_rec)}",
+                  f"  Fitness         : {fmt(best_fit)}",
+                  ""]
+
+        lines.append(f"  {'ĐÁNH GIÁ CHỈ SỐ':─<58}")
+        if not isnan(best_map50):
+            if best_map50 >= 0.85:  lines.append(f"  ✅ mAP50    {fmt(best_map50)}  XUẤT SẮC (≥0.85)")
+            elif best_map50 >= 0.75: lines.append(f"  ✅ mAP50    {fmt(best_map50)}  TỐT (0.75–0.85)")
+            elif best_map50 >= 0.65: lines.append(f"  ⚠  mAP50    {fmt(best_map50)}  KHÁ — cần cải thiện")
+            else:                    lines.append(f"  ❌ mAP50    {fmt(best_map50)}  THẤP — cần thêm data hoặc model lớn hơn")
+        if not isnan(best_map95):
+            if best_map95 >= 0.70:   lines.append(f"  ✅ mAP50-95 {fmt(best_map95)}  TỐT (≥0.70)")
+            elif best_map95 >= 0.55: lines.append(f"  ⚠  mAP50-95 {fmt(best_map95)}  TRUNG BÌNH")
+            else:                    lines.append(f"  ❌ mAP50-95 {fmt(best_map95)}  THẤP — định vị chưa chính xác")
+        if not isnan(best_prec):
+            if best_prec >= 0.95:    lines.append(f"  ✅ Precision {fmt(best_prec)}  CAO — ít báo nhầm")
+            elif best_prec >= 0.85:  lines.append(f"  ⚠  Precision {fmt(best_prec)}  TRUNG BÌNH — vẫn có false positive")
+            else:                    lines.append(f"  ❌ Precision {fmt(best_prec)}  THẤP — nhiều false positive")
+        if not isnan(best_rec):
+            if best_rec >= 0.85:     lines.append(f"  ✅ Recall    {fmt(best_rec)}  CAO — ít bỏ sót")
+            elif best_rec >= 0.75:   lines.append(f"  ⚠  Recall    {fmt(best_rec)}  TRUNG BÌNH — vẫn bỏ sót đối tượng")
+            else:                    lines.append(f"  ❌ Recall    {fmt(best_rec)}  THẤP — bỏ sót nhiều")
+        lines.append("")
+
+        lines.append(f"  {'XU HƯỚNG TRAINING':─<58}")
+        lines.append("  ✅ Không overfit" if not overfit else "  ⚠  OVERFIT: val loss tăng khi train loss giảm")
+        if still_improving:
+            lines.append(f"  📈 Vẫn đang cải thiện ở ep{n} — nên train thêm epochs")
+        elif plateau:
+            lines.append(f"  📊 Đã hội tụ (plateau) — đây là giới hạn cấu hình hiện tại")
+        else:
+            lines.append("  📉 Ổn định — training hoàn tất bình thường")
+        lines.append("")
+
+        lines.append(f"  {'ĐỀ XUẤT CẢI THIỆN':─<58}")
+        recs = []
+        if not isnan(best_map50) and best_map50 < 0.75:
+            recs.append(("❶ Thêm dữ liệu đa dạng",
+                         "mAP50 thấp — thu thập thêm ảnh từ nhiều góc độ, ánh sáng, thời điểm khác nhau."))
+            recs.append(("❷ Thử model lớn hơn",
+                         "Đổi yolo11n → yolo11s hoặc yolo11m (1 dòng code, +3-7% mAP)."))
+        if not isnan(best_rec) and best_rec < 0.80:
+            gap = 0.80 - best_rec
+            recs.append((f"❸ Cải thiện Recall (hiện {fmt(best_rec)}, thiếu {gap:.3f})",
+                         "Thu thập thêm:\n"
+                         "  • Ảnh ban đêm / thiếu sáng\n"
+                         "  • Xe góc nghiêng, xa camera\n"
+                         "  • Biển số bị che khuất một phần\n"
+                         "  • Loại xe ít ảnh (truck, bus)"))
+        if not isnan(best_prec) and best_prec < 0.90:
+            recs.append(("❹ Cải thiện Precision",
+                         "Thêm ảnh 'hard negative' (cảnh không có đối tượng nhưng dễ nhầm)."))
+        if still_improving and not overfit:
+            recs.append((f"❺ Tăng epochs (đang cải thiện ở ep{n})",
+                         f"Thử epochs={int(n * 1.5)} để khai thác thêm tiềm năng mô hình."))
+        if plateau and not still_improving:
+            recs.append(("❺ Model đã hội tụ — thử kiến trúc lớn hơn",
+                         "Nâng yolo11n → yolo11s/m hoặc bổ sung thêm dữ liệu có chất lượng cao."))
+        if overfit:
+            recs.append(("❻ Chống Overfit",
+                         "Tăng Weight Decay (0.001–0.005), thêm Dropout, hoặc dùng patience nhỏ hơn."))
+        if not isnan(best_map95) and best_map95 < 0.55:
+            recs.append(("❼ Tăng độ phân giải (imgsz)",
+                         "mAP50-95 thấp — thử imgsz=1280 để phát hiện đối tượng nhỏ tốt hơn."))
+        if not recs:
+            recs.append(("✅ Kết quả rất tốt!", "Không có đề xuất đặc biệt — model hoạt động ổn định."))
+        # Luôn thêm gợi ý nhanh nhất
+        recs.append(("💡 Nâng cấp nhanh nhất",
+                     "yolo11n → yolo11s: 1 dòng code, tăng mAP50 trung bình 3-7%, thời gian train gấp ~2x."))
+        for title, desc in recs:
+            lines.append(f"\n  {title}")
+            for dl in desc.split("\n"):
+                lines.append(f"  {dl}")
+
+        import datetime as _dt
+        lines += ["", SEP,
+                  f"  Phân tích tạo lúc: {_dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                  SEP]
+        return "\n".join(lines)
+
+    def _open_analysis_window(self, report_text):
+        """Hiện Toplevel với report và nút lưu file."""
+        win = Toplevel(self.root)
+        win.title("KZTEK – Phân tích kết quả training")
+        win.geometry("740x560")
+        win.configure(bg=BG)
+        win.resizable(True, True)
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+
+        tb = Frame(win, bg=CARD, padx=8, pady=6)
+        tb.pack(fill=X)
+        Label(tb, text="Phân tích & Đề xuất cải thiện",
+              bg=CARD, fg=TEXT, font=F_BOLD).pack(side=LEFT)
+
+        def _save():
+            path = filedialog.asksaveasfilename(
+                title="Lưu báo cáo phân tích",
+                defaultextension=".txt",
+                filetypes=[("Text file", "*.txt"), ("Markdown", "*.md")],
+                initialfile="analysis_report.txt")
+            if not path:
+                return
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(report_text)
+                messagebox.showinfo("Đã lưu", f"Báo cáo đã lưu tại:\n{path}")
+            except Exception as exc:
+                messagebox.showerror("Lỗi lưu file", str(exc))
+
+        Button(tb, text="💾  Lưu file", command=_save,
+               bg=ACCENT, fg="white",
+               activebackground=ACCENT2, activeforeground="white",
+               font=F_MAIN, relief="flat", padx=10, cursor="hand2").pack(side=RIGHT)
+
+        txt_frame = Frame(win, bg=BG)
+        txt_frame.pack(fill=BOTH, expand=True, padx=8, pady=(4, 8))
+        vsb = Scrollbar(txt_frame, orient=VERTICAL)
+        vsb.pack(side=RIGHT, fill=Y)
+        hsb = Scrollbar(txt_frame, orient=HORIZONTAL)
+        hsb.pack(side=BOTTOM, fill=X)
+        txt = Text(txt_frame, bg="#16162a", fg=TEXT, font=("Consolas", 9),
+                   relief="flat", wrap=NONE, padx=10, pady=8,
+                   yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        txt.pack(fill=BOTH, expand=True)
+        vsb.config(command=txt.yview)
+        hsb.config(command=txt.xview)
+
+        txt.tag_config("hdr",  foreground=ACCENT,    font=("Consolas", 9, "bold"))
+        txt.tag_config("sec",  foreground=ACCENT2)
+        txt.tag_config("good", foreground=SUCCESS)
+        txt.tag_config("warn", foreground="#f0c040")
+        txt.tag_config("bad",  foreground="#f05050")
+        txt.tag_config("tip",  foreground="#4fc3f7")
+
+        for line in report_text.split("\n"):
+            if line.startswith("=") or "KZTEK" in line or "PHÂN TÍCH" in line:
+                txt.insert(END, line + "\n", "hdr")
+            elif line.startswith("  ─") or line.startswith("  ━"):
+                txt.insert(END, line + "\n", "sec")
+            elif "✅" in line or "XUẤT SẮC" in line:
+                txt.insert(END, line + "\n", "good")
+            elif "⚠" in line or "TRUNG BÌNH" in line or "KHÁ" in line or "📈" in line or "📊" in line:
+                txt.insert(END, line + "\n", "warn")
+            elif "❌" in line or "THẤP" in line or "OVERFIT" in line or "📉" in line:
+                txt.insert(END, line + "\n", "bad")
+            elif any(c in line for c in ("💡", "❶", "❷", "❸", "❹", "❺", "❻", "❼")):
+                txt.insert(END, line + "\n", "tip")
+            else:
+                txt.insert(END, line + "\n")
+
+        txt.config(state=DISABLED)
+        win.lift()
+        win.focus_set()
+        win.bind("<Escape>", lambda _: win.destroy())
+
+    # ── Charts ───────────────────────────────────────────────────────
 
     def _update_charts(self):
         if not _MPL_OK:
@@ -1184,6 +1525,31 @@ class TrainTab(Frame):
             return
         device = self._device_var.get().strip() or "0"
 
+        optimizer = self._optimizer_var.get().strip() or "AdamW"
+        try:
+            lr0 = float(self._lr0_var.get())
+        except ValueError:
+            lr0 = 0.01
+        try:
+            lrf = float(self._lrf_var.get())
+        except ValueError:
+            lrf = 0.01
+        try:
+            close_mosaic = int(self._close_mosaic_var.get())
+        except ValueError:
+            close_mosaic = 10
+        try:
+            workers = int(self._workers_var.get())
+        except ValueError:
+            workers = 4
+        try:
+            weight_decay = float(self._weight_decay_var.get())
+        except ValueError:
+            weight_decay = 0.0005
+        cache_raw = self._cache_var.get().strip()
+        cache_py  = "False" if cache_raw == "False" else f"'{cache_raw}'"
+        cos_lr    = self._cos_lr_var.get()
+
         early_stop = self._early_stop_var.get()
         try:
             patience = int(self._patience_var.get())
@@ -1214,6 +1580,14 @@ class TrainTab(Frame):
                 f"        project={project!r},\n"
                 f"        name={name!r},\n"
                 f"        exist_ok=True,\n"
+                f"        optimizer={optimizer!r},\n"
+                f"        lr0={lr0},\n"
+                f"        lrf={lrf},\n"
+                f"        close_mosaic={close_mosaic},\n"
+                f"        cache={cache_py},\n"
+                f"        workers={workers},\n"
+                f"        cos_lr={cos_lr},\n"
+                f"        weight_decay={weight_decay},\n"
                 f"        **_kw,\n"
                 f"    )\n"
             )
@@ -1229,6 +1603,14 @@ class TrainTab(Frame):
                 f"        project={project!r},\n"
                 f"        name={name!r},\n"
                 f"        exist_ok=True,\n"
+                f"        optimizer={optimizer!r},\n"
+                f"        lr0={lr0},\n"
+                f"        lrf={lrf},\n"
+                f"        close_mosaic={close_mosaic},\n"
+                f"        cache={cache_py},\n"
+                f"        workers={workers},\n"
+                f"        cos_lr={cos_lr},\n"
+                f"        weight_decay={weight_decay},\n"
                 f"    )\n"
             )
 
@@ -1389,3 +1771,106 @@ class TrainTab(Frame):
             subprocess.Popen(["explorer", os.path.normpath(d)])
         else:
             messagebox.showinfo("Thông báo", f"Thư mục chưa tồn tại:\n{d}")
+
+    # ── Shortcut aliases ─────────────────────────────────────────────
+
+    def _browse(self):
+        """Ctrl+O — chọn thư mục train."""
+        p = filedialog.askdirectory(
+            title="Chọn thư mục train",
+            initialdir=_cfg_dir("train.dir"))
+        if p:
+            self.train_dir.set(p)
+            _push_history("h.train.dir", p)
+
+    def _start_action(self):
+        """F5 — bắt đầu train."""
+        self._start_train()
+
+    def _stop(self):
+        """Escape — dừng training."""
+        self._stop_train()
+
+    def _save(self):
+        """Ctrl+S — tạo data.yaml."""
+        self._gen_yaml_only()
+
+    # ── Glossary ──────────────────────────────────────────────────────────────
+
+    def _build_train_glossary(self):
+        TERMS = [
+            ("Model (yolo11n / s / m / l / x)",
+             "Kích thước kiến trúc YOLO11: n=nano (nhỏ nhất, nhanh nhất), s=small, m=medium, l=large, x=xlarge (lớn nhất, chính xác nhất). Nano phù hợp nhúng/edge; large/xlarge cần GPU mạnh."),
+            ("Epochs",
+             "Số lần lặp toàn bộ tập dữ liệu. Epochs=50 nghĩa là model 'nhìn' mỗi ảnh đúng 50 lần. Quá ít → underfitting; quá nhiều → overfitting nếu không có early stopping."),
+            ("Imgsz (Image Size)",
+             "Kích thước ảnh đầu vào sau khi resize về hình vuông NxN (ví dụ 640x640). Ảnh lớn hơn → chính xác hơn với vật nhỏ nhưng chậm hơn và tốn VRAM hơn."),
+            ("Batch Size",
+             "Số ảnh xử lý trong một lần cập nhật trọng số (gradient step). Batch=16 nghĩa là mỗi bước tính loss trên 16 ảnh rồi mới cập nhật. Batch=-1 để YOLO tự chọn tối đa theo VRAM."),
+            ("Device",
+             "Phần cứng chạy training. '0' = GPU đầu tiên (CUDA), '0,1' = nhiều GPU, 'cpu' = CPU (chậm hơn ~10-50×). Kiểm tra bằng lệnh nvidia-smi."),
+            ("Optimizer",
+             "Thuật toán tối ưu gradient: SGD (ổn định, phổ biến), Adam (hội tụ nhanh hơn), AdamW (Adam + weight decay). Auto = YOLO tự chọn dựa vào số epochs."),
+            ("LR0 (Learning Rate khởi đầu)",
+             "Tốc độ học ban đầu. Giá trị lớn → học nhanh nhưng dễ dao động; giá trị nhỏ → ổn định nhưng hội tụ chậm. Finetune từ pretrained nên dùng LR0 nhỏ (0.0001–0.001)."),
+            ("LRF (Learning Rate kết thúc)",
+             "Hệ số nhân để tính LR cuối: LR_cuối = LR0 × LRF. Ví dụ LR0=0.01, LRF=0.1 → LR giảm xuống 0.001 ở epoch cuối. Cosine LR sẽ giảm dần theo hàm cosine trong khoảng này."),
+            ("Cosine LR",
+             "Lịch giảm learning rate hình cosine: LR giảm mượt từ LR0 xuống LR0×LRF thay vì giảm thẳng (linear). Thường cho kết quả tốt hơn linear decay vì tránh 'nhảy' đột ngột."),
+            ("Close Mosaic",
+             "Tắt augmentation mosaic trong N epoch cuối. Mosaic ghép 4 ảnh thành 1 giúp model học đa dạng hơn, nhưng ở giai đoạn tinh chỉnh cuối, tắt mosaic giúp val loss hội tụ chính xác hơn."),
+            ("Weight Decay",
+             "L2 regularization — phạt các trọng số quá lớn để tránh overfitting. Thêm hạng phạt λ×||w||² vào loss. Giá trị điển hình: 0.0005. Tăng nếu model overfit mạnh."),
+            ("Workers",
+             "Số luồng (thread) song song đọc và augment ảnh từ đĩa cứng. Workers cao hơn → GPU ít bị idle chờ dữ liệu, nhưng tốn RAM hơn. Trên Windows thường dùng 4–8."),
+            ("Cache (False / ram / disk)",
+             "Cách cache ảnh để tăng tốc: False=không cache (đọc từ disk mỗi epoch), 'disk'=cache dưới dạng .npy trên ổ cứng, 'ram'=load hết vào RAM. RAM nhanh nhất nhưng cần nhiều bộ nhớ."),
+            ("Early Stopping / Patience",
+             "Dừng training sớm nếu fitness không cải thiện sau Patience epoch liên tiếp. YOLO fitness = 0.1×mAP50 + 0.9×mAP50-95. Giúp tiết kiệm thời gian và tránh overfitting."),
+            ("mAP50 / mAP50-95",
+             "Độ chính xác detection. mAP50 = mean Average Precision tại ngưỡng IoU=50% (dễ đạt hơn). mAP50-95 = trung bình trên 10 ngưỡng IoU từ 50% đến 95% (khắt khe hơn, chuẩn COCO)."),
+            ("Train Loss (box / cls / dfl)",
+             "Loss trong quá trình train: box=sai số vị trí bounding box, cls=sai số phân loại class, dfl=Distribution Focal Loss (hình dạng bbox). Cả ba nên giảm đều theo epoch."),
+            ("best.pt / last.pt",
+             "Checkpoint lưu trọng số: best.pt=epoch có fitness cao nhất, last.pt=epoch cuối cùng. Dùng best.pt để inference. Khi early stop, last.pt có thể giống best.pt."),
+            ("data.yaml",
+             "File cấu hình dataset: đường dẫn train/val, số class (nc), tên class (names). YOLO bắt buộc cần file này. Nút 'Tạo YAML' sẽ tự sinh file này từ thư mục đã chọn."),
+            ("Subfolder / Train / Val",
+             "Trong panel Subfolder: mỗi dòng là một thư mục con, có thể gán vai trò Train hoặc Val. Có thể tự chia theo tỷ lệ (ví dụ 80/20) hoặc chỉ định thủ công."),
+            ("Run Name / Output Folder",
+             "Tên thư mục lưu kết quả training (weights/, results.csv, charts). Mặc định YOLO lưu vào runs/detect/<run_name>. Đặt tên có nghĩa để dễ so sánh nhiều lần train."),
+        ]
+
+        gloss_outer = Frame(self, bg=BG, padx=12)
+        gloss_outer.pack(fill=X, pady=(4, 0))
+
+        self._gloss_train_open = BooleanVar(value=False)
+        toggle_btn = Button(gloss_outer,
+                            text="ℹ  Giải thích thuật ngữ  ▾",
+                            bg=CARD, fg=DIM, font=("Segoe UI", 9),
+                            relief="flat", cursor="hand2", anchor="w",
+                            command=self._toggle_train_glossary)
+        toggle_btn.pack(fill=X, ipady=4)
+        self._gloss_train_toggle_btn = toggle_btn
+
+        self._gloss_train_frame = Frame(gloss_outer, bg=CARD)
+        txt = Text(self._gloss_train_frame, bg=CARD, fg=TEXT,
+                   font=("Segoe UI", 9), relief="flat", wrap=WORD,
+                   cursor="arrow", height=18, padx=14, pady=8)
+        txt.pack(fill=X)
+        txt.tag_config("term", foreground=ACCENT, font=("Segoe UI", 9, "bold"))
+        txt.tag_config("desc", foreground=TEXT, font=("Segoe UI", 9))
+        for term, desc in TERMS:
+            txt.insert(END, f"▸ {term}\n", "term")
+            txt.insert(END, f"  {desc}\n\n", "desc")
+        txt.config(state=DISABLED)
+
+    def _toggle_train_glossary(self):
+        if self._gloss_train_open.get():
+            self._gloss_train_frame.pack_forget()
+            self._gloss_train_toggle_btn.config(text="ℹ  Giải thích thuật ngữ  ▾")
+            self._gloss_train_open.set(False)
+        else:
+            self._gloss_train_frame.pack(fill=X)
+            self._gloss_train_toggle_btn.config(text="ℹ  Giải thích thuật ngữ  ▴")
+            self._gloss_train_open.set(True)

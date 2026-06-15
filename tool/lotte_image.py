@@ -113,6 +113,17 @@ def _li_b64_like(s: str) -> bool:
             and bool(re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", s)))
 
 
+class _SharedLaneState:
+    """Thread-safe lane state shared across parallel LotteWorker instances."""
+    __slots__ = ("_lock", "lane_total", "lane_warned", "hist_lock")
+
+    def __init__(self):
+        self._lock        = threading.Lock()
+        self.lane_total:  dict = {}   # {lane: total_saved}
+        self.lane_warned: set  = set()
+        self.hist_lock    = threading.Lock()
+
+
 class LotteApiClient:
     def __init__(self, cfg: dict):
         self.base     = cfg.get("api_base", _LI_API_BASE).rstrip("/")
@@ -224,25 +235,33 @@ class LotteApiClient:
 
 class LotteWorker:
     def __init__(self, cfg: dict, log_q: queue.Queue, stat_q: queue.Queue,
-                 pause_event: threading.Event = None):
+                 pause_event: threading.Event = None,
+                 thread_id: int = 0,
+                 days_list: list = None,
+                 shared: '_SharedLaneState' = None,
+                 send_done: bool = True,
+                 global_total_days: int = None):
         self.cfg         = cfg
         self.log_q       = log_q
         self.stat_q      = stat_q
         self._stop       = threading.Event()
         self._pause      = pause_event or threading.Event()
         self._pause.set()   # mặc định không pause
+        self._thread_id        = thread_id
+        self._days_list        = days_list        # None = tự tính từ cfg
+        self._shared           = shared if shared is not None else _SharedLaneState()
+        self._send_done        = send_done
+        self._global_total_days = global_total_days
         self.stats: dict = {
             "page": 0, "total": 0, "event": 0, "found": 0,
             "saved": 0, "skipped": 0, "error": 0, "bad_saved": 0,
             "day_idx": 0, "total_days": 0, "day_label": "",
+            "thread_id": thread_id,
         }
-        self._lane_total: dict  = {}  # {lane: total_saved}
-        self._lane_cat: dict   = {}  # {(lane, cat, "YYYY-MM-DD"): count}  ← daily
-        self._lane_hourly: dict = {} # {(lane, "YYYY-MM-DD HH"): count}
-        self._lane_warned: set  = set()
-        self._done_days: set  = set() # ngày đã hoàn thành (load từ file)
-        self.stats.setdefault("bad_saved", 0)
-        self._vtype_cfg: dict = self._parse_vtype_cfg()
+        self._lane_cat: dict    = {}  # {(lane, cat, "YYYY-MM-DD"): count}
+        self._lane_hourly: dict = {}  # {(lane, "YYYY-MM-DD HH"): count}
+        self._done_days: set    = set()
+        self._vtype_cfg: dict   = self._parse_vtype_cfg()
 
     # ── lịch sử ngày đã tải ────────────────────────────────────────────────
 
@@ -260,9 +279,17 @@ class LotteWorker:
     def _history_mark(self, out: Path, label: str):
         self._done_days.add(label)
         try:
-            f = out / self._HISTORY_FILE
-            f.write_text(json.dumps(sorted(self._done_days), ensure_ascii=False),
-                         encoding="utf-8")
+            with self._shared.hist_lock:
+                f = out / self._HISTORY_FILE
+                if f.exists():
+                    try:
+                        existing = set(json.loads(f.read_text(encoding="utf-8")))
+                        existing.update(self._done_days)
+                        self._done_days = existing
+                    except Exception:
+                        pass
+                f.write_text(json.dumps(sorted(self._done_days), ensure_ascii=False),
+                             encoding="utf-8")
         except Exception:
             pass
 
@@ -283,10 +310,14 @@ class LotteWorker:
         self._stop.set()
 
     def _log(self, msg: str):
+        if self._thread_id:
+            msg = f"[T{self._thread_id}] {msg}"
         self.log_q.put(msg)
 
     def _push(self):
-        self.stat_q.put(dict(self.stats))
+        s = dict(self.stats)
+        s["thread_id"] = self._thread_id
+        self.stat_q.put(s)
 
     @staticmethod
     def _day_list(from_str: str, to_str: str):
@@ -310,7 +341,8 @@ class LotteWorker:
         self._log("Đang đăng nhập...")
         if not api.login():
             self._log("[LỖI] Không lấy được token — kiểm tra địa chỉ / tài khoản.")
-            self.log_q.put("__DONE__")
+            if self._send_done:
+                self.log_q.put("__DONE__")
             return
         self._log("Đăng nhập thành công.")
 
@@ -322,29 +354,36 @@ class LotteWorker:
             )
             self._log(f"MinIO: {'kết nối OK' if ok else 'không khả dụng — dùng HTTP'}")
 
-        from_d = cfg["from_date"].strip().replace(" ", "T")
-        to_d   = cfg["to_date"].strip().replace(" ", "T")
-        size   = cfg.get("page_size", 100)
+        size    = cfg.get("page_size", 100)
         sleep_s = cfg.get("sleep", 0.05)
-        days   = self._day_list(from_d, to_d)
-        total_days = len(days)
-        self._log(f"Khoảng thời gian: {from_d} → {to_d}")
-        self._log(f"Tổng: {total_days} ngày | page size={size}")
-        max_lane = cfg.get("max_per_lane", 0)
-        max_cat  = cfg.get("max_per_cat",  0)
-        max_hour = cfg.get("max_per_hour", 0)
-        limits = []
-        if max_lane: limits.append(f"{max_lane} ảnh/làn")
-        if max_cat:  limits.append(f"{max_cat} ảnh/loại/làn/ngày")
-        if max_hour: limits.append(f"{max_hour} ảnh/giờ/làn")
-        self._log(f"Giới hạn: {', '.join(limits) if limits else 'không'}")
-        self._history_load(out)
+
+        if self._days_list is not None:
+            # Chế độ song song: ngày được phân công bởi coordinator
+            days       = self._days_list
+            total_days = self._global_total_days if self._global_total_days is not None else len(days)
+        else:
+            # Chế độ đơn luồng: tự tính ngày từ config
+            from_d = cfg["from_date"].strip().replace(" ", "T")
+            to_d   = cfg["to_date"].strip().replace(" ", "T")
+            days   = self._day_list(from_d, to_d)
+            total_days = len(days)
+            self._log(f"Khoảng thời gian: {from_d} → {to_d}")
+            self._log(f"Tổng: {total_days} ngày | page size={size}")
+            max_lane = cfg.get("max_per_lane", 0)
+            max_cat  = cfg.get("max_per_cat",  0)
+            max_hour = cfg.get("max_per_hour", 0)
+            limits = []
+            if max_lane: limits.append(f"{max_lane} ảnh/làn")
+            if max_cat:  limits.append(f"{max_cat} ảnh/loại/làn/ngày")
+            if max_hour: limits.append(f"{max_hour} ảnh/giờ/làn")
+            self._log(f"Giới hạn: {', '.join(limits) if limits else 'không'}")
+            self._history_load(out)
 
         skipped_days = 0
-        for day_idx, (d_from, d_to, label) in enumerate(days, 1):
+        for local_idx, (d_from, d_to, label) in enumerate(days, 1):
             if self._stop.is_set():
                 break
-            self.stats.update({"day_idx": day_idx, "total_days": total_days,
+            self.stats.update({"day_idx": local_idx, "total_days": total_days,
                                 "day_label": label})
             self._push()
             if label in self._done_days:
@@ -352,24 +391,25 @@ class LotteWorker:
                 self._log(f"  ⏭ NGÀY {label} — đã tải trước đó, bỏ qua")
                 continue
             self._log(f"\n{'═'*52}")
-            self._log(f"  NGÀY {label}  ({day_idx}/{total_days})")
+            self._log(f"  NGÀY {label}  ({local_idx}/{len(days)})")
             self._log(f"{'═'*52}")
             self._collect_day(api, d_from, d_to, out, size, sleep_s)
             if not self._stop.is_set():
                 self._history_mark(out, label)
 
-        self._log("\n" + "─" * 52)
+        self._log(f"\n{'─'*52}")
         self._log(
-            f"Hoàn thành {total_days} ngày"
-            f"{f' (bỏ qua {skipped_days} ngày đã tải)' if skipped_days else ''}: "
-            f"{self.stats['event']} sự kiện, "
-            f"{self.stats['found']} tìm thấy, "
+            f"Xong {len(days)} ngày"
+            f"{f' (bỏ qua {skipped_days} đã tải)' if skipped_days else ''}: "
+            f"{self.stats['event']} SK, "
+            f"{self.stats['found']} tìm, "
             f"{self.stats['saved']} lưu, "
-            f"{self.stats['skipped']} skip giới hạn, "
+            f"{self.stats['skipped']} bỏ, "
             f"{self.stats['error']} lỗi."
         )
         self._push()
-        self.log_q.put("__DONE__")
+        if self._send_done:
+            self.log_q.put("__DONE__")
 
     def _collect_day(self, api: LotteApiClient, d_from: str, d_to: str,
                      out: Path, size: int, sleep_s: float):
@@ -491,7 +531,7 @@ class LotteWorker:
                 return
             # folder: bad/{lane}/{reason}/{date}/{event_id}/{in|out}/
             eid = event_id or "evt"
-            save_dir = out / "bad" / lane / bad_reason / dt.strftime("%Y-%m-%d") / eid / direction
+            save_dir = out / "bad" / lane / bad_reason / dt.strftime("%Y-%m-%d") / dt.strftime("%H") / eid / direction
             save_dir.mkdir(parents=True, exist_ok=True)
             ts = dt.strftime("%H%M%S")
             base_name = f"{ts}_{bad_label}" if bad_label else ts
@@ -511,14 +551,16 @@ class LotteWorker:
                 self.stats["error"] += 1
             return
 
-        # --- giới hạn tổng ảnh/làn ---
+        # --- giới hạn tổng ảnh/làn (thread-safe) ---
         max_lane = self.cfg.get("max_per_lane", 0)
-        if max_lane > 0 and self._lane_total.get(lane, 0) >= max_lane:
-            if lane not in self._lane_warned:
-                self._log(f"      ⏭ Làn [{lane}] đủ {max_lane} ảnh — bỏ qua")
-                self._lane_warned.add(lane)
-            self.stats["skipped"] += 1
-            return
+        if max_lane > 0:
+            with self._shared._lock:
+                if self._shared.lane_total.get(lane, 0) >= max_lane:
+                    if lane not in self._shared.lane_warned:
+                        self._log(f"      ⏭ Làn [{lane}] đủ {max_lane} ảnh — bỏ qua")
+                        self._shared.lane_warned.add(lane)
+                    self.stats["skipped"] += 1
+                    return
 
         # --- giới hạn ảnh/loại/làn/ngày → mỗi ngày đều có đủ mẫu ---
         max_cat = self.cfg.get("max_per_cat", 0)
@@ -542,8 +584,8 @@ class LotteWorker:
             self._log(f"      ✗ Lỗi tải: {file_path}")
             return
 
-        # cấu trúc: <out>/<làn>/<loại_xe>/<YYYY-MM-DD>/HHmmss_BSX.jpg
-        save_dir = out / lane / img_type / dt.strftime("%Y-%m-%d")
+        # cấu trúc: <out>/<làn>/<loại_xe>/<YYYY-MM-DD>/<HH>/HHmmss_BSX.jpg
+        save_dir = out / lane / img_type / dt.strftime("%Y-%m-%d") / dt.strftime("%H")
         save_dir.mkdir(parents=True, exist_ok=True)
         ts_str    = dt.strftime("%H%M%S")
         base_name = f"{ts_str}_{plate}" if plate else ts_str
@@ -558,7 +600,8 @@ class LotteWorker:
         if ok_enc:
             fpath.write_bytes(buf.tobytes())
             self.stats["saved"] += 1
-            self._lane_total[lane] = self._lane_total.get(lane, 0) + 1
+            with self._shared._lock:
+                self._shared.lane_total[lane] = self._shared.lane_total.get(lane, 0) + 1
             cat_key  = (lane, img_type, dt.strftime("%Y-%m-%d"))
             self._lane_cat[cat_key] = self._lane_cat.get(cat_key, 0) + 1
             hour_key = (lane, dt.strftime("%Y-%m-%d %H"))
