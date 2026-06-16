@@ -7,11 +7,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tkinter import *
 from tkinter import ttk, messagebox
 
-from tool.imports import _DND_OK, _dnd_mod
-from tool.ui_helpers import _style_all
-from tool.constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD
-from tool.settings import _CFG, _cfg_save
-from tool.tab_iparking_image import IParkingImageTab
+from tool.core.imports import _DND_OK, _dnd_mod
+from tool.core.ui_helpers import _style_all
+from tool.core.constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD
+from tool.core.settings import _CFG, _cfg_save
+from tool.features.collection.tab_iparking_image import IParkingImageTab
 
 _AppBase = _dnd_mod.Tk if _DND_OK else Tk
 

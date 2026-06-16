@@ -1,12 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files
 from PyInstaller.utils.hooks import collect_all
 
 datas = []
 binaries = []
 hiddenimports = ['PIL._tkinter_finder', 'PIL.Image', 'PIL.ImageTk', 'PIL.BmpImagePlugin', 'PIL.JpegImagePlugin', 'PIL.PngImagePlugin', 'cv2', 'numpy', 'numpy.core._multiarray_umath', 'numpy.core._multiarray_tests', 'requests', 'requests.adapters', 'requests.auth', 'matplotlib', 'matplotlib.figure', 'matplotlib.backends.backend_tkagg', 'tkinterdnd2', 'collections.abc', 'tool', 'tool.imports', 'tool.settings', 'tool.constants', 'tool.ui_helpers', 'tool.parkingv8_image', 'tool.parkingv6_image', 'tool.lotte_image', 'tool.bad_image_viewer', 'tool.migrate_structure', 'tool.tab_iparking_image']
-datas += collect_data_files('matplotlib')
 tmp_ret = collect_all('tkinterdnd2')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('matplotlib')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 

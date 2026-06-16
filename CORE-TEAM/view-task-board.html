@@ -1,0 +1,1356 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Task Board — AI Camera Platform 2026</title>
+  <style>
+    :root {
+      --bg:         #13112a;
+      --col-bg:     #1a1736;
+      --card-bg:    #201e3d;
+      --card-hover: #272450;
+      --border:     #2e2a55;
+      --border2:    #3d3870;
+      --navy:       #251C53;
+      --navy-l:     #4A3F8C;
+      --navy-p:     #B8B3D6;
+      --orange:     #F05922;
+      --orange-p:   #FFAA80;
+      --white:      #FFFFFF;
+      --dim:        #6a6895;
+      --dim2:       #9090b8;
+      --success:    #4caf50;
+      --danger:     #e53935;
+
+      --kien:  #4A3F8C;
+      --trong: #1a7a6a;
+      --tam:   #7b4ea0;
+
+      --doing-bg:   rgba(240,89,34,0.08);
+      --doing-brd:  rgba(240,89,34,0.3);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--white); min-height: 100vh; font-size: 14px; overflow-x: hidden; }
+
+    /* ══ HEADER ══ */
+    .hdr {
+      height: 54px; padding: 0 24px;
+      background: linear-gradient(90deg,#0e0c22,#1a1736);
+      border-bottom: 2px solid var(--orange);
+      display: flex; align-items: center; justify-content: space-between;
+      position: sticky; top: 0; z-index: 300;
+      box-shadow: 0 2px 20px rgba(0,0,0,0.5);
+    }
+    .hdr-l { display: flex; align-items: center; gap: 12px; }
+    .hdr-logo { width: 30px; height: 30px; border-radius: 6px; background: var(--orange); display: flex; align-items: center; justify-content: center; font-weight:900; font-size:12px; flex-shrink:0; }
+    .hdr-t { font-size: 15px; font-weight: 700; }
+    .hdr-s { font-size: 11px; color: var(--dim2); margin-top:1px; }
+    .hdr-r { display: flex; align-items: center; gap: 8px; }
+    .btn-sm {
+      padding: 5px 13px; border-radius: 20px; font-size: 12px; font-weight: 600;
+      border: 1px solid var(--border2); background: transparent; color: var(--dim2);
+      cursor: pointer; transition: all .2s; white-space: nowrap;
+    }
+    .btn-sm:hover { border-color: var(--orange); color: var(--white); }
+    .btn-sm.primary { background: var(--orange); border-color: var(--orange); color: var(--white); }
+    .btn-sm.primary:hover { background: #d04010; }
+
+    /* ══ TOOLBAR ══ */
+    .toolbar {
+      padding: 12px 24px; display: flex; align-items: center;
+      justify-content: space-between; flex-wrap: wrap; gap: 10px;
+      background: rgba(255,255,255,0.01);
+      border-bottom: 1px solid var(--border);
+    }
+    .sprint-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .sc {
+      padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 600;
+      border: 1px solid var(--border2); background: transparent;
+      color: var(--dim2); cursor: pointer; transition: all .2s;
+    }
+    .sc:hover { color: var(--white); }
+    .sc.active { background: var(--navy-l); border-color: var(--navy-l); color: var(--white); }
+
+    .sprint-indicator {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 12px; color: var(--dim2);
+    }
+    .sprint-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--orange); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    /* ══ BOARD ══ */
+    .board {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      padding: 20px 24px 40px;
+      align-items: start;
+      min-height: calc(100vh - 110px);
+    }
+
+    /* ══ COLUMN ══ */
+    .col {
+      background: var(--col-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      min-height: 200px;
+      transition: border-color .2s;
+    }
+    .col.drag-target { border-color: var(--orange); box-shadow: 0 0 0 2px rgba(240,89,34,.2); }
+
+    .col-head {
+      padding: 16px 16px 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .col-head-left { display: flex; align-items: center; gap: 11px; }
+    .col-av {
+      width: 42px; height: 42px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; font-weight: 800; color: var(--white); flex-shrink: 0;
+    }
+    .col-name { font-size: 15px; font-weight: 700; }
+    .col-role { font-size: 10px; color: var(--dim2); margin-top: 2px; }
+    .col-count {
+      background: rgba(255,255,255,.07);
+      border-radius: 20px; padding: 3px 10px;
+      font-size: 11px; font-weight: 700; color: var(--dim2);
+    }
+
+    /* Workload bar */
+    .wl-bar { padding: 10px 16px 0; }
+    .wl-bar-track { height: 4px; background: rgba(255,255,255,.07); border-radius: 2px; overflow: hidden; }
+    .wl-bar-fill { height: 100%; border-radius: 2px; transition: width .8s ease; }
+    .wl-bar-labels { display: flex; justify-content: space-between; margin-top: 4px; font-size: 10px; color: var(--dim); }
+
+    /* ══ SECTION ══ */
+    .section { padding: 10px 12px; }
+    .section + .section { border-top: 1px solid rgba(255,255,255,.04); }
+
+    .sec-label {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 4px 4px 8px;
+    }
+    .sec-label-text {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1.2px; color: var(--dim2);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .sec-label-text.doing-lbl { color: var(--orange); }
+    .sec-count {
+      font-size: 10px; background: rgba(255,255,255,.06);
+      border-radius: 10px; padding: 1px 7px; color: var(--dim2);
+    }
+
+    .section.doing-section { background: var(--doing-bg); border-radius: 10px; border: 1px solid var(--doing-brd); margin-bottom: 2px; }
+
+    /* Drop zone */
+    .drop-zone {
+      min-height: 44px; border-radius: 8px;
+      transition: all .15s;
+    }
+    .drop-zone.over {
+      background: rgba(240,89,34,.12);
+      outline: 2px dashed rgba(240,89,34,.5);
+      outline-offset: -2px;
+    }
+    .drop-zone.empty-hint {
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; color: var(--dim); min-height: 44px;
+      border: 1px dashed rgba(255,255,255,.08); border-radius: 8px;
+    }
+
+    /* ══ TASK CARD ══ */
+    .task-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 10px 11px;
+      margin-bottom: 7px;
+      cursor: grab;
+      position: relative;
+      transition: transform .15s, box-shadow .15s, opacity .15s, border-color .15s;
+      user-select: none;
+    }
+    .task-card:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(0,0,0,.35); border-color: var(--border2); }
+    .task-card:active { cursor: grabbing; }
+    .task-card.dragging { opacity: .35; transform: scale(.97); }
+    .task-card.done { opacity: .45; }
+    .task-card.done .tc-name { text-decoration: line-through; color: var(--dim); }
+
+    .tc-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; margin-bottom: 6px; }
+    .tc-left { flex: 1; min-width: 0; }
+    .tc-badge {
+      display: inline-block; padding: 2px 7px; border-radius: 4px;
+      font-size: 10px; font-weight: 700; margin-bottom: 5px;
+      letter-spacing: .3px;
+    }
+    .tc-name { font-size: 13px; font-weight: 600; line-height: 1.3; }
+    .tc-desc { font-size: 11px; color: var(--dim2); margin-top: 3px; line-height: 1.4; }
+
+    .tc-actions {
+      display: flex; flex-direction: column; gap: 4px;
+      opacity: 0; transition: opacity .15s; flex-shrink: 0;
+    }
+    .task-card:hover .tc-actions { opacity: 1; }
+
+    .tc-btn {
+      width: 24px; height: 24px; border-radius: 5px;
+      border: none; cursor: pointer; font-size: 11px;
+      display: flex; align-items: center; justify-content: center;
+      transition: background .15s;
+    }
+    .tc-btn.done-btn  { background: rgba(76,175,80,.15); color: #81c784; }
+    .tc-btn.edit-btn  { background: rgba(74,63,140,.2);  color: var(--navy-p); }
+    .tc-btn.del-btn   { background: rgba(229,57,53,.15); color: #ef9a9a; }
+    .tc-btn:hover     { filter: brightness(1.4); }
+
+    .tc-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 7px; }
+    .tc-sprint {
+      font-size: 10px; color: var(--dim2);
+      background: rgba(255,255,255,.05); border-radius: 4px;
+      padding: 2px 7px; cursor: pointer; transition: background .15s;
+    }
+    .tc-sprint:hover { background: rgba(255,255,255,.1); color: var(--white); }
+    .tc-drag { color: var(--dim); font-size: 12px; cursor: grab; }
+    .done-check { color: var(--success); font-size: 12px; }
+
+    /* Add task btn */
+    .add-task-btn {
+      width: 100%; padding: 8px; margin-top: 6px;
+      background: transparent; border: 1px dashed rgba(255,255,255,.1);
+      border-radius: 8px; color: var(--dim); font-size: 12px;
+      cursor: pointer; transition: all .2s;
+      display: flex; align-items: center; justify-content: center; gap: 5px;
+    }
+    .add-task-btn:hover { border-color: var(--orange); color: var(--orange); background: rgba(240,89,34,.05); }
+
+    /* ══ MODAL ══ */
+    .overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.7);
+      z-index: 1000; display: flex; align-items: center; justify-content: center;
+      backdrop-filter: blur(4px);
+      opacity: 0; pointer-events: none; transition: opacity .2s;
+    }
+    .overlay.open { opacity: 1; pointer-events: all; }
+
+    .modal {
+      background: #201e3d; border: 1px solid var(--border2);
+      border-radius: 16px; width: min(480px, 95vw);
+      padding: 24px; box-shadow: 0 24px 60px rgba(0,0,0,.6);
+      transform: translateY(16px); transition: transform .2s;
+    }
+    .overlay.open .modal { transform: none; }
+
+    .modal h2 { font-size: 16px; font-weight: 700; margin-bottom: 20px; color: var(--white); }
+    .form-row { margin-bottom: 14px; }
+    .form-row label { display: block; font-size: 11px; color: var(--dim2); margin-bottom: 5px; text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
+    .form-row input, .form-row select, .form-row textarea {
+      width: 100%; padding: 8px 12px; border-radius: 8px;
+      background: rgba(255,255,255,.06); border: 1px solid var(--border2);
+      color: var(--white); font-size: 13px; font-family: inherit; resize: none;
+    }
+    .form-row input:focus, .form-row select:focus, .form-row textarea:focus {
+      outline: none; border-color: var(--orange);
+    }
+    .form-row select option { background: #201e3d; }
+    .modal-btns { display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end; }
+
+    /* ══ DRAWER ══ */
+    .drawer-overlay {
+      position: fixed; inset: 0; z-index: 400;
+      background: rgba(0,0,0,.55); backdrop-filter: blur(3px);
+      opacity: 0; pointer-events: none; transition: opacity .25s;
+    }
+    .drawer-overlay.open { opacity: 1; pointer-events: all; }
+
+    .drawer {
+      position: fixed; top: 0; right: 0; bottom: 0;
+      width: min(480px, 100vw);
+      background: #1a1736;
+      border-left: 1px solid var(--border2);
+      box-shadow: -8px 0 40px rgba(0,0,0,.5);
+      display: flex; flex-direction: column;
+      transform: translateX(100%);
+      transition: transform .28s cubic-bezier(.4,0,.2,1);
+      z-index: 401;
+    }
+    .drawer.open { transform: translateX(0); }
+
+    .drawer-head {
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .drawer-head-top {
+      display: flex; align-items: flex-start;
+      justify-content: space-between; gap: 12px;
+      margin-bottom: 10px;
+    }
+    .drawer-close {
+      width: 30px; height: 30px; border-radius: 8px;
+      background: rgba(255,255,255,.06); border: none;
+      color: var(--dim2); font-size: 16px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: background .15s;
+    }
+    .drawer-close:hover { background: rgba(255,255,255,.12); color: var(--white); }
+
+    .drawer-cat-badge {
+      display: inline-block; padding: 3px 9px; border-radius: 5px;
+      font-size: 11px; font-weight: 700; margin-bottom: 7px;
+    }
+    .drawer-title { font-size: 18px; font-weight: 800; line-height: 1.3; }
+    .drawer-desc  { font-size: 13px; color: var(--dim2); margin-top: 6px; line-height: 1.5; }
+
+    .drawer-meta {
+      display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px;
+    }
+    .d-meta-chip {
+      display: flex; align-items: center; gap: 5px;
+      background: rgba(255,255,255,.05); border: 1px solid var(--border);
+      border-radius: 6px; padding: 4px 10px;
+      font-size: 11px; color: var(--dim2);
+    }
+    .d-meta-chip .av-xs {
+      width: 18px; height: 18px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 9px; font-weight: 800; color: var(--white);
+    }
+
+    /* Sub-task list */
+    .drawer-body { flex: 1; overflow-y: auto; padding: 16px 20px 24px; }
+    .subtask-section-label {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1.5px; color: var(--orange);
+      margin-bottom: 12px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .subtask-add-btn {
+      font-size: 11px; color: var(--dim2); background: none; border: none;
+      cursor: pointer; padding: 2px 8px; border-radius: 5px;
+      transition: background .15s;
+    }
+    .subtask-add-btn:hover { background: rgba(255,255,255,.07); color: var(--white); }
+
+    .subtask-item {
+      display: flex; align-items: flex-start; gap: 10px;
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px 14px;
+      margin-bottom: 8px;
+      transition: border-color .15s;
+    }
+    .subtask-item:hover { border-color: var(--border2); }
+    .subtask-item.done-st { opacity: .5; }
+    .subtask-item.done-st .st-name { text-decoration: line-through; }
+
+    .st-check {
+      width: 18px; height: 18px; border-radius: 5px;
+      border: 2px solid var(--border2); flex-shrink: 0;
+      cursor: pointer; margin-top: 2px;
+      display: flex; align-items: center; justify-content: center;
+      transition: all .15s; background: transparent;
+    }
+    .subtask-item.done-st .st-check {
+      background: var(--success); border-color: var(--success);
+      color: var(--white); font-size: 10px;
+    }
+    .st-check:hover { border-color: var(--orange); }
+
+    .st-body { flex: 1; min-width: 0; }
+    .st-name { font-size: 13px; font-weight: 600; line-height: 1.3; }
+    .st-what { font-size: 11px; color: var(--dim2); margin-top: 3px; line-height: 1.4; }
+
+    .st-who {
+      display: flex; align-items: center; gap: 5px;
+      margin-top: 7px;
+    }
+    .st-av {
+      width: 20px; height: 20px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 9px; font-weight: 800; color: var(--white);
+    }
+    .st-who-name { font-size: 11px; color: var(--navy-p); font-weight: 600; }
+
+    .st-del {
+      width: 22px; height: 22px; border-radius: 5px;
+      background: transparent; border: none; cursor: pointer;
+      color: var(--dim); font-size: 12px;
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; transition: opacity .15s, background .15s;
+    }
+    .subtask-item:hover .st-del { opacity: 1; }
+    .st-del:hover { background: rgba(229,57,53,.2); color: #ef9a9a; }
+
+    /* Empty sub-task state */
+    .st-empty {
+      text-align: center; padding: 24px 0;
+      color: var(--dim); font-size: 12px;
+    }
+
+    /* Drawer add-subtask form */
+    .st-add-form {
+      display: none;
+      background: rgba(255,255,255,.03);
+      border: 1px dashed var(--border2);
+      border-radius: 10px; padding: 12px;
+      margin-top: 8px;
+    }
+    .st-add-form.open { display: block; }
+    .st-add-form input, .st-add-form select {
+      width: 100%; padding: 7px 10px; border-radius: 7px;
+      background: rgba(255,255,255,.06); border: 1px solid var(--border2);
+      color: var(--white); font-size: 12px; font-family: inherit;
+      margin-bottom: 7px;
+    }
+    .st-add-form input:focus, .st-add-form select:focus { outline: none; border-color: var(--orange); }
+    .st-add-btns { display: flex; gap: 6px; justify-content: flex-end; }
+
+    /* Progress bar in drawer */
+    .drawer-progress { margin-top: 10px; }
+    .dp-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim2); margin-bottom: 5px; }
+    .dp-track { height: 6px; background: rgba(255,255,255,.07); border-radius: 3px; overflow: hidden; }
+    .dp-fill { height: 100%; border-radius: 3px; background: var(--success); transition: width .6s ease; }
+
+    /* ══ TOAST ══ */
+    .toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(60px);
+      background: #2a2754; border: 1px solid var(--border2);
+      border-radius: 10px; padding: 10px 18px;
+      font-size: 12px; color: var(--white); z-index: 2000;
+      transition: transform .3s cubic-bezier(.34,1.56,.64,1);
+      box-shadow: 0 8px 24px rgba(0,0,0,.4);
+      pointer-events: none;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+
+    /* ══ RESPONSIVE ══ */
+    @media (max-width: 900px) {
+      .board { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 600px) {
+      .hdr { padding: 0 12px; }
+      .toolbar { padding: 10px 12px; }
+      .board { padding: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="hdr">
+  <div class="hdr-l">
+    <div class="hdr-logo">KZ</div>
+    <div>
+      <div class="hdr-t">Task Board</div>
+      <div class="hdr-s">AI Camera Platform 2026 — KZTEK</div>
+    </div>
+  </div>
+  <div class="hdr-r">
+    <button class="btn-sm" onclick="undoLast()" id="undo-btn" disabled>↩ Hoàn tác</button>
+    <button class="btn-sm" onclick="resetBoard()">⟳ Reset</button>
+    <a href="dashboard-ai-camera-platform.html" class="btn-sm">← Dashboard</a>
+    <button class="btn-sm primary" onclick="openAddModal(null,'doing')">+ Thêm task</button>
+  </div>
+</header>
+
+<!-- TOOLBAR -->
+<div class="toolbar">
+  <div class="sprint-chips">
+    <button class="sc active" data-sprint="all">Tất cả</button>
+    <button class="sc" data-sprint="doing">⚡ Đang làm</button>
+    <button class="sc" data-sprint="1-2">Sprint 1–2</button>
+    <button class="sc" data-sprint="3-4">Sprint 3–4</button>
+    <button class="sc" data-sprint="5-7">Sprint 5–7</button>
+    <button class="sc" data-sprint="8-10">Sprint 8–10</button>
+    <button class="sc" data-sprint="done">✓ Xong</button>
+  </div>
+  <div class="sprint-indicator">
+    <div class="sprint-dot"></div>
+    <span>Sprint hiện tại: <strong style="color:var(--orange)">1–2</strong></span>
+  </div>
+</div>
+
+<!-- BOARD -->
+<div class="board" id="board"></div>
+
+<!-- MODAL -->
+<div class="overlay" id="overlay" onclick="handleOverlayClick(event)">
+  <div class="modal">
+    <h2 id="modal-title">Thêm task</h2>
+    <div class="form-row">
+      <label>Tên task</label>
+      <input type="text" id="f-name" placeholder="Tên task...">
+    </div>
+    <div class="form-row">
+      <label>Mô tả ngắn</label>
+      <textarea id="f-desc" rows="2" placeholder="Mô tả..."></textarea>
+    </div>
+    <div class="form-row">
+      <label>Danh mục</label>
+      <select id="f-cat">
+        <option value="Core">🏗️ Core Platform</option>
+        <option value="Vehicle">🚗 Vehicle AI</option>
+        <option value="FaceID">👤 FaceID</option>
+        <option value="Parking">🅿️ Parking</option>
+        <option value="People">🚶 People Analytics</option>
+        <option value="Helpdesk">🤖 Helpdesk</option>
+        <option value="Data">🗂️ Data</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Phụ trách</label>
+      <select id="f-owner">
+        <option value="kien">Kiên</option>
+        <option value="trong">Trọng</option>
+        <option value="tam">Tâm</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Sprint</label>
+      <select id="f-sprint">
+        <option value="doing">⚡ Đang làm (Sprint 1–2)</option>
+        <option value="1-2">Sprint 1–2</option>
+        <option value="3-4">Sprint 3–4</option>
+        <option value="5-7">Sprint 5–7</option>
+        <option value="8-10">Sprint 8–10</option>
+      </select>
+    </div>
+    <div class="modal-btns">
+      <button class="btn-sm" onclick="closeModal()">Hủy</button>
+      <button class="btn-sm primary" onclick="saveModal()">Lưu</button>
+    </div>
+  </div>
+</div>
+
+<!-- DRAWER -->
+<div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer">
+  <div class="drawer-head">
+    <div class="drawer-head-top">
+      <div style="flex:1">
+        <div class="drawer-cat-badge" id="d-badge"></div>
+        <div class="drawer-title" id="d-title"></div>
+        <div class="drawer-desc" id="d-desc"></div>
+      </div>
+      <button class="drawer-close" onclick="closeDrawer()">✕</button>
+    </div>
+    <div class="drawer-meta" id="d-meta"></div>
+    <div class="drawer-progress" id="d-progress"></div>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ══════════════════════════════════════════
+//  DATA
+// ══════════════════════════════════════════
+
+const PEOPLE = {
+  kien:  { name: 'Kiên',  role: 'Tech Lead · Backend · AI Server',      av: 'K', color: '#4A3F8C', grad: 'linear-gradient(135deg,#4A3F8C,#2d2268)' },
+  trong: { name: 'Trọng', role: 'CV Engineer · Tracking & Analytics', av: 'T', color: '#1a7a6a', grad: 'linear-gradient(135deg,#1a8f7a,#0d5c4f)' },
+  tam:   { name: 'Tâm',   role: 'CV Engineer · LPR & Data',            av: 'T', color: '#7b4ea0', grad: 'linear-gradient(135deg,#7b4ea0,#4a2070)' },
+};
+
+const CAT_STYLE = {
+  Core:     { bg:'rgba(74,63,140,.28)',  color:'#B8B3D6', icon:'🏗️' },
+  Vehicle:  { bg:'rgba(26,143,122,.25)', color:'#7de0ce', icon:'🚗' },
+  FaceID:   { bg:'rgba(240,89,34,.2)',   color:'#FFAA80', icon:'👤' },
+  Parking:  { bg:'rgba(123,78,160,.22)', color:'#c9a0e0', icon:'🅿️' },
+  People:   { bg:'rgba(33,150,243,.2)',  color:'#90CAF9', icon:'🚶' },
+  Helpdesk: { bg:'rgba(76,175,80,.2)',   color:'#A5D6A7', icon:'🤖' },
+  Data:     { bg:'rgba(255,152,0,.2)',   color:'#FFCC80', icon:'🗂️' },
+};
+
+const SPRINT_SECTIONS = [
+  { key:'doing',  label:'⚡ Đang làm',   check: t => t.sprint === 'doing' && !t.done },
+  { key:'1-2',    label:'Sprint 1 → 2',  check: t => t.sprint === '1-2'  && !t.done },
+  { key:'3-4',    label:'Sprint 3 → 4',  check: t => t.sprint === '3-4'  && !t.done },
+  { key:'5-7',    label:'Sprint 5 → 7',  check: t => t.sprint === '5-7'  && !t.done },
+  { key:'8-10',   label:'Sprint 8 → 10', check: t => t.sprint === '8-10' && !t.done },
+  { key:'done',   label:'✓ Hoàn thành',  check: t => t.done },
+];
+
+const DEFAULT_TASKS = [
+  // ── Core Platform ──
+  { id:'t1',  name:'Camera Gateway',          desc:'Kết nối RTSP, quản lý 200+ camera',         cat:'Core',     owner:'kien',  sprint:'doing', done:false },
+  { id:'t2',  name:'Stream Engine',           desc:'FFmpeg đọc frame, resize, queue',            cat:'Core',     owner:'kien',  sprint:'doing', done:false },
+  { id:'t3',  name:'AI Server',               desc:'FastAPI, điều phối GPU, REST endpoints',     cat:'Core',     owner:'kien',  sprint:'doing', done:false },
+  { id:'t4',  name:'Backend API & C# Integration', desc:'REST endpoints tích hợp iParking',     cat:'Core',     owner:'kien',  sprint:'3-4',   done:false },
+  { id:'t5',  name:'Notification Engine',     desc:'Webhook Telegram, Zalo cảnh báo event',     cat:'Core',     owner:'kien',  sprint:'3-4',   done:false },
+  // ── Vehicle AI ──
+  { id:'t6',  name:'Vehicle Classification',  desc:'Fine-tune YOLO từ model iParking',           cat:'Vehicle',  owner:'tam',   sprint:'doing', done:false },
+  { id:'t7',  name:'Vehicle Counter',         desc:'Đếm xe, xác định chiều vào/ra qua line',    cat:'Vehicle',  owner:'trong', sprint:'3-4',   done:false },
+  { id:'t8',  name:'LPR Streaming',           desc:'YOLO + PaddleOCR, biển số realtime',         cat:'Vehicle',  owner:'tam',   sprint:'3-4',   done:false },
+  { id:'t9',  name:'Vehicle Search',          desc:'Query lịch sử xe theo biển số + thời gian', cat:'Vehicle',  owner:'tam',   sprint:'8-10',  done:false },
+  // ── Tracking ──
+  { id:'t10', name:'Tracking Engine',         desc:'ByteTrack — ID liên tục giữa các frame',    cat:'Core',     owner:'trong', sprint:'doing', done:false },
+  // ── FaceID ──
+  { id:'t11', name:'Face Detection & Embedding', desc:'InsightFace, chuẩn hóa vector 512-dim', cat:'FaceID',   owner:'trong', sprint:'doing', done:false },
+  { id:'t12', name:'FaceID Server Phase 1',   desc:'Tối ưu tốc độ xử lý, tài nguyên GPU',       cat:'FaceID',   owner:'kien',  sprint:'3-4',   done:false },
+  { id:'t13', name:'FaceID ARM & Android',    desc:'ONNX → TFLite, deploy RK3588 / Jetson',     cat:'FaceID',   owner:'kien',  sprint:'5-7',   done:false },
+  { id:'t14', name:'FaceID Server Phase 2',   desc:'Webapp quản trị, Whitelist/Blacklist UI',   cat:'FaceID',   owner:'kien',  sprint:'8-10',  done:false },
+  // ── Parking ──
+  { id:'t15', name:'Parking Slot Detection',  desc:'Vẽ polygon ROI, detect trống/đầy từng ô',  cat:'Parking',  owner:'trong', sprint:'5-7',   done:false },
+  { id:'t16', name:'Occupancy & Heatmap',     desc:'Tỷ lệ lấp đầy, map nhiệt khu vực',         cat:'Parking',  owner:'trong', sprint:'5-7',   done:false },
+  // ── People ──
+  { id:'t17', name:'People Counting',         desc:'Đếm người qua line, tái dùng Counter',      cat:'People',   owner:'trong', sprint:'5-7',   done:false },
+  { id:'t18', name:'Zone & Dwell Time',       desc:'Khu vực đông người, thời gian đứng tại chỗ',cat:'People',  owner:'trong', sprint:'8-10',  done:false },
+  // ── Helpdesk ──
+  { id:'t19', name:'Q&A Bot & Helpdesk Bot',  desc:'RAG trên tài liệu sản phẩm KZTEK',          cat:'Helpdesk', owner:'kien',  sprint:'5-7',   done:false },
+  // ── Data ──
+  { id:'t20', name:'Dataset Management',      desc:'Label, chuẩn hóa folder, data pipeline',    cat:'Data',     owner:'tam',   sprint:'doing', done:false },
+  { id:'t21', name:'Parking Data Collection', desc:'Chụp ảnh bãi đỗ xe, label ô trống/đầy',    cat:'Data',     owner:'tam',   sprint:'5-7',   done:false },
+  { id:'t22', name:'Face Recognition API',    desc:'Tra cứu danh tính từ embedding vector',     cat:'FaceID',   owner:'trong', sprint:'3-4',   done:false },
+];
+
+// ══════════════════════════════════════════
+//  SUBTASKS DATA
+// ══════════════════════════════════════════
+
+const SUBTASKS_KEY = 'kztek-subtasks-v2';
+
+const DEFAULT_SUBTASKS = {
+  't1': [ // Camera Gateway
+    { id:'s1-1', name:'Nghiên cứu RTSP / ONVIF protocol', what:'Đọc spec, viết test kết nối đơn giản', who:'kien', done:false },
+    { id:'s1-2', name:'RTSP Connection Pool Manager',      what:'Pool connection, auto-reconnect khi mất mạng', who:'kien', done:false },
+    { id:'s1-3', name:'Camera health monitor',             what:'Ping định kỳ 30s, log trạng thái online/offline', who:'kien', done:false },
+    { id:'s1-4', name:'Test với camera thực tế KZTEK',    what:'Validate với ít nhất 5 camera IP của KZTEK', who:'kien', done:false },
+  ],
+  't2': [ // Stream Engine
+    { id:'s2-1', name:'FFmpeg frame extraction wrapper',   what:'Extract frame theo FPS target (1–30 FPS)', who:'kien', done:false },
+    { id:'s2-2', name:'Frame queue & buffer manager',      what:'Priority queue, tự drop frame khi queue đầy', who:'kien', done:false },
+    { id:'s2-3', name:'Multi-stream thread pool',          what:'Thread pool xử lý song song nhiều camera', who:'kien', done:false },
+    { id:'s2-4', name:'Pipe frame sang Tracking Engine',   what:'Tích hợp đầu ra vào ByteTrack của Trọng', who:'trong', done:false },
+  ],
+  't3': [ // AI Server
+    { id:'s3-1', name:'Khởi tạo FastAPI project',         what:'Cấu trúc project, middleware, logging', who:'kien', done:false },
+    { id:'s3-2', name:'GPU resource manager',              what:'Phân phối task theo GPU available', who:'kien', done:false },
+    { id:'s3-3', name:'REST endpoints chuẩn',              what:'/detect, /track, /recognize — input/output schema', who:'kien', done:false },
+    { id:'s3-4', name:'Docker Compose setup',              what:'Đóng gói toàn bộ service, test local', who:'kien', done:false },
+  ],
+  't4': [ // Backend API
+    { id:'s4-1', name:'Thiết kế API schema tổng thể',     what:'OpenAPI spec cho toàn bộ endpoints platform', who:'kien', done:false },
+    { id:'s4-2', name:'Database schema (PostgreSQL)',      what:'Bảng camera, event, device, user', who:'kien', done:false },
+    { id:'s4-3', name:'C# SDK wrapper',                    what:'Wrap REST API thành C# class cho iParking', who:'kien', done:false },
+    { id:'s4-4', name:'Authentication & phân quyền',      what:'JWT token, role: Admin / Viewer / Device', who:'kien', done:false },
+  ],
+  't5': [ // Notification Engine
+    { id:'s5-1', name:'Telegram Bot integration',         what:'Gửi ảnh + text khi có event, hỗ trợ nhiều group', who:'kien', done:false },
+    { id:'s5-2', name:'Zalo Official Account webhook',    what:'Gửi thông báo qua Zalo OA', who:'kien', done:false },
+    { id:'s5-3', name:'Rule engine cho cảnh báo',         what:'Cấu hình điều kiện trigger (xe vào, đầy bãi…)', who:'kien', done:false },
+  ],
+  't6': [ // Vehicle Classification
+    { id:'s6-1', name:'Thu thập data xe Việt Nam',        what:'Ảnh xe máy, ô tô, xe tải, xe bus — đủ góc, ánh sáng', who:'tam', done:false },
+    { id:'s6-2', name:'Label data với CVAT',              what:'Gán nhãn loại xe, màu sắc cho từng ảnh', who:'tam', done:false },
+    { id:'s6-3', name:'Fine-tune YOLOv8 từ iParking',     what:'Tái dùng checkpoint, train thêm 50 epochs', who:'tam', done:false },
+    { id:'s6-4', name:'Đánh giá accuracy (mAP, F1)',      what:'Đạt mAP ≥ 0.85 trước khi đưa vào production', who:'tam', done:false },
+    { id:'s6-5', name:'Export model + inference wrapper', what:'ONNX export, viết Python wrapper chuẩn', who:'tam', done:false },
+    { id:'s6-6', name:'Review & tích hợp vào AI Server',  what:'Kiểm tra output format, ghép vào pipeline', who:'trong', done:false },
+  ],
+  't7': [ // Vehicle Counter
+    { id:'s7-1', name:'Định nghĩa virtual counting line', what:'Cho phép vẽ line trên camera config', who:'trong', done:false },
+    { id:'s7-2', name:'Thuật toán đếm qua line',          what:'Xác định hướng vào/ra dựa trên tracking ID', who:'trong', done:false },
+    { id:'s7-3', name:'Xử lý trường hợp đặc biệt',       what:'Xe dừng trên line, xe đi lùi', who:'trong', done:false },
+    { id:'s7-4', name:'Xuất báo cáo đếm xe theo giờ',    what:'Lưu vào DB, expose qua API', who:'trong', done:false },
+  ],
+  't8': [ // LPR Streaming
+    { id:'s8-1', name:'Tích hợp YOLO detect biển số',    what:'Dùng model LPR sẵn có từ iParking', who:'tam', done:false },
+    { id:'s8-2', name:'PaddleOCR đọc ký tự biển số',     what:'Post-process: chuẩn hóa format (29A-12345)', who:'tam', done:false },
+    { id:'s8-3', name:'Xử lý biển số 2 hàng',            what:'Ghép dòng 1 + dòng 2 thành chuỗi hoàn chỉnh', who:'tam', done:false },
+    { id:'s8-4', name:'Streaming pipeline realtime',      what:'Tích hợp vào Stream Engine, latency < 200ms', who:'kien', done:false },
+    { id:'s8-5', name:'Test độ chính xác các loại biển', what:'Biển mới, biển cũ, biển tỉnh, ban đêm', who:'tam', done:false },
+  ],
+  't9': [ // Vehicle Search
+    { id:'s9-1', name:'Thiết kế schema lưu lịch sử xe',  what:'Bảng: plate, timestamp, camera_id, ảnh crop', who:'tam', done:false },
+    { id:'s9-2', name:'Search API theo biển số + thời gian', what:'GET /search?plate=29A-12345&from=…&to=…', who:'tam', done:false },
+    { id:'s9-3', name:'Fuzzy search biển số mờ',         what:'Tìm gần đúng khi OCR nhận sai 1-2 ký tự', who:'tam', done:false },
+  ],
+  't10': [ // Tracking Engine
+    { id:'s10-1', name:'Tích hợp ByteTrack',             what:'Clone repo, adapt input/output format', who:'trong', done:false },
+    { id:'s10-2', name:'Wrapper chuẩn hóa output',       what:'Output: [{id, bbox, confidence, class}]', who:'trong', done:false },
+    { id:'s10-3', name:'Test ID stability với video',     what:'ID không bị đổi khi object bị che khuất ngắn', who:'trong', done:false },
+    { id:'s10-4', name:'Tích hợp vào Stream Engine',     what:'Pipe frame → detect → track → output event', who:'kien', done:false },
+  ],
+  't11': [ // Face Detection & Embedding
+    { id:'s11-1', name:'Setup InsightFace',               what:'Cài đặt, test với ảnh mẫu', who:'trong', done:false },
+    { id:'s11-2', name:'Face detection pipeline',         what:'Detect tất cả khuôn mặt trong frame', who:'trong', done:false },
+    { id:'s11-3', name:'Embedding extraction (512-dim)',  what:'Chuẩn hóa vector, lưu vào DB', who:'trong', done:false },
+    { id:'s11-4', name:'Face tracking (ghép với ByteTrack)', what:'Gán face ID liên tục giữa các frame', who:'trong', done:false },
+  ],
+  't12': [ // FaceID Server Ph.1
+    { id:'s12-1', name:'API nhận dạng khuôn mặt',        what:'POST /recognize — nhận ảnh, trả danh tính', who:'kien', done:false },
+    { id:'s12-2', name:'Vector database (FAISS/Qdrant)',  what:'Lưu & tìm kiếm embedding nhanh', who:'kien', done:false },
+    { id:'s12-3', name:'Enroll API (thêm người mới)',     what:'POST /enroll — nhận ảnh, tạo embedding', who:'kien', done:false },
+    { id:'s12-4', name:'Benchmark & tối ưu tốc độ',      what:'Target: < 100ms/request với batch 10 người', who:'kien', done:false },
+  ],
+  't13': [ // FaceID ARM
+    { id:'s13-1', name:'Export InsightFace sang ONNX',   what:'Convert model detection + embedding sang ONNX', who:'kien', done:false },
+    { id:'s13-2', name:'Convert ONNX → TFLite',          what:'Optimize cho ARM, quantize INT8', who:'kien', done:false },
+    { id:'s13-3', name:'Test trên thiết bị ARM thực tế', what:'Chạy trên RK3588 hoặc Jetson Nano', who:'trong', done:false },
+    { id:'s13-4', name:'Android SDK wrapper',             what:'JNI wrapper để gọi từ Android app', who:'kien', done:false },
+  ],
+  't14': [ // FaceID Server Ph.2
+    { id:'s14-1', name:'Webapp quản trị React/Vue',      what:'CRUD danh sách người, xem lịch sử nhận dạng', who:'kien', done:false },
+    { id:'s14-2', name:'Whitelist / Blacklist management', what:'UI thêm/xóa/tìm, import CSV', who:'kien', done:false },
+    { id:'s14-3', name:'Alert khi gặp Blacklist',         what:'Tích hợp Notification Engine', who:'kien', done:false },
+    { id:'s14-4', name:'Báo cáo nhận dạng theo ngày',    what:'Chart, export Excel/PDF', who:'kien', done:false },
+  ],
+  't15': [ // Parking Slot Detection
+    { id:'s15-1', name:'Tool vẽ ROI polygon cho từng ô', what:'Web UI kéo thả polygon lên ảnh camera', who:'trong', done:false },
+    { id:'s15-2', name:'Model detect xe trong polygon',  what:'Fine-tune YOLO: có xe / không xe / không rõ', who:'trong', done:false },
+    { id:'s15-3', name:'Thu thập data bãi đỗ xe',        what:'Chụp ảnh các góc, ánh sáng, loại xe khác nhau', who:'tam', done:false },
+    { id:'s15-4', name:'API trạng thái từng ô realtime', what:'GET /parking/{lot_id}/slots — trả JSON map', who:'trong', done:false },
+  ],
+  't16': [ // Occupancy & Heatmap
+    { id:'s16-1', name:'Tính occupancy rate theo thời gian', what:'% lấp đầy mỗi phút, lưu time-series', who:'trong', done:false },
+    { id:'s16-2', name:'Heatmap visualization',           what:'Render ảnh bãi xe + màu theo tỷ lệ đầy', who:'trong', done:false },
+    { id:'s16-3', name:'Cảnh báo khi gần đầy (> 90%)',   what:'Trigger Notification Engine', who:'trong', done:false },
+  ],
+  't17': [ // People Counting
+    { id:'s17-1', name:'Tái dùng logic Vehicle Counter', what:'Refactor để dùng chung cho cả xe lẫn người', who:'trong', done:false },
+    { id:'s17-2', name:'Phân biệt người / xe trong frame', what:'Dùng class detection để lọc đúng đối tượng', who:'trong', done:false },
+    { id:'s17-3', name:'Báo cáo lưu lượng người theo giờ', what:'Dashboard chart + API', who:'trong', done:false },
+  ],
+  't18': [ // Zone & Dwell Time
+    { id:'s18-1', name:'Định nghĩa zone trên camera',    what:'Vẽ polygon zone (quầy thanh toán, cửa vào…)', who:'trong', done:false },
+    { id:'s18-2', name:'Tính thời gian dừng trong zone', what:'Track ID trong zone từ frame đầu đến frame cuối', who:'trong', done:false },
+    { id:'s18-3', name:'Label data cho zone analytics',  what:'Chú thích video có người đứng tại zone', who:'tam', done:false },
+    { id:'s18-4', name:'API & chart dwell time trung bình', what:'Theo zone, theo giờ, theo ngày', who:'trong', done:false },
+  ],
+  't19': [ // Q&A Bot
+    { id:'s19-1', name:'Thu thập tài liệu sản phẩm KZTEK', what:'PDF, Word hướng dẫn cài đặt, vận hành, FAQ', who:'kien', done:false },
+    { id:'s19-2', name:'RAG pipeline (LangChain)',        what:'Chunk → embed → store vector DB', who:'kien', done:false },
+    { id:'s19-3', name:'Q&A interface (web chat)',        what:'UI chat đơn giản, tích hợp vào admin panel', who:'kien', done:false },
+    { id:'s19-4', name:'Test độ chính xác câu trả lời',  what:'Bộ test 50 câu hỏi thường gặp', who:'kien', done:false },
+  ],
+  't20': [ // Dataset Management
+    { id:'s20-1', name:'Chuẩn hóa cấu trúc folder',      what:'Quy tắc đặt tên: {cat}/{split}/{id}.jpg', who:'tam', done:false },
+    { id:'s20-2', name:'Script import/export dataset',   what:'Convert CVAT, LabelImg, Roboflow format', who:'tam', done:false },
+    { id:'s20-3', name:'Thống kê dataset (số lượng, class)', what:'Script tự động đếm, xuất báo cáo CSV', who:'tam', done:false },
+    { id:'s20-4', name:'Version control dataset (DVC)',  what:'Track thay đổi data qua thời gian', who:'tam', done:false },
+  ],
+  't21': [ // Parking Data Collection
+    { id:'s21-1', name:'Lên kế hoạch chụp ảnh',          what:'Xác định bãi xe, góc camera, thời điểm chụp', who:'tam', done:false },
+    { id:'s21-2', name:'Thu thập ảnh ban ngày + ban đêm', what:'Tối thiểu 500 ảnh, đủ trạng thái trống/đầy', who:'tam', done:false },
+    { id:'s21-3', name:'Label polygon từng ô đỗ xe',      what:'Dùng CVAT, mỗi ô 1 polygon + nhãn', who:'tam', done:false },
+  ],
+  't22': [ // Face Recognition API
+    { id:'s22-1', name:'Cosine similarity search',       what:'So sánh embedding mới với toàn bộ DB', who:'trong', done:false },
+    { id:'s22-2', name:'Ngưỡng confidence (threshold)',  what:'Calibrate ngưỡng để tránh false positive', who:'trong', done:false },
+    { id:'s22-3', name:'API tìm kiếm khuôn mặt',        what:'POST /face/search — trả top-5 kết quả gần nhất', who:'trong', done:false },
+    { id:'s22-4', name:'Test với dataset khuôn mặt thực', what:'Đánh giá FAR / FRR trên tập 100 người', who:'trong', done:false },
+  ],
+};
+
+let subtasks = {};
+
+function loadSubtasks() {
+  const raw = localStorage.getItem(SUBTASKS_KEY);
+  if (raw) {
+    subtasks = JSON.parse(raw);
+  } else {
+    subtasks = {};
+    Object.keys(DEFAULT_SUBTASKS).forEach(k => {
+      subtasks[k] = DEFAULT_SUBTASKS[k].map(s => ({ ...s }));
+    });
+  }
+}
+
+function saveSubtasks() {
+  localStorage.setItem(SUBTASKS_KEY, JSON.stringify(subtasks));
+}
+
+// ══════════════════════════════════════════
+//  DRAWER
+// ══════════════════════════════════════════
+
+let openDrawerId = null;
+
+function openDrawer(taskId) {
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) return;
+  openDrawerId = taskId;
+
+  const cat = CAT_STYLE[task.cat] || CAT_STYLE.Core;
+  const owner = PEOPLE[task.owner] || PEOPLE.kien;
+
+  // Badge
+  const badge = document.getElementById('d-badge');
+  badge.textContent = cat.icon + ' ' + task.cat;
+  badge.style.cssText = `background:${cat.bg};color:${cat.color}`;
+
+  document.getElementById('d-title').textContent = task.name;
+  document.getElementById('d-desc').textContent = task.desc || '';
+
+  // Meta chips
+  const meta = document.getElementById('d-meta');
+  meta.innerHTML = `
+    <div class="d-meta-chip">
+      <div class="av-xs" style="background:${owner.grad}">${owner.av}</div>
+      <span>${owner.name}</span>
+    </div>
+    <div class="d-meta-chip">📅 ${sprintLabel(task.sprint)}</div>
+    ${task.done ? '<div class="d-meta-chip" style="color:var(--success)">✓ Hoàn thành</div>' : ''}
+  `;
+
+  renderSubtasks(taskId);
+
+  document.getElementById('drawer-overlay').classList.add('open');
+  document.getElementById('drawer').classList.add('open');
+}
+
+function closeDrawer() {
+  document.getElementById('drawer-overlay').classList.remove('open');
+  document.getElementById('drawer').classList.remove('open');
+  openDrawerId = null;
+}
+
+function renderSubtasks(taskId) {
+  const subs = subtasks[taskId] || [];
+  const doneCount = subs.filter(s => s.done).length;
+  const total = subs.length;
+
+  // Progress
+  const prog = document.getElementById('d-progress');
+  if (total > 0) {
+    const pct = Math.round(doneCount / total * 100);
+    prog.innerHTML = `
+      <div class="dp-labels"><span>${doneCount}/${total} công việc nhỏ xong</span><span>${pct}%</span></div>
+      <div class="dp-track"><div class="dp-fill" style="width:${pct}%"></div></div>
+    `;
+  } else {
+    prog.innerHTML = '';
+  }
+
+  // Body
+  const body = document.getElementById('drawer-body');
+  body.innerHTML = `
+    <div class="subtask-section-label">
+      Công việc nhỏ
+      <button class="subtask-add-btn" onclick="toggleStAddForm()">+ Thêm</button>
+    </div>
+    <div id="st-list"></div>
+    <div class="st-add-form" id="st-add-form">
+      <input type="text" id="st-f-name" placeholder="Tên công việc nhỏ...">
+      <input type="text" id="st-f-what" placeholder="Làm gì cụ thể...">
+      <select id="st-f-who">
+        <option value="kien">Kiên</option>
+        <option value="trong">Trọng</option>
+        <option value="tam">Tâm</option>
+      </select>
+      <div class="st-add-btns">
+        <button class="btn-sm" onclick="toggleStAddForm()">Hủy</button>
+        <button class="btn-sm primary" onclick="saveSubtask()">Thêm</button>
+      </div>
+    </div>
+  `;
+
+  const list = document.getElementById('st-list');
+  if (subs.length === 0) {
+    list.innerHTML = `<div class="st-empty">Chưa có công việc nhỏ nào.<br>Bấm "+ Thêm" để tạo.</div>`;
+  } else {
+    subs.forEach(s => list.appendChild(buildSubtaskEl(taskId, s)));
+  }
+}
+
+function buildSubtaskEl(taskId, s) {
+  const p = PEOPLE[s.who] || PEOPLE.kien;
+  const el = document.createElement('div');
+  el.className = 'subtask-item' + (s.done ? ' done-st' : '');
+  el.dataset.sid = s.id;
+  el.innerHTML = `
+    <div class="st-check" onclick="toggleSubtask('${taskId}','${s.id}')">${s.done ? '✓' : ''}</div>
+    <div class="st-body">
+      <div class="st-name">${escHtml(s.name)}</div>
+      ${s.what ? `<div class="st-what">${escHtml(s.what)}</div>` : ''}
+      <div class="st-who">
+        <div class="st-av" style="background:${p.grad}">${p.av}</div>
+        <span class="st-who-name">${p.name}</span>
+      </div>
+    </div>
+    <button class="st-del" onclick="deleteSubtask('${taskId}','${s.id}')">✕</button>
+  `;
+  return el;
+}
+
+function toggleSubtask(taskId, stId) {
+  const subs = subtasks[taskId] || [];
+  const s = subs.find(x => x.id === stId);
+  if (!s) return;
+  s.done = !s.done;
+  saveSubtasks();
+  renderSubtasks(taskId);
+}
+
+function deleteSubtask(taskId, stId) {
+  subtasks[taskId] = (subtasks[taskId] || []).filter(s => s.id !== stId);
+  saveSubtasks();
+  renderSubtasks(taskId);
+}
+
+function toggleStAddForm() {
+  document.getElementById('st-add-form').classList.toggle('open');
+  if (document.getElementById('st-add-form').classList.contains('open')) {
+    setTimeout(() => document.getElementById('st-f-name').focus(), 50);
+  }
+}
+
+function saveSubtask() {
+  if (!openDrawerId) return;
+  const name = document.getElementById('st-f-name').value.trim();
+  if (!name) return;
+  if (!subtasks[openDrawerId]) subtasks[openDrawerId] = [];
+  subtasks[openDrawerId].push({
+    id: 'st' + Date.now(),
+    name,
+    what: document.getElementById('st-f-what').value.trim(),
+    who:  document.getElementById('st-f-who').value,
+    done: false,
+  });
+  saveSubtasks();
+  renderSubtasks(openDrawerId);
+  document.getElementById('st-f-name').value = '';
+  document.getElementById('st-f-what').value = '';
+  document.getElementById('st-add-form').classList.remove('open');
+}
+
+// ══════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════
+
+let tasks = [];
+let undoStack = [];
+let sprintFilter = 'all';
+let dragId = null;
+let editId = null;
+
+const STORAGE_KEY = 'kztek-board-v2';
+
+function load() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  tasks = raw ? JSON.parse(raw) : DEFAULT_TASKS.map(t => ({ ...t }));
+}
+
+function save() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+}
+
+function pushUndo() {
+  undoStack.push(JSON.stringify(tasks));
+  if (undoStack.length > 20) undoStack.shift();
+  document.getElementById('undo-btn').disabled = false;
+}
+
+function undoLast() {
+  if (!undoStack.length) return;
+  tasks = JSON.parse(undoStack.pop());
+  if (!undoStack.length) document.getElementById('undo-btn').disabled = true;
+  save();
+  render();
+  toast('Đã hoàn tác');
+}
+
+function resetBoard() {
+  if (!confirm('Reset về dữ liệu mặc định?')) return;
+  pushUndo();
+  tasks = DEFAULT_TASKS.map(t => ({ ...t }));
+  save(); render();
+  toast('Đã reset board');
+}
+
+// ══════════════════════════════════════════
+//  RENDER
+// ══════════════════════════════════════════
+
+function render() {
+  const board = document.getElementById('board');
+  board.innerHTML = '';
+  ['kien','trong','tam'].forEach(p => board.appendChild(buildColumn(p)));
+  bindDrag();
+}
+
+function filteredTasks(owner) {
+  return tasks.filter(t => {
+    if (t.owner !== owner) return false;
+    if (sprintFilter === 'all') return true;
+    if (sprintFilter === 'done') return t.done;
+    if (sprintFilter === 'doing') return t.sprint === 'doing' && !t.done;
+    return t.sprint === sprintFilter && !t.done;
+  });
+}
+
+function buildColumn(owner) {
+  const p = PEOPLE[owner];
+  const ownerTasks = tasks.filter(t => t.owner === owner);
+  const doingCount = ownerTasks.filter(t => t.sprint === 'doing' && !t.done).length;
+  const totalActive = ownerTasks.filter(t => !t.done).length;
+  const doneCount = ownerTasks.filter(t => t.done).length;
+  const wlPct = Math.min(100, Math.round(totalActive / 8 * 100));
+
+  const col = document.createElement('div');
+  col.className = 'col';
+  col.dataset.owner = owner;
+
+  // Header
+  col.innerHTML = `
+    <div class="col-head">
+      <div class="col-head-left">
+        <div class="col-av" style="background:${p.grad}">${p.av}</div>
+        <div>
+          <div class="col-name">${p.name}</div>
+          <div class="col-role">${p.role}</div>
+        </div>
+      </div>
+      <div class="col-count">${totalActive} task${doneCount ? ` · ✓${doneCount}` : ''}</div>
+    </div>
+    <div class="wl-bar">
+      <div class="wl-bar-track">
+        <div class="wl-bar-fill" style="width:${wlPct}%;background:${p.color}"></div>
+      </div>
+      <div class="wl-bar-labels"><span>Khối lượng</span><span>${totalActive} active</span></div>
+    </div>
+  `;
+
+  // Sections
+  const sectionsToShow = sprintFilter === 'all'
+    ? SPRINT_SECTIONS
+    : SPRINT_SECTIONS.filter(s => s.key === sprintFilter || (sprintFilter !== 'done' && s.key === sprintFilter));
+
+  const allSections = sprintFilter === 'all' ? SPRINT_SECTIONS : SPRINT_SECTIONS;
+
+  allSections.forEach(sec => {
+    const secTasks = tasks.filter(t => t.owner === owner && sec.check(t));
+
+    // Apply sprint filter
+    const visible = sprintFilter === 'all' || sprintFilter === sec.key;
+    if (!visible && secTasks.length === 0) return;
+    if (!visible) return;
+
+    if (secTasks.length === 0 && sec.key !== 'doing') return;
+
+    const secEl = document.createElement('div');
+    secEl.className = 'section' + (sec.key === 'doing' ? ' doing-section' : '');
+
+    const isDoing = sec.key === 'doing';
+    secEl.innerHTML = `
+      <div class="sec-label">
+        <span class="sec-label-text ${isDoing ? 'doing-lbl' : ''}">${sec.label}</span>
+        <span class="sec-count">${secTasks.length}</span>
+      </div>
+    `;
+
+    const dz = document.createElement('div');
+    dz.className = 'drop-zone';
+    dz.dataset.owner = owner;
+    dz.dataset.sprint = sec.key;
+
+    if (secTasks.length === 0) {
+      dz.innerHTML = `<div class="drop-zone empty-hint">Kéo task vào đây</div>`;
+    } else {
+      secTasks.forEach(t => dz.appendChild(buildCard(t)));
+    }
+
+    secEl.appendChild(dz);
+
+    // Add task btn on "doing" section
+    if (sec.key === 'doing') {
+      const addBtn = document.createElement('button');
+      addBtn.className = 'add-task-btn';
+      addBtn.innerHTML = '+ Thêm task đang làm';
+      addBtn.onclick = () => openAddModal(owner, 'doing');
+      secEl.appendChild(addBtn);
+    }
+
+    col.appendChild(secEl);
+  });
+
+  // Generic add button at bottom
+  if (sprintFilter === 'all') {
+    const addWrap = document.createElement('div');
+    addWrap.style.cssText = 'padding:6px 12px 12px';
+    const addBtn = document.createElement('button');
+    addBtn.className = 'add-task-btn';
+    addBtn.innerHTML = '+ Thêm task cho ' + p.name;
+    addBtn.onclick = () => openAddModal(owner, '3-4');
+    addWrap.appendChild(addBtn);
+    col.appendChild(addWrap);
+  }
+
+  return col;
+}
+
+function buildCard(t) {
+  const cat = CAT_STYLE[t.cat] || CAT_STYLE.Core;
+  const card = document.createElement('div');
+  card.className = 'task-card' + (t.done ? ' done' : '');
+  card.dataset.id = t.id;
+  card.draggable = true;
+  card.addEventListener('click', e => {
+    if (e.target.closest('.tc-actions') || e.target.closest('.tc-sprint')) return;
+    openDrawer(t.id);
+  });
+
+  card.innerHTML = `
+    <div class="tc-top">
+      <div class="tc-left">
+        <div class="tc-badge" style="background:${cat.bg};color:${cat.color}">${cat.icon} ${t.cat}</div>
+        <div class="tc-name">${escHtml(t.name)}</div>
+        ${t.desc ? `<div class="tc-desc">${escHtml(t.desc)}</div>` : ''}
+      </div>
+      <div class="tc-actions">
+        <button class="tc-btn done-btn" title="${t.done ? 'Mở lại' : 'Đánh dấu xong'}" onclick="toggleDone('${t.id}')">
+          ${t.done ? '↩' : '✓'}
+        </button>
+        <button class="tc-btn edit-btn" title="Chỉnh sửa" onclick="openEditModal('${t.id}')">✏</button>
+        <button class="tc-btn del-btn" title="Xóa" onclick="deleteTask('${t.id}')">✕</button>
+      </div>
+    </div>
+    <div class="tc-footer">
+      <span class="tc-sprint" onclick="cycleSprint('${t.id}')" title="Click để đổi sprint">
+        ${sprintLabel(t.sprint)}
+      </span>
+      ${t.done ? '<span class="done-check">✓ Xong</span>' : '<span class="tc-drag">⠿⠿</span>'}
+    </div>
+  `;
+
+  return card;
+}
+
+function sprintLabel(s) {
+  const map = { 'doing':'⚡ Đang làm', '1-2':'S1–2', '3-4':'S3–4', '5-7':'S5–7', '8-10':'S8–10' };
+  return map[s] || s;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ══════════════════════════════════════════
+//  DRAG & DROP
+// ══════════════════════════════════════════
+
+function bindDrag() {
+  document.querySelectorAll('.task-card').forEach(card => {
+    card.addEventListener('dragstart', e => {
+      dragId = card.dataset.id;
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', dragId);
+    });
+    card.addEventListener('dragend', () => {
+      document.querySelectorAll('.task-card').forEach(c => c.classList.remove('dragging'));
+      document.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('over'));
+      document.querySelectorAll('.col').forEach(c => c.classList.remove('drag-target'));
+    });
+  });
+
+  document.querySelectorAll('.drop-zone').forEach(zone => {
+    zone.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      zone.classList.add('over');
+      zone.closest('.col')?.classList.add('drag-target');
+    });
+    zone.addEventListener('dragleave', e => {
+      if (!zone.contains(e.relatedTarget)) {
+        zone.classList.remove('over');
+      }
+    });
+    zone.addEventListener('drop', e => {
+      e.preventDefault();
+      zone.classList.remove('over');
+      document.querySelectorAll('.col').forEach(c => c.classList.remove('drag-target'));
+      const id = e.dataTransfer.getData('text/plain') || dragId;
+      if (!id) return;
+      const newOwner = zone.dataset.owner;
+      const newSprint = zone.dataset.sprint;
+      moveTask(id, newOwner, newSprint);
+    });
+  });
+
+  // Col-level drop (when dropping on col header/empty areas)
+  document.querySelectorAll('.col').forEach(col => {
+    col.addEventListener('dragover', e => {
+      e.preventDefault();
+      col.classList.add('drag-target');
+    });
+    col.addEventListener('dragleave', e => {
+      if (!col.contains(e.relatedTarget)) col.classList.remove('drag-target');
+    });
+    col.addEventListener('drop', e => {
+      if (e.target.closest('.drop-zone')) return; // handled by zone
+      e.preventDefault();
+      col.classList.remove('drag-target');
+      const id = e.dataTransfer.getData('text/plain') || dragId;
+      if (!id) return;
+      const newOwner = col.dataset.owner;
+      const task = tasks.find(t => t.id === id);
+      if (task) moveTask(id, newOwner, task.sprint);
+    });
+  });
+}
+
+// ══════════════════════════════════════════
+//  TASK OPERATIONS
+// ══════════════════════════════════════════
+
+function moveTask(id, newOwner, newSprint) {
+  const task = tasks.find(t => t.id === id);
+  if (!task) return;
+  if (task.owner === newOwner && task.sprint === newSprint) return;
+  pushUndo();
+  const oldOwner = PEOPLE[task.owner]?.name || task.owner;
+  const newOwnerName = PEOPLE[newOwner]?.name || newOwner;
+  task.owner = newOwner;
+  if (newSprint && newSprint !== task.sprint) task.sprint = newSprint;
+  save(); render();
+  toast(`"${task.name}" → ${newOwnerName}`);
+}
+
+function toggleDone(id) {
+  const task = tasks.find(t => t.id === id);
+  if (!task) return;
+  pushUndo();
+  task.done = !task.done;
+  save(); render();
+  toast(task.done ? `✓ Xong: ${task.name}` : `↩ Mở lại: ${task.name}`);
+}
+
+function deleteTask(id) {
+  const task = tasks.find(t => t.id === id);
+  if (!task || !confirm(`Xóa task "${task.name}"?`)) return;
+  pushUndo();
+  tasks = tasks.filter(t => t.id !== id);
+  save(); render();
+  toast(`Đã xóa: ${task.name}`);
+}
+
+function cycleSprint(id) {
+  const task = tasks.find(t => t.id === id);
+  if (!task || task.done) return;
+  const order = ['doing','1-2','3-4','5-7','8-10'];
+  const idx = order.indexOf(task.sprint);
+  pushUndo();
+  task.sprint = order[(idx + 1) % order.length];
+  save(); render();
+}
+
+// ══════════════════════════════════════════
+//  MODAL
+// ══════════════════════════════════════════
+
+function openAddModal(owner, sprint) {
+  editId = null;
+  document.getElementById('modal-title').textContent = 'Thêm task mới';
+  document.getElementById('f-name').value = '';
+  document.getElementById('f-desc').value = '';
+  document.getElementById('f-cat').value = 'Core';
+  document.getElementById('f-owner').value = owner || 'kien';
+  document.getElementById('f-sprint').value = sprint || 'doing';
+  document.getElementById('overlay').classList.add('open');
+  setTimeout(() => document.getElementById('f-name').focus(), 150);
+}
+
+function openEditModal(id) {
+  const t = tasks.find(x => x.id === id);
+  if (!t) return;
+  editId = id;
+  document.getElementById('modal-title').textContent = 'Chỉnh sửa task';
+  document.getElementById('f-name').value = t.name;
+  document.getElementById('f-desc').value = t.desc || '';
+  document.getElementById('f-cat').value = t.cat;
+  document.getElementById('f-owner').value = t.owner;
+  document.getElementById('f-sprint').value = t.sprint;
+  document.getElementById('overlay').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('overlay').classList.remove('open');
+  editId = null;
+}
+
+function handleOverlayClick(e) {
+  if (e.target === document.getElementById('overlay')) closeModal();
+}
+
+function saveModal() {
+  const name = document.getElementById('f-name').value.trim();
+  if (!name) { document.getElementById('f-name').focus(); return; }
+  pushUndo();
+  if (editId) {
+    const t = tasks.find(x => x.id === editId);
+    t.name   = name;
+    t.desc   = document.getElementById('f-desc').value.trim();
+    t.cat    = document.getElementById('f-cat').value;
+    t.owner  = document.getElementById('f-owner').value;
+    t.sprint = document.getElementById('f-sprint').value;
+    toast(`Đã cập nhật: ${name}`);
+  } else {
+    tasks.push({
+      id: 'c' + Date.now(),
+      name,
+      desc:   document.getElementById('f-desc').value.trim(),
+      cat:    document.getElementById('f-cat').value,
+      owner:  document.getElementById('f-owner').value,
+      sprint: document.getElementById('f-sprint').value,
+      done:   false,
+    });
+    toast(`Đã thêm: ${name}`);
+  }
+  save(); render(); closeModal();
+}
+
+// ══════════════════════════════════════════
+//  SPRINT FILTER
+// ══════════════════════════════════════════
+
+document.querySelectorAll('.sc').forEach(btn => {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.sc').forEach(b => b.classList.remove('active'));
+    this.classList.add('active');
+    sprintFilter = this.dataset.sprint;
+    render();
+  });
+});
+
+// ══════════════════════════════════════════
+//  TOAST
+// ══════════════════════════════════════════
+
+let toastTimer = null;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+// ══════════════════════════════════════════
+//  KEYBOARD
+// ══════════════════════════════════════════
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeModal(); closeDrawer(); }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undoLast(); }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openAddModal(null,'doing'); }
+});
+
+// ══════════════════════════════════════════
+//  INIT
+// ══════════════════════════════════════════
+
+load();
+loadSubtasks();
+render();
+</script>
+</body>
+</html>

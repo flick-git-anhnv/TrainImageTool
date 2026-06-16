@@ -78,8 +78,8 @@ _PYINSTALLER_FULL = [
     "--hidden-import", "tool.bad_image_viewer",
     "--hidden-import", "tool.migrate_structure",
     "--hidden-import", "tool.tab_iparking_image",
-    "--collect-all",  "tkinterdnd2",
-    "--collect-data", "matplotlib",   # chi data (fonts/config), khong phai toan bo source
+    "--collect-all", "tkinterdnd2",
+    "--collect-all", "matplotlib",
     # ── Loai bo ML framework nang (khong can cho IParkingImage) ──────────────
     "--exclude-module", "paddle",
     "--exclude-module", "paddlepaddle",

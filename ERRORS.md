@@ -67,4 +67,13 @@
 
 ---
 
+## [E008] torch.load YOLOv5: No module named 'models.yolo'
+- **File:** `tool/features/detection/tab_slot_classifier.py`
+- **Triệu chứng:** Tất cả 3 stage load đều lỗi `No module named 'models.yolo'` hoặc `models.common`
+- **Nguyên nhân:** YOLOv5 `.pt` được `torch.save(model)` pickle cùng class từ repo `ultralytics/yolov5`. Khi `torch.load` deserialized, Python cần `models.yolo`, `models.common` trong `sys.path`. `ultralytics` v8 KHÔNG load được YOLOv5 format. `torch.hub.load` cũng lỗi nếu chưa có internet lần đầu hoặc hub cache thiếu.
+- **Cách sửa:** Dùng `pip install yolov5` và load bằng `yolov5.load(path)`. Fallback: inject hub cache vào `sys.path` trước khi `torch.load`. Thứ tự: yolov5 pkg → ultralytics v8 → torch.load + sys.path inject.
+- **Ngày:** 2026-06-16
+
+---
+
 *Cập nhật file này mỗi khi gặp lỗi mới. Format: `[Ennn]` tăng dần.*

@@ -1,0 +1,50 @@
+{
+  "bbox.line_width": 1,
+  "ip.page_size": 100,
+  "ip.max_pages": 10000,
+  "ip.max_per_lane": 1000,
+  "ip.max_per_cat": 0,
+  "ip.max_per_hour": 0,
+  "ip.parallel": 1,
+  "yolo.interval": "2.0",
+  "yolo.line_width": 2,
+  "yolo.font_size": 11,
+  "lpr.timeout": 10,
+  "lpr.rotate": 0,
+  "lpr.f_rotate": 0,
+  "lpr.workers": 1,
+  "bbox.img": "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong",
+  "h.bbox.img": [
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong-by-type-test",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte/ParkingAPI/RAMP7-VAO"
+  ],
+  "history.slot_cls.model_path": [
+    "H:/Software/2.AI-Tranining/3.Tools/models/detect.pt",
+    "C:/Users/nguye/Downloads/best (1).pt"
+  ],
+  "history.slot_cls.image_path": [
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/BaoTrong/963.png",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/BaoTrong/964.png"
+  ],
+  "split.src": "K:/Software/2.AI-Tranining/1.Images/2.Output",
+  "h.split.src": [
+    "K:/Software/2.AI-Tranining/1.Images/2.Output"
+  ],
+  "crop.img": "K:/Software/2.AI-Tranining/1.Images/2.Output",
+  "h.crop.img": [
+    "K:/Software/2.AI-Tranining/1.Images/2.Output"
+  ],
+  "crop.lbl": "K:/Software/2.AI-Tranining/1.Images/2.Output",
+  "h.crop.lbl": [
+    "K:/Software/2.AI-Tranining/1.Images/2.Output"
+  ],
+  "crop.out": "K:/Software/2.AI-Tranining/1.Images/2.Output-crop1",
+  "h.crop.out": [
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-crop1"
+  ],
+  "lpr.folder": "K:/Software/2.AI-Tranining/1.Images/2.Output-crop1/license_plate",
+  "h.lpr.folder": [
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-crop1/license_plate"
+  ]
+}

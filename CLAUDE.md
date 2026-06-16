@@ -7,11 +7,19 @@
 | File / Thư mục | Vai trò |
 |---|---|
 | `train-image-tool.py` | Entry point chính |
-| `tool/app.py` | `App(Tk)` — khung cửa sổ + Notebook 12 tab |
-| `tool/settings.py` | Đọc/ghi `.kztek_tools_settings.json`; `_bind_cfg(key, var)` |
-| `tool/constants.py` | Màu KZTEK, font, extension, hằng số API |
-| `tool/ui_helpers.py` | Widget tái dùng: logbox, folder row, progressbar, style |
-| `tool/tab_*.py` | Mỗi file = 1 tab trong Notebook |
+| `models/` | File model YOLO (`yolo11n.pt`, `yolo26n.pt`, `best.pt`) |
+| `tool/core/app.py` | `App(Tk)` — khung cửa sổ + Notebook 12 tab |
+| `tool/core/settings.py` | Đọc/ghi `.kztek_tools_settings.json`; `_bind_cfg(key, var)` |
+| `tool/core/constants.py` | Màu KZTEK, font, extension, hằng số API |
+| `tool/core/ui_helpers.py` | Widget tái dùng: logbox, folder row, progressbar, style |
+| `tool/core/imports.py` | Kiểm tra optional dependencies (cv2, requests, TTS…) |
+| `tool/features/dataset/` | Tab + logic: Split, Rename, Crop, LabelNorm |
+| `tool/features/annotation/` | Tab: BBox Editor, Checker, OCR |
+| `tool/features/collection/` | Tab + API: iParking, Lotte, Parkingv8/v6 |
+| `tool/features/analysis/` | Tab + logic: Stats, Plate Search, core_gt |
+| `tool/features/detection/` | Tab: YOLO Detect, LPR Tester |
+| `tool/features/training/` | Tab: YOLO Train |
+| `tool/utils/` | Widget/tiện ích dùng chung: BadImageViewer, migrate_structure |
 | `.kztek_tools_settings.json` | Persistence tất cả cài đặt người dùng |
 
 ### 12 Tab hiện có
@@ -47,7 +55,7 @@ SUCCESS = "#4caf50"
 - Cho phép chọn lại giá trị cũ qua **Combobox** (thay Entry đơn) hoặc **dropdown popup**
 - Key lưu: `"history.<tab_name>.<field_name>"` → list[str]
 
-**Cách triển khai chuẩn** — dùng helper trong `tool/settings.py`:
+**Cách triển khai chuẩn** — dùng helper trong `tool/core/settings.py`:
 
 ```python
 def _bind_history(key: str, combo: ttk.Combobox, max_items: int = 20):
@@ -158,7 +166,7 @@ def _bind_shortcuts(self):
 
 **Mọi widget hiển thị ảnh** (Label, Canvas dùng để show ảnh) đều phải hỗ trợ **double-click để phóng to** trong cửa sổ `Toplevel` riêng.
 
-**Pattern chuẩn** — dùng helper `_zoom_image_window` trong `tool/ui_helpers.py`:
+**Pattern chuẩn** — dùng helper `_zoom_image_window` trong `tool/core/ui_helpers.py`:
 
 ```python
 def _zoom_image_window(root, pil_img: Image.Image, title: str = "Phóng to ảnh"):
@@ -204,7 +212,7 @@ canvas.bind("<Double-Button-1>",
 ```
 
 **Quy tắc bắt buộc:**
-- Tất cả tab có hiển thị ảnh (`tab_bbox.py`, `tab_checker.py`, `tab_yolo.py`, `tab_crop.py`, `tab_plate_search.py`, `tab_lotte.py`, `tab_parkingv8.py`) đều phải bind double-click
+- Tất cả tab có hiển thị ảnh (`annotation/tab_bbox.py`, `annotation/tab_checker.py`, `detection/tab_yolo.py`, `dataset/tab_crop.py`, `analysis/tab_plate_search.py`, `collection/tab_lotte.py`, `collection/tab_parkingv8.py`) đều phải bind double-click
 - Tooltip "Double-click để phóng to" trên widget ảnh (dùng `tooltip` hoặc `title`)
 - Cửa sổ zoom không block UI chính (`Toplevel`, không phải `Dialog`)
 - Nếu ảnh chưa load (widget rỗng), double-click không làm gì
@@ -285,11 +293,12 @@ btn = Button(parent, text="Chọn…", command=lambda: _pick_dir(var, combo))
 
 ### Thêm tab mới
 
-1. Tạo `tool/tab_<name>.py` — class kế thừa `Frame`
-2. Đăng ký trong `tool/app.py` danh sách `tabs`
-3. Settings key dùng prefix `"<name>."` để tránh xung đột
-4. Bọc nội dung trong scrollable canvas (xem mục 2)
-5. Bind phím tắt trong `_bind_shortcuts()` gọi từ `__init__`
+1. Tạo file trong `tool/features/<feature>/tab_<name>.py` — class kế thừa `Frame`
+2. Import trong `tool/core/app.py`: `from ..features.<feature>.tab_<name> import ...`
+3. Đăng ký vào `_tab_defs` trong `App.__init__`
+4. Settings key dùng prefix `"<name>."` để tránh xung đột
+5. Bọc nội dung trong scrollable canvas (xem mục 2)
+6. Bind phím tắt trong `_bind_shortcuts()` gọi từ `__init__`
 
 ---
 
@@ -314,8 +323,9 @@ buildTool.bat
 
 ## Lưu ý đặc biệt
 
-- `tool/settings.py` là nguồn sự thật duy nhất cho persistence — không tạo file config riêng
+- `tool/core/settings.py` là nguồn sự thật duy nhất cho persistence — không tạo file config riêng
 - Màu `ACCENT = "#F05922"` là màu cam KZTEK — dùng đúng, không dùng đỏ tươi
 - Mọi `Toplevel` window phải `win.protocol("WM_DELETE_WINDOW", win.withdraw)` để tái dùng
 - Thread training chạy subprocess riêng (không block UI) — giữ pattern này
-- Hỏi trước khi sửa `tool/core_*.py` — các file này được dùng chung nhiều tab
+- Hỏi trước khi sửa `tool/features/dataset/core_*.py` — các file này được dùng chung nhiều tab
+- Import convention: files trong `features/*/` dùng `from ...core.X import` (3 dots); trong `utils/` dùng `from ..core.X import` (2 dots)
