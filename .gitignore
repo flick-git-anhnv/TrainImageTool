@@ -1,0 +1,61 @@
+# ── Build & Distribution ──────────────────────────────────────────────────────
+build/
+dist/
+*.exe
+*.rar
+*.zip
+*.pkg
+*.spec
+
+# PyInstaller working dirs
+GetImageApp/build/
+GetImageApp/dist/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ── Model weights ─────────────────────────────────────────────────────────────
+*.pt
+*.pth
+*.onnx
+*.torchscript
+models/
+
+# ── Dataset / media ───────────────────────────────────────────────────────────
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.webp
+*.mp4
+*.avi
+*.mov
+
+# ── Logs & temp ───────────────────────────────────────────────────────────────
+*.log
+*.tmp
+*.cache
+runs/
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
