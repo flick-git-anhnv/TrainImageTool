@@ -145,6 +145,8 @@ class CropByLabelTab(Frame):
         )
         self._preview_canvas.pack(padx=6, pady=(2, 6))
         self._preview_pil_full = None
+        self._preview_img_path = None
+        self._preview_lbl_path = None
         self._preview_canvas.bind("<Double-Button-1>", self._on_preview_zoom)
         self._preview_canvas.create_text(
             _PREVIEW_W // 2, _PREVIEW_H // 2,
@@ -163,8 +165,11 @@ class CropByLabelTab(Frame):
     def _on_preview_zoom(self, _event=None):
         if self._preview_pil_full is None:
             return
-        from ...core.ui_helpers import _zoom_image_window
-        _zoom_image_window(self.root, self._preview_pil_full, "Phóng to ảnh gốc")
+        from ...core.ui_helpers import _zoom_image_window, _load_label_bboxes
+        bboxes = (_load_label_bboxes(self._preview_img_path, self._preview_lbl_path)
+                  if self._preview_img_path else None)
+        _zoom_image_window(self.root, self._preview_pil_full, "Phóng to ảnh gốc",
+                           bboxes=bboxes)
 
     def _set_preview_msg(self, msg):
         self._preview_canvas.delete("all")
@@ -275,6 +280,8 @@ class CropByLabelTab(Frame):
             self._set_preview_msg(f"Lỗi ảnh:\n{e}")
             return
         self._preview_pil_full = img
+        self._preview_img_path = img_path
+        self._preview_lbl_path = lbl_path
 
         if not lbl_path.exists():
             self._set_preview_msg("Không có label")

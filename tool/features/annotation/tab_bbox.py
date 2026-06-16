@@ -60,6 +60,10 @@ class BBoxEditorTab(Frame):
         self._filter_progress_var  = StringVar(value="Tất cả")
         self._filter_size_min_var  = StringVar(value="")
         self._filter_size_max_var  = StringVar(value="")
+        self._filter_w_min_var     = StringVar(value="")
+        self._filter_w_max_var     = StringVar(value="")
+        self._filter_h_min_var     = StringVar(value="")
+        self._filter_h_max_var     = StringVar(value="")
         self._img_size_cache: dict = {}  # {str(path): (w, h)}
 
         self._pil_img  = None
@@ -140,7 +144,7 @@ class BBoxEditorTab(Frame):
         main = Frame(self, bg=BG)
         main.pack(fill=BOTH, expand=True, padx=8, pady=6)
 
-        left = Frame(main, bg=CARD, width=200)
+        left = Frame(main, bg=CARD, width=260)
         left.pack(side=LEFT, fill=Y, padx=(0, 6))
         left.pack_propagate(False)
 
@@ -212,6 +216,37 @@ class BBoxEditorTab(Frame):
               relief="flat", font=F_MONO, bd=2, width=6).pack(side=LEFT)
         self._filter_size_min_var.trace_add("write", lambda *_: self._schedule_filter())
         self._filter_size_max_var.trace_add("write", lambda *_: self._schedule_filter())
+
+        # Filter: bbox width khoảng [min, max] px
+        flt_w = Frame(left, bg=CARD)
+        flt_w.pack(fill=X, padx=6, pady=(0, 2))
+        Label(flt_w, text="BBox W:", bg=CARD, fg=DIM, font=F_MAIN,
+              width=7, anchor=W).pack(side=LEFT)
+        Entry(flt_w, textvariable=self._filter_w_min_var,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MONO, bd=2, width=6).pack(side=LEFT)
+        Label(flt_w, text="–", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=2)
+        Entry(flt_w, textvariable=self._filter_w_max_var,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MONO, bd=2, width=6).pack(side=LEFT)
+        self._filter_w_min_var.trace_add("write", lambda *_: self._schedule_filter())
+        self._filter_w_max_var.trace_add("write", lambda *_: self._schedule_filter())
+
+        # Filter: bbox height khoảng [min, max] px
+        flt_h = Frame(left, bg=CARD)
+        flt_h.pack(fill=X, padx=6, pady=(0, 3))
+        Label(flt_h, text="BBox H:", bg=CARD, fg=DIM, font=F_MAIN,
+              width=7, anchor=W).pack(side=LEFT)
+        Entry(flt_h, textvariable=self._filter_h_min_var,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MONO, bd=2, width=6).pack(side=LEFT)
+        Label(flt_h, text="–", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=2)
+        Entry(flt_h, textvariable=self._filter_h_max_var,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MONO, bd=2, width=6).pack(side=LEFT)
+        self._filter_h_min_var.trace_add("write", lambda *_: self._schedule_filter())
+        self._filter_h_max_var.trace_add("write", lambda *_: self._schedule_filter())
+
 
         # Filter: phải có / không có nhãn (multi-select)
         Frame(left, bg=DIM, height=1).pack(fill=X, padx=6, pady=(0, 3))
@@ -753,9 +788,31 @@ class BBoxEditorTab(Frame):
         any_hover = (self._hover_idx >= 0
                      and self._hover_idx != self._selected
                      and self._hover_idx not in self._selected_set)
+
+        def _fv(var):
+            v = var.get().strip()
+            try: return float(v) if v else None
+            except ValueError: return None
+        df_smin = _fv(self._filter_size_min_var)
+        df_smax = _fv(self._filter_size_max_var)
+        df_wmin = _fv(self._filter_w_min_var)
+        df_wmax = _fv(self._filter_w_max_var)
+        df_hmin = _fv(self._filter_h_min_var)
+        df_hmax = _fv(self._filter_h_max_var)
+        _dim_on = any(v is not None for v in (df_smin, df_smax, df_wmin, df_wmax, df_hmin, df_hmax))
+
         for i, (cid, x1, y1, x2, y2) in enumerate(self._bboxes):
             if only_cid is not None and cid != only_cid:
                 continue
+            if _dim_on:
+                bw_px = x2 - x1
+                bh_px = y2 - y1
+                if df_smin is not None and bw_px * bh_px < df_smin: continue
+                if df_smax is not None and bw_px * bh_px > df_smax: continue
+                if df_wmin is not None and bw_px < df_wmin: continue
+                if df_wmax is not None and bw_px > df_wmax: continue
+                if df_hmin is not None and bh_px < df_hmin: continue
+                if df_hmax is not None and bh_px > df_hmax: continue
             cx1 = int(x1 * self._scale) + self._off_x
             cy1 = int(y1 * self._scale) + self._off_y
             cx2 = int(x2 * self._scale) + self._off_x
@@ -1377,6 +1434,10 @@ class BBoxEditorTab(Frame):
         self._filter_progress_var.set("Tất cả")
         self._filter_size_min_var.set("")
         self._filter_size_max_var.set("")
+        self._filter_w_min_var.set("")
+        self._filter_w_max_var.set("")
+        self._filter_h_min_var.set("")
+        self._filter_h_max_var.set("")
         self._must_have_lb.selection_clear(0, END)
         self._must_not_lb.selection_clear(0, END)
         self._apply_filters()
@@ -1416,6 +1477,30 @@ class BBoxEditorTab(Frame):
         try:
             v = self._filter_size_max_var.get().strip()
             if v: size_max = float(v)
+        except ValueError:
+            pass
+
+        w_min = w_max = None
+        try:
+            v = self._filter_w_min_var.get().strip()
+            if v: w_min = float(v)
+        except ValueError:
+            pass
+        try:
+            v = self._filter_w_max_var.get().strip()
+            if v: w_max = float(v)
+        except ValueError:
+            pass
+
+        h_min = h_max = None
+        try:
+            v = self._filter_h_min_var.get().strip()
+            if v: h_min = float(v)
+        except ValueError:
+            pass
+        try:
+            v = self._filter_h_max_var.get().strip()
+            if v: h_max = float(v)
         except ValueError:
             pass
 
@@ -1475,8 +1560,11 @@ class BBoxEditorTab(Frame):
                 if must_not and must_not.intersection(file_cids):
                     continue
 
-            # Size filter: ít nhất 1 bbox có diện tích pixel trong khoảng [min, max]
-            if size_min is not None or size_max is not None:
+            # Dimensional filter: ít nhất 1 bbox thỏa đồng thời tất cả điều kiện area/W/H
+            _dim_active = (size_min is not None or size_max is not None or
+                           w_min is not None or w_max is not None or
+                           h_min is not None or h_max is not None)
+            if _dim_active:
                 if not lbl_path.exists() or lbl_path.stat().st_size == 0:
                     continue
                 key = str(fp)
@@ -1490,24 +1578,35 @@ class BBoxEditorTab(Frame):
                 iw, ih = self._img_size_cache[key]
                 if iw == 0 or ih == 0:
                     continue
-                size_pass = False
+                dim_pass = False
                 try:
                     with open(lbl_path, encoding="utf-8") as f:
                         for line in f:
                             parts = line.strip().split()
                             if len(parts) < 5:
                                 continue
-                            bw, bh = float(parts[3]) * iw, float(parts[4]) * ih
-                            area = bw * bh
-                            if size_min is not None and area < size_min:
+                            # Nếu đang filter theo nhãn cụ thể, chỉ check bbox thuộc nhãn đó
+                            if label_id is not None and label_id >= 0 and int(parts[0]) != label_id:
                                 continue
-                            if size_max is not None and area > size_max:
+                            bw = float(parts[3]) * iw
+                            bh = float(parts[4]) * ih
+                            if size_min is not None and bw * bh < size_min:
                                 continue
-                            size_pass = True
+                            if size_max is not None and bw * bh > size_max:
+                                continue
+                            if w_min is not None and bw < w_min:
+                                continue
+                            if w_max is not None and bw > w_max:
+                                continue
+                            if h_min is not None and bh < h_min:
+                                continue
+                            if h_max is not None and bh > h_max:
+                                continue
+                            dim_pass = True
                             break
                 except Exception:
                     pass
-                if not size_pass:
+                if not dim_pass:
                     continue
 
             result.append((real_idx, fp))
@@ -1544,7 +1643,9 @@ class BBoxEditorTab(Frame):
         if self._pil_img is None:
             return
         from ...core.ui_helpers import _zoom_image_window
-        _zoom_image_window(self.root, self._pil_img, "Phóng to ảnh")
+        _zoom_image_window(self.root, self._pil_img, "Phóng to ảnh",
+                           bboxes=self._bboxes or None,
+                           label_names=self.label_list)
 
     def _prev_img(self):
         if not self._filtered_files: return

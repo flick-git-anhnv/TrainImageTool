@@ -41,7 +41,7 @@ _LPR_TYPES = ["Kztek LPR AI Server", "American LPR (OpenALPR)"]
 _MODE_VEHICLE = "lprdetect"
 _MODE_DIRECT  = "DirectLprDetect"
 _URL_HINTS = {
-    ("Kztek LPR AI Server",     _MODE_VEHICLE): "http://localhost:8000/detect",
+    ("Kztek LPR AI Server",     _MODE_VEHICLE): "http://localhost:8000/alpr",
     ("Kztek LPR AI Server",     _MODE_DIRECT):  "http://localhost:8000/read-plate",
     ("American LPR (OpenALPR)", _MODE_VEHICLE): "http://localhost:8080/v2/recognize",
     ("American LPR (OpenALPR)", _MODE_DIRECT):  "http://localhost:8080/read-plate",
@@ -74,15 +74,38 @@ def _parse_lpr_response(raw) -> dict:
         raw = raw[0] if raw else {}
     if not isinstance(raw, dict):
         return res
+
+    # Kztek /alpr response: {"Results": [{"Plate": "...", "Box": {...}, "Vehicle": {...}}]}
+    for results_key in ("Results", "results"):
+        sub = raw.get(results_key)
+        if isinstance(sub, list) and sub:
+            item = sub[0]
+            for pk in ("Plate", "plate", "PlateNumber", "plate_number"):
+                if item.get(pk):
+                    res["plate"] = str(item[pk]).strip()
+                    break
+            # BBox: thử cả lowercase và PascalCase
+            box = item.get("box") or item.get("Box") or item.get("bbox") or item.get("BoundingBox")
+            if box:
+                res["bbox"] = box
+            # Vehicle type
+            veh = item.get("Vehicle") or item.get("vehicle") or {}
+            if isinstance(veh, dict):
+                for vk in ("VehicleType", "vehicle_type", "type", "class"):
+                    if veh.get(vk):
+                        res["vehicle_type"] = str(veh[vk])
+                        break
+            for k in ("lpr_image", "LprImage", "plate_image", "PlateImage"):
+                if item.get(k):
+                    res["lpr_image_b64"] = item[k]
+                    break
+            return res
+
+    # Fallback: flat response
     for k in ("plate", "PlateNumber", "license_plate", "licensePlate",
               "plate_number", "plateNumber", "number_plate", "text"):
         if raw.get(k):
             res["plate"] = str(raw[k]).strip(); break
-    if not res["plate"]:
-        for k in ("results", "candidates"):
-            sub = raw.get(k)
-            if isinstance(sub, list) and sub:
-                res["plate"] = str(sub[0].get("plate", "")).strip(); break
     for k in ("original", "OriginalPlate", "original_plate", "originalPlate"):
         if raw.get(k):
             res["original"] = str(raw[k]).strip(); break
@@ -96,7 +119,7 @@ def _parse_lpr_response(raw) -> dict:
     for k in ("vehicle_type", "VehicleType", "vehicleType", "vehicle", "type", "class"):
         if raw.get(k):
             res["vehicle_type"] = str(raw[k]).strip(); break
-    for k in ("bbox", "BoundingBox", "bounding_box", "box", "region"):
+    for k in ("bbox", "BoundingBox", "bounding_box", "box", "Box", "region"):
         if raw.get(k):
             res["bbox"] = raw[k]; break
     for k in ("lpr_image", "LprImage", "plate_image", "plateImage", "image_base64", "plate_crop"):
@@ -107,8 +130,11 @@ def _parse_lpr_response(raw) -> dict:
 
 def _fmt_bbox(bbox) -> str:
     if isinstance(bbox, dict):
-        return (f"({bbox.get('xmin',0)}, {bbox.get('ymin',0)}) → "
-                f"({bbox.get('xmax',0)}, {bbox.get('ymax',0)})")
+        xmin = bbox.get('xmin', bbox.get('Xmin', 0))
+        ymin = bbox.get('ymin', bbox.get('Ymin', 0))
+        xmax = bbox.get('xmax', bbox.get('Xmax', 0))
+        ymax = bbox.get('ymax', bbox.get('Ymax', 0))
+        return f"({xmin}, {ymin}) → ({xmax}, {ymax})"
     if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
         return f"({bbox[0]}, {bbox[1]}) → ({bbox[2]}, {bbox[3]})"
     return "-"
@@ -142,10 +168,8 @@ class LprTesterTab(Frame):
 
         # Review state (giống YOLO)
         self._review_state: dict = dict(_CFG.get("lpr.review_states", {}))
-        self._active_filter  = "all"   # review: all/correct/incorrect/unreviewed
-        self._detect_filter  = "all"   # detect: all/detected/undetected
-        self._filter_btns:  dict = {}
-        self._detect_btns:  dict = {}
+        self._gt_btns: dict = {}
+        self._gt_filter  = "all"   # gt: all/match/mismatch/no_gt
 
         self._build()
 
@@ -357,7 +381,9 @@ class LprTesterTab(Frame):
         _action_btn(btn_row, "↻ Retry lỗi", self._retry_failed,
                     ACCENT2, padx=8, pady=4).pack(side=LEFT, padx=(0, 8))
         _action_btn(btn_row, "💾 Xuất CSV (Ctrl+S)", self._export,
-                    ACCENT2, padx=8, pady=4).pack(side=LEFT)
+                    ACCENT2, padx=8, pady=4).pack(side=LEFT, padx=(0, 8))
+        _action_btn(btn_row, "🗑 Xóa cache", self._clear_folder_cache,
+                    "#4a3030", padx=8, pady=4).pack(side=LEFT)
 
         pg = Frame(parent, bg=BG)
         pg.pack(fill=X, padx=8, pady=2)
@@ -368,44 +394,9 @@ class LprTesterTab(Frame):
         self._stats_lbl = Label(pg, text="", bg=BG, fg=SUCCESS, font=F_MAIN, anchor=W)
         self._stats_lbl.pack(fill=X)
 
-        # ── Row 1: Review filter (All / ✓ / ✗ / ?) ─────────────────────────
-        filter_row = Frame(parent, bg=BG)
-        filter_row.pack(fill=X, padx=8, pady=(4, 1))
-        Label(filter_row, text="Đánh giá:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(0, 4))
-        for code, lbl_text, fg in [
-            ("all",        "Tất cả",   TEXT),
-            ("correct",    "✓ Đúng",   SUCCESS),
-            ("incorrect",  "✗ Sai",    "#f05050"),
-            ("unreviewed", "? Chưa",   DIM),
-        ]:
-            btn = Button(filter_row, text=lbl_text,
-                         command=lambda c=code: self._set_review_filter(c),
-                         bg=CARD, fg=fg, font=F_MAIN, relief="flat",
-                         padx=8, cursor="hand2", activebackground="#252540",
-                         activeforeground=fg)
-            btn.pack(side=LEFT, padx=2)
-            self._filter_btns[code] = btn
-        self._filter_btns["all"].config(relief="sunken", bg="#252540")
-
-        # ── Row 2: Detection filter + keyword search ─────────────────────
+        # ── Row 1: Keyword search ─────────────────────────────────────────
         filter_row2 = Frame(parent, bg=BG)
         filter_row2.pack(fill=X, padx=8, pady=(1, 4))
-        Label(filter_row2, text="Kết quả:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(0, 4))
-        for code, lbl_text, fg in [
-            ("all",        "Tất cả",           TEXT),
-            ("detected",   "Đọc được",         SUCCESS),
-            ("undetected", "Không đọc được",   "#f05050"),
-        ]:
-            btn = Button(filter_row2, text=lbl_text,
-                         command=lambda c=code: self._set_detect_filter(c),
-                         bg=CARD, fg=fg, font=F_MAIN, relief="flat",
-                         padx=8, cursor="hand2", activebackground="#252540",
-                         activeforeground=fg)
-            btn.pack(side=LEFT, padx=2)
-            self._detect_btns[code] = btn
-        self._detect_btns["all"].config(relief="sunken", bg="#252540")
-
-        Frame(filter_row2, bg=BG, width=14).pack(side=LEFT)
         Label(filter_row2, text="Biển:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(0, 4))
         self._kw_var = StringVar()
         kw_entry = Entry(filter_row2, textvariable=self._kw_var, width=18,
@@ -419,18 +410,46 @@ class LprTesterTab(Frame):
         Label(filter_row2, text="(* = đầu/cuối  ? = 1 ký tự)",
               bg=BG, fg=DIM, font=("Segoe UI", 8)).pack(side=LEFT, padx=(6, 0))
 
-        # ── Treeview ─────────────────────────────────────────────────────
-        tv_f = Frame(parent, bg=BG)
-        tv_f.pack(fill=BOTH, expand=True, padx=8, pady=(2, 2))
-        cols = ("#", "Tên file", "Biển số", "Biển gốc", "Loại xe", "ms", "Trạng thái", "📂", "📋")
+        # ── Row 3: GT comparison filter ───────────────────────────────────
+        filter_row3 = Frame(parent, bg=BG)
+        filter_row3.pack(fill=X, padx=8, pady=(0, 4))
+        Label(filter_row3, text="So sánh GT:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(0, 4))
+        for code, lbl_text, fg in [
+            ("all",      "Tất cả",      TEXT),
+            ("match",    "✓ Đúng",      SUCCESS),
+            ("mismatch", "✗ Sai",       "#f05050"),
+            ("no_gt",    "Không có GT", DIM),
+        ]:
+            btn = Button(filter_row3, text=lbl_text,
+                         command=lambda c=code: self._set_gt_filter(c),
+                         bg=CARD, fg=fg, font=F_MAIN, relief="flat",
+                         padx=8, cursor="hand2", activebackground="#252540",
+                         activeforeground=fg)
+            btn.pack(side=LEFT, padx=2)
+            self._gt_btns[code] = btn
+        self._gt_btns["all"].config(relief="sunken", bg="#252540")
+
+        # ── Horizontal PanedWindow: kết quả (trái) | preview ảnh (phải) ──
+        hpw = PanedWindow(parent, orient=HORIZONTAL, bg=DIM,
+                          sashwidth=5, sashrelief="flat", relief="flat")
+        hpw.pack(fill=BOTH, expand=True, padx=8, pady=(2, 4))
+        self._hpw_result = hpw
+
+        # ── TRÁI: Treeview + mark + sửa biển ─────────────────────────────
+        left_pane = Frame(hpw, bg=BG)
+        hpw.add(left_pane, minsize=300)
+
+        tv_f = Frame(left_pane, bg=BG)
+        tv_f.pack(fill=BOTH, expand=True)
+        cols = ("#", "Tên file", "Biển số", "Biển gốc", "Loại xe", "ms", "Trạng thái", "GT", "📂", "📋")
         self._tree = ttk.Treeview(tv_f, columns=cols, show="headings",
                                    style="Dark.Treeview", selectmode="browse")
-        col_widths = [38, 190, 115, 105, 85, 60, 110, 34, 34]
+        col_widths = [38, 190, 115, 105, 85, 60, 110, 75, 34, 34]
         for col, w in zip(cols, col_widths):
             self._tree.heading(col, text=col)
             stretch = col in ("Tên file", "Trạng thái")
             self._tree.column(col, width=w, minwidth=w if col in ("📂", "📋") else 30,
-                               stretch=stretch, anchor=CENTER if col in ("📂", "📋", "#", "ms") else W)
+                               stretch=stretch, anchor=CENTER if col in ("📂", "📋", "#", "ms", "GT") else W)
         vsb = ttk.Scrollbar(tv_f, orient=VERTICAL,   command=self._tree.yview)
         hsb = ttk.Scrollbar(tv_f, orient=HORIZONTAL, command=self._tree.xview)
         self._tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
@@ -447,9 +466,8 @@ class LprTesterTab(Frame):
         self._tree.bind("<Double-Button-1>",  self._on_tree_dbl)
         self._tree.bind("<Button-1>",         self._on_tree_click)
 
-        # ── Mark buttons (nổi bật, như YOLO) ─────────────────────────────
-        mark_row = Frame(parent, bg=BG)
-        mark_row.pack(fill=X, padx=8, pady=(4, 2))
+        mark_row = Frame(left_pane, bg=BG)
+        mark_row.pack(fill=X, pady=(4, 1))
         Button(mark_row, text="✓ Đúng  [Enter]",
                command=lambda: self._mark_current("correct"),
                bg="#1a3a1a", fg=SUCCESS, font=F_MAIN, relief="flat",
@@ -466,32 +484,71 @@ class LprTesterTab(Frame):
                padx=8, pady=4, cursor="hand2",
                activebackground="#252540", activeforeground=TEXT).pack(side=LEFT, padx=(0, 12))
         self._mark_lbl = Label(mark_row, text="", bg=BG, fg=DIM, font=F_MONO)
-        self._mark_lbl.pack(side=LEFT)
+        self._mark_lbl.pack(side=LEFT, expand=True, fill=X)
+        Button(mark_row, text="📂 GT Đúng",
+               command=lambda: self._open_gt_folder("dung"),
+               bg=CARD, fg=SUCCESS, font=F_MAIN, relief="flat",
+               padx=8, pady=4, cursor="hand2").pack(side=LEFT, padx=(0, 4))
+        Button(mark_row, text="📂 GT Sai",
+               command=lambda: self._open_gt_folder("sai"),
+               bg=CARD, fg="#f05050", font=F_MAIN, relief="flat",
+               padx=8, pady=4, cursor="hand2").pack(side=LEFT)
 
-        # ── Preview ───────────────────────────────────────────────────────
-        pv = Frame(parent, bg=CARD)
-        pv.pack(fill=X, padx=8, pady=(2, 4))
-        self._prev_lbl = Label(pv, text="(chọn dòng trong bảng để xem ảnh)",
+        # Ô sửa biển số GT (inline)
+        edit_row = Frame(left_pane, bg=BG)
+        edit_row.pack(fill=X, pady=(1, 4))
+        Label(edit_row, text="Sửa biển GT:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(0, 4))
+        self._plate_edit_var = StringVar()
+        self._plate_edit = ttk.Combobox(edit_row, textvariable=self._plate_edit_var,
+                                         style="Dark.TCombobox", font=F_MONO, width=18)
+        self._plate_edit.pack(side=LEFT, fill=X, expand=True)
+        self._plate_edit.bind("<Return>", lambda e: self._save_plate_edit())
+        _bind_history("h.lpr.plate_edit", self._plate_edit)
+
+        # ── PHẢI: Preview ảnh ─────────────────────────────────────────────
+        right_pane = Frame(hpw, bg=CARD)
+        hpw.add(right_pane, minsize=180)
+        hpw.bind("<ButtonRelease-1>", self._save_sash)
+
+        self._prev_lbl = Label(right_pane, text="(chọn dòng để xem ảnh)",
                                 bg=CARD, fg=DIM, font=F_MONO)
         self._prev_lbl.pack(anchor=W, padx=6, pady=(4, 2))
-        img_row = Frame(pv, bg=CARD)
-        img_row.pack(fill=X, padx=6, pady=(0, 4))
-        self._pic_fv = Label(img_row, bg=CARD, fg=DIM, text="(ảnh xe)",
-                              font=F_MAIN, height=8, width=30, cursor="hand2")
-        self._pic_fv.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 4))
+        self._pic_fv = Label(right_pane, bg="#0d0d1a", fg=DIM, text="(ảnh xe)",
+                              font=F_MAIN, cursor="hand2")
+        self._pic_fv.pack(fill=BOTH, expand=True, padx=4, pady=(0, 2))
         self._pic_fv.bind("<Double-Button-1>", lambda e: self._zoom_fv())
-        self._pic_fp = Label(img_row, bg=CARD, fg=DIM, text="(biển số)",
-                              font=F_MAIN, height=8, width=18, cursor="hand2")
-        self._pic_fp.pack(side=LEFT, fill=BOTH, expand=True)
+        Label(right_pane, text="Biển số nhận dạng:", bg=CARD, fg=DIM,
+              font=F_MAIN).pack(anchor=W, padx=6, pady=(0, 1))
+        # fp_frame: ảnh TRÁI — diff text PHẢI
+        fp_frame = Frame(right_pane, bg="#0d0d1a", height=140)
+        fp_frame.pack(fill=X, padx=4, pady=(0, 4))
+        fp_frame.pack_propagate(False)
+
+        # Ảnh biển số bên trái (chiều ngang tự co theo ảnh)
+        self._pic_fp = Label(fp_frame, bg="#0d0d1a", fg=DIM, text="(biển số)",
+                              font=F_MAIN, cursor="hand2")
+        self._pic_fp.pack(side=LEFT, fill=Y, padx=(0, 6))
         self._pic_fp.bind("<Double-Button-1>", lambda e: self._zoom_fp())
 
+        # Diff text bên phải, font lớn hơn
+        self._diff_txt = Text(fp_frame, bg="#0d0d1a", fg=TEXT,
+                              font=("Consolas", 14, "bold"), relief="flat",
+                              state=DISABLED, cursor="arrow", wrap="none")
+        self._diff_txt.pack(side=LEFT, fill=BOTH, expand=True)
+
+        self.root.after(200, self._restore_sash)
+
     # ═══════════════════════════ CONFIG ACTIONS ═══════════════════════════
+
+    _LEGACY_URLS = {
+        "http://localhost:8000/detect",
+    }
 
     def _on_mode_change(self, _=None):
         key  = (self._type_var.get(), self._detect_mode.get())
         hint = _URL_HINTS.get(key, "")
         curr = self._url_var.get().strip()
-        if curr in _URL_HINTS.values() or not curr:
+        if curr in _URL_HINTS.values() or curr in self._LEGACY_URLS or not curr:
             self._url_var.set(hint)
 
     def _test_connection(self):
@@ -684,13 +741,9 @@ class LprTesterTab(Frame):
         self._btn_stop.config(state=NORMAL)
         self._btn_resume.config(state=DISABLED)
         self._pb.config(value=0, maximum=len(files))
-        self._active_filter = "all"
-        self._detect_filter = "all"
         self._kw_var.set("")
-        for code, btn in self._filter_btns.items():
-            btn.config(relief="sunken" if code == "all" else "flat",
-                       bg="#252540" if code == "all" else CARD)
-        for code, btn in self._detect_btns.items():
+        self._gt_filter = "all"
+        for code, btn in self._gt_btns.items():
             btn.config(relief="sunken" if code == "all" else "flat",
                        bg="#252540" if code == "all" else CARD)
 
@@ -745,11 +798,29 @@ class LprTesterTab(Frame):
 
     def _folder_worker(self, all_files, folder, url, timeout, mode, lpr_type,
                        start_from, init_ok, init_fail, init_ms):
-        import time
+        import time, json as _json
         total   = len(all_files)
         ok_n    = init_ok
         fail_n  = init_fail
         total_ms = init_ms
+
+        # Tải cache từ thư mục nguồn
+        _cache_path = os.path.join(folder, ".kztek_lpr_cache.json")
+        try:
+            with open(_cache_path, "r", encoding="utf-8") as _cf:
+                _cache = _json.load(_cf)
+        except Exception:
+            _cache = {}
+        _cache_dirty = False
+
+        def _flush_cache():
+            nonlocal _cache_dirty
+            if not _cache_dirty: return
+            try:
+                with open(_cache_path, "w", encoding="utf-8") as _cf:
+                    _json.dump(_cache, _cf, ensure_ascii=False)
+                _cache_dirty = False
+            except Exception: pass
 
         self.root.after(0, lambda: self._pb.config(maximum=total))
 
@@ -759,39 +830,95 @@ class LprTesterTab(Frame):
                 break
             fpath = all_files[i]
             fname = os.path.relpath(fpath, folder) if folder else os.path.basename(fpath)
-            t0 = time.perf_counter()
-            try:
-                result, err = _api_call_file(fpath, url, timeout, mode, lpr_type)
-                elapsed = int((time.perf_counter() - t0) * 1000)
-                if err:
-                    plate = orig = vtype = ""; status = f"Lỗi: {err}"; fail_n += 1; lpr_pil = None
-                else:
-                    plate = result.get("plate", ""); orig = result.get("original", "")
-                    vtype = result.get("vehicle_type", "")
-                    status = "OK" if plate else "Không nhận dạng"
-                    if plate: ok_n += 1
-                    else: fail_n += 1
-                    lpr_pil = None
-                    b64 = result.get("lpr_image_b64")
-                    if b64 and _PIL_OK:
-                        try:
-                            import base64
-                            lpr_pil = Image.open(BytesIO(base64.b64decode(b64)))
-                        except Exception: pass
-                total_ms += elapsed
-            except Exception as ex:
-                elapsed = 0; plate = orig = vtype = ""; status = f"Lỗi: {ex}"
-                fail_n += 1; lpr_pil = None
 
+            # Kiểm tra cache theo fname + mtime
+            try:
+                _mtime = str(round(os.path.getmtime(fpath), 3))
+            except Exception:
+                _mtime = ""
+            _cached = _cache.get(fname)
+            _hit = bool(_cached and _cached.get("mtime") == _mtime and "plate" in _cached)
+
+            def _crop_plate(img_path, bbox):
+                """Crop vùng biển số từ ảnh gốc dùng bbox dict."""
+                if not bbox or not _PIL_OK: return None
+                try:
+                    with Image.open(img_path) as _im:
+                        w, h = _im.size
+                        x1 = int(bbox.get("xmin", bbox.get("Xmin", 0)))
+                        y1 = int(bbox.get("ymin", bbox.get("Ymin", 0)))
+                        x2 = int(bbox.get("xmax", bbox.get("Xmax", w)))
+                        y2 = int(bbox.get("ymax", bbox.get("Ymax", h)))
+                        if x2 > x1 and y2 > y1:
+                            return _im.crop((x1, y1, x2, y2)).copy()
+                except Exception: pass
+                return None
+
+            t0 = time.perf_counter()
+            lpr_pil = None
+            if _hit:
+                plate   = _cached.get("plate", "")
+                vtype   = _cached.get("vehicle_type", "")
+                elapsed = _cached.get("ms", 0)
+                status  = ("OK" if plate else "Không nhận dạng") + " ★Cache"
+                lpr_pil = _crop_plate(fpath, _cached.get("bbox"))
+                if plate: ok_n += 1
+                else:     fail_n += 1
+                total_ms += elapsed
+            else:
+                try:
+                    result, err = _api_call_file(fpath, url, timeout, mode, lpr_type)
+                    elapsed = int((time.perf_counter() - t0) * 1000)
+                    if err:
+                        plate = vtype = ""; status = f"Lỗi: {err}"; fail_n += 1
+                    else:
+                        plate = result.get("plate", "")
+                        vtype = result.get("vehicle_type", "")
+                        status = "OK" if plate else "Không nhận dạng"
+                        if plate: ok_n += 1
+                        else:     fail_n += 1
+                        bbox = result.get("bbox")
+                        lpr_pil = _crop_plate(fpath, bbox)
+                        # Lưu cache khi không lỗi kết nối
+                        if not err:
+                            _cache[fname] = {
+                                "mtime":        _mtime,
+                                "plate":        plate,
+                                "vehicle_type": vtype,
+                                "ms":           elapsed,
+                                "bbox":         bbox,
+                            }
+                            _cache_dirty = True
+                    total_ms += elapsed
+                except Exception as ex:
+                    elapsed = 0; plate = vtype = ""; status = f"Lỗi: {ex}"
+                    fail_n += 1
+
+            # Flush cache mỗi 20 ảnh để tránh mất kết quả nếu bị ngắt giữa chừng
+            if _cache_dirty and i % 20 == 0:
+                _flush_cache()
+
+            gt_plate = _load_gt(fpath)      # đọc 1 lần dùng cho cả 2 chỗ
+            orig     = gt_plate             # Biển gốc = GT từ file .txt
+            _gt      = _cmp_plate(plate, gt_plate)
             _i, _f, _pl, _or, _vt = i + 1, fname, plate, orig, vtype
             _ms, _st, _lpi, _fp = elapsed, status, lpr_pil, fpath
             _ok, _nk, _tms = ok_n, fail_n, total_ms
 
             def _ui(i=_i, f=_f, pl=_pl, orig=_or, vt=_vt,
                     ms=_ms, st=_st, lpi=_lpi, fp=_fp,
-                    ok=_ok, nk=_nk, tms=_tms):
-                tag = "ok" if st == "OK" else ("err" if st.startswith("Lỗi") else "warn")
-                iid = self._tree.insert("", END, values=(i, f, pl, orig, vt, ms or "-", st, "📂", "📋"))
+                    ok=_ok, nk=_nk, tms=_tms, gt=_gt):
+                # Nếu có GT: tự động áp dụng kết quả so sánh vào trạng thái
+                if gt == "✓ Đúng":
+                    display_st = "GT: Đúng ✓"
+                    tag = "gt_ok"
+                elif gt == "✗ Sai":
+                    display_st = "GT: Sai ✗"
+                    tag = "gt_err"
+                else:
+                    display_st = st
+                    tag = "ok" if st == "OK" else ("err" if st.startswith("Lỗi") else "warn")
+                iid = self._tree.insert("", END, values=(i, f, pl, orig, vt, ms or "-", display_st, gt, "📂", "📋"))
                 self._tree.item(iid, tags=(tag,))
                 self._folder_files[iid] = fp
                 self._all_tree_order.append((iid, fp))
@@ -809,6 +936,7 @@ class LprTesterTab(Frame):
             # Vòng lặp kết thúc tự nhiên (không bị cancel)
             self._resume_from = total
 
+        _flush_cache()   # lưu cache cuối cùng
         _cancelled = self._cancel
         _ok_n, _fail_n, _total_ms = ok_n, fail_n, total_ms
 
@@ -856,9 +984,12 @@ class LprTesterTab(Frame):
                 result, err = _api_call_file(fpath, url, timeout, mode, lpr_type)
                 plate  = "" if err else result.get("plate", "")
                 status = ("OK" if plate else "Không nhận dạng") if not err else f"Lỗi: {err}"
-                def _upd(iid=iid, pl=plate, st=status):
+                gt_cmp = _cmp_plate(plate, _load_gt(fpath))
+                def _upd(iid=iid, pl=plate, st=status, gt=gt_cmp):
                     vals = list(self._tree.item(iid)["values"])
                     vals[2] = pl; vals[6] = st
+                    if len(vals) > 7:
+                        vals[7] = gt
                     self._tree.item(iid, values=vals)
                     tag = "ok" if st == "OK" else ("err" if st.startswith("Lỗi") else "warn")
                     self._tree.item(iid, tags=(tag,))
@@ -867,6 +998,55 @@ class LprTesterTab(Frame):
         threading.Thread(target=_run, daemon=True).start()
 
     # ═══════════════════════════ MARK / REVIEW (YOLO style) ═══════════════
+
+    def _ask_correct_plate(self, current: str) -> str:
+        """Popup nhập biển số đúng. Trả về chuỗi plate hoặc '' nếu cancel."""
+        win = Toplevel(self.root)
+        win.title("Nhập biển số đúng")
+        win.configure(bg=CARD)
+        win.resizable(False, False)
+        win.grab_set()
+
+        Label(win, text="Biển số đúng:", bg=CARD, fg=TEXT, font=F_BOLD,
+              padx=16, pady=10).pack(anchor=W)
+        hint = current if current not in ("", "-", "(không nhận dạng)") else ""
+        var = StringVar(value=hint)
+        ent = Entry(win, textvariable=var, bg=BG, fg=TEXT, insertbackground=TEXT,
+                    font=F_MONO, width=26, relief="flat")
+        ent.pack(padx=16, pady=(0, 4))
+        ent.select_range(0, END)
+        ent.focus_set()
+
+        result = [""]
+
+        def _ok(_=None):
+            result[0] = var.get().strip()
+            win.destroy()
+
+        def _cancel(_=None):
+            result[0] = ""
+            win.destroy()
+
+        btn_row = Frame(win, bg=CARD)
+        btn_row.pack(padx=16, pady=12, fill=X)
+        Button(btn_row, text="✓ Lưu", command=_ok,
+               bg=ACCENT, fg="white", font=F_MAIN, relief="flat",
+               padx=14, pady=4, cursor="hand2",
+               activebackground="#c0401a", activeforeground="white").pack(side=LEFT, padx=(0, 8))
+        Button(btn_row, text="Hủy", command=_cancel,
+               bg=CARD, fg=DIM, font=F_MAIN, relief="flat",
+               padx=10, pady=4, cursor="hand2",
+               activebackground="#252540", activeforeground=TEXT).pack(side=LEFT)
+
+        ent.bind("<Return>",  _ok)
+        ent.bind("<Escape>",  _cancel)
+
+        win.update_idletasks()
+        cx = self.root.winfo_x() + (self.root.winfo_width()  - win.winfo_width())  // 2
+        cy = self.root.winfo_y() + (self.root.winfo_height() - win.winfo_height()) // 2
+        win.geometry(f"+{cx}+{cy}")
+        self.root.wait_window(win)
+        return result[0]
 
     def _mark_current(self, state: str):
         """Đánh dấu đúng/sai/bỏ cho ảnh đang chọn. state='correct'|'incorrect'|''."""
@@ -884,54 +1064,65 @@ class LprTesterTab(Frame):
         if not fpath and folder:
             fpath = os.path.join(folder, fname)
 
-        # Cập nhật review_state
-        if state:
-            self._review_state[fpath] = state
-        else:
-            self._review_state.pop(fpath, None)
-        _CFG["lpr.review_states"] = self._review_state
-        _cfg_save()
+        # GT plate = nội dung textbox (ưu tiên GT sẵn có, fallback biển nhận diện)
+        gt_plate = self._plate_edit_var.get().strip() or plate
 
         if state in ("correct", "incorrect"):
-            # Di chuyển file vào _gt/dung hoặc _gt/sai
+            # Copy ảnh vào _gt/dung hoặc _gt/sai
             sub = "dung" if state == "correct" else "sai"
             dest_dir = os.path.join(folder or os.path.dirname(fpath), "_gt", sub)
             os.makedirs(dest_dir, exist_ok=True)
-            dest = os.path.join(dest_dir, os.path.basename(fname))
+
+            # Tên file đích = biển số (đã chuẩn hóa) + ext
+            ext = os.path.splitext(os.path.basename(fname))[1]
+            if gt_plate:
+                base_name = re.sub(r"[^A-Za-z0-9]", "", gt_plate).upper() + ext
+                dest = os.path.join(dest_dir, base_name)
+                if os.path.exists(dest) and os.path.exists(fpath) \
+                        and not os.path.samefile(fpath, dest):
+                    stem_orig = os.path.splitext(os.path.basename(fname))[0]
+                    base_name = re.sub(r"[^A-Za-z0-9]", "", gt_plate).upper() + "_" + stem_orig + ext
+                    dest = os.path.join(dest_dir, base_name)
+            else:
+                dest = os.path.join(dest_dir, os.path.basename(fname))
+
             try:
                 shutil.copy2(fpath, dest)
-                if state == "correct" and plate and plate not in ("-", "(không nhận dạng)"):
-                    with open(os.path.splitext(dest)[0] + ".txt", "w", encoding="utf-8") as f:
-                        f.write(plate)
-                _append_log(self._log, f"✔ {os.path.basename(fname)} → _gt/{sub}/  | {plate}")
+                # Ghi gt.txt vào folder _gt/ (KHÔNG ghi đè gt.txt nguồn)
+                if gt_plate:
+                    _save_gt_to_file(dest_dir, os.path.basename(dest), gt_plate)
+                _append_log(self._log,
+                             f"✔ {os.path.basename(fname)} → _gt/{sub}/{os.path.basename(dest)}  | GT: {gt_plate or '(chưa có)'}")
             except Exception as ex:
                 _append_log(self._log, f"[LỖI] Copy: {ex}")
 
-            # Cập nhật tag + status
-            label = "GT: Đúng ✓" if state == "correct" else "GT: Sai ✗"
-            new_vals = list(vals); new_vals[6] = label
+            # Cập nhật tree: Biển gốc + Trạng thái + GT column
+            gt_cmp = _cmp_plate(plate, gt_plate)
+            label  = "GT: Đúng ✓" if state == "correct" else "GT: Sai ✗"
+            new_vals = list(vals)
+            new_vals[3] = gt_plate          # Biển gốc
+            new_vals[6] = label             # Trạng thái
+            if len(new_vals) > 7:
+                new_vals[7] = gt_cmp        # GT column
             self._tree.item(iid, values=new_vals)
             new_tag = "gt_ok" if state == "correct" else "gt_err"
             self._tree.item(iid, tags=(new_tag,))
 
-            # Cập nhật mark_lbl
             icons = {"correct": "✓ Đúng", "incorrect": "✗ Sai"}
-            self._mark_lbl.config(
-                text=icons[state],
-                fg=(SUCCESS if state == "correct" else "#f05050"))
+            self._mark_lbl.config(text=icons[state],
+                                  fg=(SUCCESS if state == "correct" else "#f05050"))
 
             self._update_filter_counts()
 
-            # Auto-advance sang ảnh kế tiếp
+            # Auto-advance sang ảnh kế tiếp chưa mark
             ch = self._tree.get_children()
             if ch:
                 try:
                     idx = list(ch).index(iid)
-                    # Tìm ảnh kế tiếp chưa có mark
                     next_iid = None
                     for j in range(idx + 1, len(ch)):
-                        tags = self._tree.item(ch[j], "tags")
-                        if "gt_ok" not in tags and "gt_err" not in tags:
+                        if "gt_ok" not in self._tree.item(ch[j], "tags") and \
+                           "gt_err" not in self._tree.item(ch[j], "tags"):
                             next_iid = ch[j]; break
                     if next_iid is None and idx > 0:
                         next_iid = ch[idx - 1]
@@ -945,7 +1136,6 @@ class LprTesterTab(Frame):
             # Bỏ đánh dấu
             old_st = str(vals[6])
             if old_st.startswith("GT:"):
-                # Khôi phục tag gốc từ plate/status
                 orig_plate = str(vals[2])
                 restored_st = "OK" if orig_plate and orig_plate not in ("-", "") else "Không nhận dạng"
                 new_vals = list(vals); new_vals[6] = restored_st
@@ -958,44 +1148,26 @@ class LprTesterTab(Frame):
     def _update_filter_counts(self):
         """Cập nhật số đếm trong nút filter — tính từ _all_tree_order (bỏ qua detach)."""
         all_iids = [iid for iid, _ in self._all_tree_order]
-        n_ok  = sum(1 for iid in all_iids if "gt_ok"  in self._tree.item(iid, "tags"))
-        n_err = sum(1 for iid in all_iids if "gt_err" in self._tree.item(iid, "tags"))
         n_all = len(all_iids)
-        n_un  = n_all - n_ok - n_err
 
-        has_plate_count  = 0
-        no_plate_count   = 0
-        for iid in all_iids:
-            vals = self._tree.item(iid, "values")
-            plate = str(vals[2]).strip() if vals else ""
-            has = plate and plate not in ("-", "", "(không nhận dạng)")
-            if has: has_plate_count += 1
-            else: no_plate_count += 1
-
-        for code, btn in self._filter_btns.items():
+        n_gt_match    = sum(1 for iid in all_iids
+                            if len(self._tree.item(iid, "values")) > 7
+                            and str(self._tree.item(iid, "values")[7]).strip() == "✓ Đúng")
+        n_gt_mismatch = sum(1 for iid in all_iids
+                            if len(self._tree.item(iid, "values")) > 7
+                            and str(self._tree.item(iid, "values")[7]).strip() == "✗ Sai")
+        n_no_gt       = n_all - n_gt_match - n_gt_mismatch
+        for code, btn in self._gt_btns.items():
             btn.config(text={
-                "all":        f"Tất cả ({n_all})",
-                "correct":    f"✓ Đúng ({n_ok})",
-                "incorrect":  f"✗ Sai ({n_err})",
-                "unreviewed": f"? Chưa ({n_un})",
-            }[code])
-        for code, btn in self._detect_btns.items():
-            btn.config(text={
-                "all":        f"Tất cả ({n_all})",
-                "detected":   f"Đọc được ({has_plate_count})",
-                "undetected": f"Không đọc ({no_plate_count})",
+                "all":      f"Tất cả ({n_all})",
+                "match":    f"✓ Đúng ({n_gt_match})",
+                "mismatch": f"✗ Sai ({n_gt_mismatch})",
+                "no_gt":    f"Không có GT ({n_no_gt})",
             }[code])
 
-    def _set_review_filter(self, filter_type: str):
-        self._active_filter = filter_type
-        for code, btn in self._filter_btns.items():
-            btn.config(relief="sunken" if code == filter_type else "flat",
-                       bg="#252540" if code == filter_type else CARD)
-        self._apply_all_filters()
-
-    def _set_detect_filter(self, filter_type: str):
-        self._detect_filter = filter_type
-        for code, btn in self._detect_btns.items():
+    def _set_gt_filter(self, filter_type: str):
+        self._gt_filter = filter_type
+        for code, btn in self._gt_btns.items():
             btn.config(relief="sunken" if code == filter_type else "flat",
                        bg="#252540" if code == filter_type else CARD)
         self._apply_all_filters()
@@ -1005,10 +1177,8 @@ class LprTesterTab(Frame):
         self._apply_all_filters()
 
     def _apply_all_filters(self):
-        """Tổng hợp 3 filter: review state + detection + keyword wildcard."""
+        """Tổng hợp filter: GT comparison + keyword wildcard."""
         import fnmatch
-        review_f = self._active_filter
-        detect_f = self._detect_filter
         kw = self._kw_var.get().strip()
         # Nếu không có * hay ? thì wrap thành *kw* để search substring
         if kw and "*" not in kw and "?" not in kw:
@@ -1026,28 +1196,16 @@ class LprTesterTab(Frame):
                 continue
 
             plate  = str(vals[2]).strip()
-            status = str(vals[6]).strip()
-            is_gt_ok  = "gt_ok"  in tags
-            is_gt_err = "gt_err" in tags
-            has_plate = bool(plate and plate not in ("-", "", "(không nhận dạng)"))
 
-            # --- Review filter ---
-            review_ok = (
-                review_f == "all" or
-                (review_f == "correct"    and is_gt_ok) or
-                (review_f == "incorrect"  and is_gt_err) or
-                (review_f == "unreviewed" and not is_gt_ok and not is_gt_err)
+            # --- GT filter ---
+            gt_val = str(vals[7]).strip() if len(vals) > 7 else ""
+            gt_pass = (
+                self._gt_filter == "all" or
+                (self._gt_filter == "match"    and gt_val == "✓ Đúng") or
+                (self._gt_filter == "mismatch" and gt_val == "✗ Sai") or
+                (self._gt_filter == "no_gt"    and gt_val == "")
             )
-            if not review_ok:
-                continue
-
-            # --- Detection filter ---
-            detect_ok = (
-                detect_f == "all" or
-                (detect_f == "detected"   and has_plate) or
-                (detect_f == "undetected" and not has_plate)
-            )
-            if not detect_ok:
+            if not gt_pass:
                 continue
 
             # --- Keyword filter (wildcard trên cột biển số) ---
@@ -1077,6 +1235,17 @@ class LprTesterTab(Frame):
         if ms and ms != "-": info += f"   {ms}ms"
         self._prev_lbl.config(text=info)
 
+        # Điền textbox: ưu tiên GT (col 3), fallback biển nhận diện
+        gt_orig = str(vals[3]).strip() if len(vals) > 3 else ""
+        self._plate_edit_var.set(
+            gt_orig if gt_orig and gt_orig not in ("-", "")
+            else (plate if plate and plate not in ("-", "") else "")
+        )
+
+        # Hiển thị diff biển nhận diện vs GT (col 3)
+        gt_col = str(vals[3]).strip() if len(vals) > 3 else ""
+        self._update_diff_display(plate, gt_col)
+
         # Cập nhật mark label
         state = self._review_state.get(fpath, "")
         if state == "correct":
@@ -1094,7 +1263,7 @@ class LprTesterTab(Frame):
 
         lpi = self._folder_lpr.get(iid)
         if lpi and _PIL_OK:
-            self._show_img(self._pic_fp, lpi, 200, 80)
+            self._show_img(self._pic_fp, lpi, 500, 138)
         else:
             self._pic_fp.config(image="", text="(biển số)")
 
@@ -1125,8 +1294,10 @@ class LprTesterTab(Frame):
         if col_num < 1 or col_num > len(cols): return
         col_name = cols[col_num - 1]
         if col_name == "📂":
+            self._flash_row(row_id, "#1a4a1a")
             self._open_file_location(row_id)
         elif col_name == "📋":
+            self._flash_row(row_id, "#1a1a4a")
             self._copy_file_to_clipboard(row_id)
 
     def _open_file_location(self, iid: str):
@@ -1154,28 +1325,173 @@ class LprTesterTab(Frame):
         try:
             import ctypes, io as _io
             from PIL import Image as _Img
+            # Đọc ảnh → BMP bytes → bỏ 14-byte file header → DIB
             img = _Img.open(fpath).convert("RGB")
             buf = _io.BytesIO()
             img.save(buf, format="BMP")
-            data = buf.getvalue()[14:]   # bỏ 14-byte BMP file header
-            buf.close()
-            CF_DIB = 8
-            ctypes.windll.user32.OpenClipboard(None)
-            ctypes.windll.user32.EmptyClipboard()
-            hMem = ctypes.windll.kernel32.GlobalAlloc(0x2002, len(data))
-            pMem = ctypes.windll.kernel32.GlobalLock(hMem)
-            ctypes.memmove(pMem, data, len(data))
-            ctypes.windll.kernel32.GlobalUnlock(hMem)
-            ctypes.windll.user32.SetClipboardData(CF_DIB, hMem)
-            ctypes.windll.user32.CloseClipboard()
+            dib = buf.getvalue()[14:]
+            buf.close(); img.close()
+
+            k32 = ctypes.windll.kernel32
+            u32 = ctypes.windll.user32
+            # Phải khai báo restype đúng (c_void_p) để tránh truncate con trỏ 64-bit
+            k32.GlobalAlloc.restype   = ctypes.c_void_p
+            k32.GlobalAlloc.argtypes  = [ctypes.c_uint, ctypes.c_size_t]
+            k32.GlobalLock.restype    = ctypes.c_void_p
+            k32.GlobalLock.argtypes   = [ctypes.c_void_p]
+            k32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+            k32.GlobalFree.restype    = ctypes.c_void_p
+            k32.GlobalFree.argtypes   = [ctypes.c_void_p]
+            u32.OpenClipboard.argtypes   = [ctypes.c_void_p]
+            u32.SetClipboardData.restype  = ctypes.c_void_p
+            u32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+
+            GMEM_MOVEABLE = 0x0002
+            hMem = k32.GlobalAlloc(GMEM_MOVEABLE, len(dib))
+            if not hMem:
+                raise RuntimeError("GlobalAlloc thất bại")
+            pMem = k32.GlobalLock(hMem)
+            if not pMem:
+                k32.GlobalFree(hMem)
+                raise RuntimeError("GlobalLock thất bại")
+            ctypes.memmove(pMem, dib, len(dib))
+            k32.GlobalUnlock(hMem)
+
+            if not u32.OpenClipboard(None):
+                k32.GlobalFree(hMem)
+                raise RuntimeError("OpenClipboard thất bại")
+            u32.EmptyClipboard()
+            u32.SetClipboardData(8, hMem)   # CF_DIB = 8
+            u32.CloseClipboard()
             _append_log(self._log, f"📋 Đã copy: {os.path.basename(fpath)}")
         except Exception as ex:
             _append_log(self._log, f"[LỖI] Copy clipboard: {ex}")
+
+    def _update_diff_display(self, plate: str, gt: str):
+        """Hiển thị diff ký tự giữa biển nhận diện và GT trong _diff_txt."""
+        import difflib as _diff
+        tw = self._diff_txt
+        tw.config(state=NORMAL)
+        tw.delete("1.0", END)
+        norm = lambda s: re.sub(r"[^A-Za-z0-9]", "", s).upper()
+        p = norm(plate); g = norm(gt)
+        tw.tag_config("same",   foreground="#4caf50")
+        tw.tag_config("diff_p", foreground="#f05050")
+        tw.tag_config("diff_g", foreground="#f05050")
+        tw.tag_config("lbl",    foreground=DIM)
+        if not g:
+            # Không có GT: hiện biển nhận diện, không tô màu
+            if p:
+                tw.insert(END, "Nhận dạng: ", "lbl")
+                tw.insert(END, p, "same")
+            tw.config(state=DISABLED); return
+        matcher = _diff.SequenceMatcher(None, p, g, autojunk=False)
+        tw.insert(END, "Nhận dạng: ", "lbl")
+        for op, i1, i2, j1, j2 in matcher.get_opcodes():
+            tw.insert(END, p[i1:i2], "same" if op == "equal" else "diff_p")
+        tw.insert(END, "\n")
+        tw.insert(END, "GT:        ", "lbl")
+        for op, i1, i2, j1, j2 in matcher.get_opcodes():
+            tw.insert(END, g[j1:j2], "same" if op == "equal" else "diff_g")
+        tw.config(state=DISABLED)
+
+    def _open_gt_folder(self, sub: str):
+        """Mở thư mục _gt/dung hoặc _gt/sai trong Explorer."""
+        folder = self._folder_var.get().strip()
+        if not folder:
+            _append_log(self._log, "⚠ Chưa chọn thư mục nguồn."); return
+        gt_dir = os.path.join(folder, "_gt", sub)
+        os.makedirs(gt_dir, exist_ok=True)
+        import subprocess
+        subprocess.Popen(["explorer", os.path.normpath(gt_dir)])
+
+    def _clear_folder_cache(self):
+        """Xóa file cache .kztek_lpr_cache.json trong thư mục hiện tại."""
+        folder = self._folder_var.get().strip()
+        if not folder:
+            _append_log(self._log, "⚠ Chưa chọn thư mục."); return
+        import json as _json
+        cache_path = os.path.join(folder, ".kztek_lpr_cache.json")
+        try:
+            os.remove(cache_path)
+            _append_log(self._log, f"🗑 Đã xóa cache: {cache_path}")
+        except FileNotFoundError:
+            _append_log(self._log, "Cache chưa có hoặc đã bị xóa.")
+        except Exception as ex:
+            _append_log(self._log, f"[LỖI] Xóa cache: {ex}")
+
+    def _flash_row(self, iid: str, color: str, ms: int = 300):
+        """Nhấp nháy màu nền tạm thời cho row iid rồi phục hồi sau ms ms."""
+        if not self._tree.exists(iid): return
+        orig_tags = self._tree.item(iid, "tags")
+        self._tree.tag_configure("_flash_tmp", background=color)
+        self._tree.item(iid, tags=("_flash_tmp",))
+        def _restore(tags=orig_tags):
+            try:
+                if self._tree.exists(iid):
+                    self._tree.item(iid, tags=tags)
+            except Exception: pass
+        self.root.after(ms, _restore)
+
+    def _save_sash(self, _=None):
+        try:
+            if hasattr(self, "_hpw_result"):
+                x, _ = self._hpw_result.sash_coord(0)
+                _CFG["lpr.result_hsash"] = x
+                _cfg_save()
+        except Exception: pass
+
+    def _restore_sash(self):
+        try:
+            v = _CFG.get("lpr.result_hsash")
+            if v is not None and hasattr(self, "_hpw_result"):
+                self._hpw_result.sash_place(0, int(v), 0)
+        except Exception: pass
+
+    def _save_plate_edit(self):
+        """Lưu biển GT từ textbox vào gt.txt và cập nhật cây."""
+        sel = self._tree.selection()
+        if not sel: return
+        new_gt = self._plate_edit_var.get().strip()
+        if not new_gt: return
+        iid  = sel[0]
+        vals = list(self._tree.item(iid)["values"])
+        if not vals: return
+        plate = str(vals[2])
+        fname = str(vals[1])
+        fpath = self._folder_files.get(iid, "")
+        folder = self._folder_var.get().strip()
+        if not fpath and folder:
+            fpath = os.path.join(folder, fname)
+        src_folder = os.path.dirname(fpath) if fpath else folder
+        try:
+            # Lưu vào gt.txt format: <filename>\t<plate>
+            _save_gt_to_file(src_folder, os.path.basename(fname), new_gt)
+            gt_cmp = _cmp_plate(plate, new_gt)
+            vals[3] = new_gt
+            if len(vals) > 7:
+                vals[7] = gt_cmp
+            if gt_cmp == "✓ Đúng":
+                vals[6] = "GT: Đúng ✓"
+                self._tree.item(iid, values=vals, tags=("gt_ok",))
+            elif gt_cmp == "✗ Sai":
+                vals[6] = "GT: Sai ✗"
+                self._tree.item(iid, values=vals, tags=("gt_err",))
+            else:
+                self._tree.item(iid, values=vals)
+            self._update_filter_counts()
+            _push_history("h.lpr.plate_edit", new_gt)
+            self._plate_edit["values"] = _get_history("h.lpr.plate_edit")
+            self._update_diff_display(plate, new_gt)
+            _append_log(self._log, f"✔ GT lưu: {new_gt}  ({fname})")
+        except Exception as ex:
+            _append_log(self._log, f"[LỖI] Lưu GT: {ex}")
 
     def _clear_fpreview(self):
         self._pic_fv.config(image="", text="(ảnh xe)")
         self._pic_fp.config(image="", text="(biển số)")
         self._prev_lbl.config(text="(chọn dòng trong bảng để xem ảnh)")
+        self._update_diff_display("", "")
 
     def _zoom_fv(self):
         sel = self._tree.selection()
@@ -1206,10 +1522,10 @@ class LprTesterTab(Frame):
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.writer(f)
                 w.writerow(["STT", "Tên file", "Biển số", "Biển gốc",
-                             "Loại xe", "Thời gian (ms)", "Trạng thái"])
+                             "Loại xe", "Thời gian (ms)", "Trạng thái", "So sánh GT"])
                 for iid in self._all_tree_order:
                     iid = iid[0]
-                    w.writerow(self._tree.item(iid)["values"][:7])  # bỏ cột 📂 📋
+                    w.writerow(self._tree.item(iid)["values"][:8])  # bỏ cột 📂 📋
             n = len(self._all_tree_order)
             _append_log(self._log, f"✔ Đã xuất {n} dòng → {path}")
             messagebox.showinfo("Xuất CSV", f"Xuất thành công {n} dòng.")
@@ -1281,6 +1597,71 @@ class LprTesterTab(Frame):
 
 # ════════════════════════ MODULE-LEVEL API HELPERS ════════════════════════
 
+def _save_gt_to_file(folder: str, fname: str, plate: str):
+    """Ghi/cập nhật gt.txt trong folder với format: <filename>\t<plate>"""
+    gt_path = os.path.join(folder, "gt.txt")
+    entries: dict = {}
+    if os.path.isfile(gt_path):
+        try:
+            with open(gt_path, encoding="utf-8-sig") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"): continue
+                    parts = line.split("\t", 1)
+                    if len(parts) == 2:
+                        entries[parts[0]] = parts[1].strip()
+        except Exception: pass
+    entries[fname] = plate
+    with open(gt_path, "w", encoding="utf-8") as f:
+        for k in sorted(entries):
+            f.write(f"{k}\t{entries[k]}\n")
+
+
+def _load_gt(img_path: str) -> str:
+    """Đọc GT plate cho ảnh.
+    Thứ tự tìm:
+      1. gt.txt trong cùng thư mục  (format: '<filename>\\t<plate>')
+      2. <tên_ảnh>.txt cùng thư mục (fallback format cũ)
+    """
+    folder = os.path.dirname(img_path)
+    fname  = os.path.basename(img_path)
+
+    # 1. gt.txt chung (ưu tiên)
+    gt_file = os.path.join(folder, "gt.txt")
+    if os.path.isfile(gt_file):
+        try:
+            with open(gt_file, encoding="utf-8-sig") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"): continue
+                    parts = line.split("\t", 1)
+                    if len(parts) == 2 and parts[0] == fname:
+                        return parts[1].strip()
+        except Exception: pass
+
+    # 2. File .txt riêng cùng tên (fallback)
+    txt = os.path.splitext(img_path)[0] + ".txt"
+    if os.path.isfile(txt):
+        try:
+            with open(txt, encoding="utf-8-sig") as f:
+                return f.read().strip()
+        except Exception: pass
+
+    return ""
+
+
+def _cmp_plate(plate: str, gt: str) -> str:
+    """So sánh biển số nhận dạng với GT. Trả về '✓ Đúng', '✗ Sai', hoặc '' nếu không có GT."""
+    if not gt:
+        return ""
+    norm = lambda s: re.sub(r"[^A-Za-z0-9]", "", s).upper()
+    p = norm(plate)
+    g = norm(gt)
+    if not p and not g:
+        return ""
+    return "✓ Đúng" if p == g else "✗ Sai"
+
+
 def _api_call_pil(pil_img, url, timeout, mode, lpr_type) -> tuple:
     if not _REQ_OK or not _PIL_OK:
         return {}, "requests hoặc Pillow chưa cài"
@@ -1309,7 +1690,7 @@ def _api_call_file(fpath, url, timeout, mode, lpr_type) -> tuple:
 def _api_call_bytes(data: bytes, url: str, timeout: int,
                     mode: str, lpr_type: str, ext: str) -> tuple:
     mime  = _MIME.get(ext, "image/jpeg")
-    field = "upload" if mode == _MODE_DIRECT else "image"
+    field = "upload"  # Kztek /alpr và OpenALPR đều dùng "upload"
     try:
         files = {field: (f"img{ext}", data, mime)}
         resp  = _get_session().post(url, files=files, timeout=timeout)

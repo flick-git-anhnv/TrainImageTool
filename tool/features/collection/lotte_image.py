@@ -477,6 +477,17 @@ class LotteWorker:
             bad_reason = None
             bad_label  = ""
             bad_direction = ""
+        # GT plate: xe tháng → biển đăng ký; xe lượt → biển nếu PlateIn==PlateOut, else None
+        _plate_reg = re.sub(r"[^0-9A-Za-z]", "",
+                            str(rec.get("RegisteredPlate") or rec.get("CardPlate") or "")).upper()
+        _plate_in  = re.sub(r"[^0-9A-Za-z]", "", str(rec.get("PlateIn")  or "")).upper()
+        _plate_out = re.sub(r"[^0-9A-Za-z]", "", str(rec.get("PlateOut") or "")).upper()
+        if _plate_reg:
+            gt_plate = _li_safe(_plate_reg)
+        elif _plate_in and _plate_out and _plate_in == _plate_out:
+            gt_plate = _li_safe(_plate_in)
+        else:
+            gt_plate = None
         cg_display = f" | nhóm thẻ: {card_group}" if card_group else ""
         self._log(f"  [{event_id}] {plate or '?':12s} | {lane_in} | {dt_in.strftime('%Y-%m-%d %H:%M')}"
                   f"{cg_display} | {len(imgs_in)+len(imgs_out)} ảnh"
@@ -490,7 +501,7 @@ class LotteWorker:
             self._log(f"    IN  [{idx}/{len(imgs_in)}] \"{desc}\" → {vtype}")
             self._save_image(api, img_obj, lane_in, dt_in, plate, out,
                              bad_reason, bad_label, card_group, "in", bad_direction,
-                             event_folder)
+                             event_folder, gt_plate=gt_plate)
         for idx, img_obj in enumerate(imgs_out, 1):
             if self._stop.is_set():
                 return
@@ -500,13 +511,13 @@ class LotteWorker:
             save_lane = lane_in if bad_reason else lane_out
             self._save_image(api, img_obj, save_lane, dt_out, plate, out,
                              bad_reason, bad_label, card_group, "out", bad_direction,
-                             event_folder)
+                             event_folder, gt_plate=gt_plate)
 
     def _save_image(self, api: LotteApiClient, img_obj, lane: str,
                     dt: datetime, plate: str, out: Path,
                     bad_reason: Optional[str] = None, bad_label: str = "",
                     card_group: str = "", direction: str = "", bad_direction: str = "",
-                    event_id: str = ""):
+                    event_id: str = "", gt_plate: Optional[str] = None):
         if not isinstance(img_obj, dict):
             return
         file_path   = img_obj.get("FilePath")   or ""
@@ -519,7 +530,7 @@ class LotteWorker:
 
         if bad_reason:
             # chỉ lưu ảnh xe: bỏ qua toàn cảnh và xe đạp
-            if img_type in ("toan_canh", "xe_dap"):
+            if img_type.startswith("toan_canh_") or img_type == "xe_dap":
                 self.stats["skipped"] += 1
                 return
             # register_mismatch: chỉ lưu ảnh theo chiều có lỗi
@@ -609,6 +620,9 @@ class LotteWorker:
             hour_key = (lane, dt.strftime("%Y-%m-%d %H"))
             self._lane_hourly[hour_key] = self._lane_hourly.get(hour_key, 0) + 1
             self._log(f"      ✓ {lane}/{img_type}/{fpath.name}")
+            if gt_plate:
+                with open(save_dir / "gt.txt", "a", encoding="utf-8") as _f:
+                    _f.write(f"{fpath.name}\t{gt_plate}\n")
         else:
             self.stats["error"] += 1
             self._log(f"      ✗ Lỗi encode: {file_path}")

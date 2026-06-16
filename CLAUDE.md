@@ -1,5 +1,19 @@
 # CLAUDE.md — KZTEK Image Tools
 
+## Code Graph — Quy tắc bắt buộc
+
+**Trước khi đọc bất kỳ file `.py` nào**, phải đọc `CODE_GRAPH.md` để:
+- Biết ngay class/function cần tìm mà không cần dò toàn file
+- Hiểu dependency giữa các module
+- Tránh đọc nhầm file hoặc bỏ sót file liên quan
+
+**Sau khi thêm tính năng mới**, phải cập nhật `CODE_GRAPH.md`:
+1. Thêm class/hàm mới vào bảng của file tương ứng
+2. Cập nhật sơ đồ phụ thuộc nếu có import mới
+3. Cập nhật dòng `<!-- Cập nhật: YYYY-MM-DD -->` ở đầu file
+
+---
+
 ## Tổng quan dự án
 
 **KZTEK Image Tools** — ứng dụng desktop Python/Tkinter hỗ trợ chuẩn bị dữ liệu và huấn luyện mô hình YOLO cho hệ thống nhận dạng biển số (iParking).

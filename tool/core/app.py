@@ -18,8 +18,10 @@ from ..features.analysis.tab_stats       import StatsTab
 from ..features.analysis.tab_plate_search import PlateSearchTab
 from ..features.detection.tab_yolo       import YoloTab
 from ..features.training.tab_train       import TrainTab
+from ..features.training.tab_classifier  import ClassifierTrainTab
 from ..features.detection.tab_lpr_tester import LprTesterTab
 from ..features.detection.tab_slot_classifier import SlotClassifierTab
+from ..features.detection.tab_classifier_tester import ClassifierTesterTab
 
 _AppBase = _dnd_mod.Tk if _DND_OK else Tk
 
@@ -113,8 +115,10 @@ class App(_AppBase):
             ("🔎 Plate Search",   PlateSearchTab,    ()),
             ("🤖 YOLO Detect",    YoloTab,           ()),
             ("🚀 Train",          TrainTab,          ()),
+            ("🧠 Classifier",     ClassifierTrainTab,()),
             ("🔬 LPR Tester",     LprTesterTab,      ()),
-            ("🅿 Slot Detect",    SlotClassifierTab, ()),
+            ("🅿 Slot Detect",    SlotClassifierTab,       ()),
+            ("🧪 Cls Tester",    ClassifierTesterTab,     ()),
         ]
 
         # Khởi tạo lookup structures

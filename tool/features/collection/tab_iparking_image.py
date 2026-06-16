@@ -1,6 +1,7 @@
 import json
 import os
 import queue
+import re
 import threading
 import time
 from datetime import datetime
@@ -561,6 +562,7 @@ class IParkingImageTab(Frame):
     def _build_log(self, p):
         f = Frame(p, bg=BG, padx=10, pady=4)
         f.pack(fill=BOTH, expand=True)
+        self._log_frame = f
         self._sep(f, "Nhật ký")
         inner = Frame(f, bg=BG)
         inner.pack(fill=BOTH, expand=True)
@@ -709,6 +711,8 @@ class IParkingImageTab(Frame):
 
     def _show_bad_images(self):
         out = Path(self.out_var.get().strip())
+        if not out.exists():
+            messagebox.showerror("Lỗi", "Thư mục không tồn tại."); return
         if hasattr(self, "_bad_win") and self._bad_win.winfo_exists():
             self._bad_win.lift()
             return
@@ -898,6 +902,7 @@ class IParkingImageTab(Frame):
 
     def _on_done_reset(self):
         self._running = False
+        self._pause_event.set()
         self.start_btn.config(state=NORMAL)
         self.stop_btn.config(state=DISABLED)
         self.pause_btn.config(state=DISABLED)
@@ -1106,18 +1111,21 @@ class IParkingImageTab(Frame):
                     self._log(msg)
         except queue.Empty:
             pass
+        _last_s = None
         try:
             while True:
                 s = self._stat_q.get_nowait()
                 tid = s.get("thread_id", 0)
                 if tid > 0:
                     self._all_thread_stats[tid] = s
-                disp = self._aggregate_stats() if self._all_thread_stats else s
-                self._last_stat = disp
-                self._update_progress(disp)
-                self._refresh_stat_lbl(disp)
+                _last_s = s
         except queue.Empty:
             pass
+        if _last_s is not None:
+            disp = self._aggregate_stats() if self._all_thread_stats else _last_s
+            self._last_stat = disp
+            self._update_progress(disp)
+            self._refresh_stat_lbl(disp)
         self.root.after(200, self._poll)
 
     def _aggregate_stats(self):
@@ -1191,11 +1199,10 @@ class IParkingImageTab(Frame):
                   f"Lỗi: {s.get('error',0)}"))
 
     def _log(self, msg):
-        import re as _re
         self.log_txt.configure(state=NORMAL)
         ts   = datetime.now().strftime("%H:%M:%S")
         line = f"[{ts}] {msg}\n"
-        m = _re.match(r'\[T(\d+)\]', msg)
+        m = re.match(r'\[T(\d+)\]', msg)
         if m:
             self.log_txt.insert(END, line, (f"T{m.group(1)}",))
         else:
@@ -1210,7 +1217,8 @@ class IParkingImageTab(Frame):
 
     def _show_dashboard(self, s):
         if not self._dash_visible:
-            self._dash_frame.pack(fill=X, padx=10, pady=(4, 2))
+            self._dash_frame.pack(fill=X, padx=10, pady=(4, 2),
+                                  before=self._log_frame)
             self._dash_visible = True
         for w in self._dash_frame.winfo_children():
             w.destroy()
@@ -1282,9 +1290,18 @@ class IParkingImageTab(Frame):
             w.destroy()
         lbl = Label(self._stats_body, text="Đang quét...", bg=BG, fg=DIM, font=F_MAIN)
         lbl.pack(expand=True)
-        self._stats_body.update()
-        data = self._scan_stats(out)
-        lbl.destroy()
+
+        def _worker():
+            data = self._scan_stats(out)
+            self.root.after(0, lambda: self._stats_populate(lbl, out, data))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _stats_populate(self, loading_lbl, out, data):
+        try:
+            loading_lbl.destroy()
+        except Exception:
+            return  # stats window was closed before scan finished
         if not data["lt"]:
             Label(self._stats_body,
                   text=f"Không tìm thấy ảnh trong:\n{out}",
@@ -1320,7 +1337,7 @@ class IParkingImageTab(Frame):
                         hour_s = fname[:2]
                     else:
                         continue
-                    if lane in ("bad",) or vtype in ("bad",):
+                    if lane in ("bad", "out", "train") or vtype in ("bad",):
                         continue
                 except Exception:
                     continue

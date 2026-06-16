@@ -76,4 +76,40 @@
 
 ---
 
+## [E009] ctypes Win32 pointer truncation → "access violation writing 0x20"
+- **File:** `tool/features/detection/tab_lpr_tester.py` — `_copy_file_to_clipboard`
+- **Triệu chứng:** `exception: access violation writing 0x0000000000000020` khi gọi `ctypes.memmove`
+- **Nguyên nhân:** `ctypes.windll.kernel32.GlobalAlloc` và `GlobalLock` mặc định có `restype = c_int` (32-bit). Trên Python 64-bit, con trỏ HGLOBAL 64-bit bị cắt còn 32-bit thấp → thường ra `0x20` (32 decimal) thay vì địa chỉ thực
+- **Cách sửa:** Khai báo rõ `restype = ctypes.c_void_p` và `argtypes` đúng kiểu cho `GlobalAlloc`, `GlobalLock`, `GlobalFree`, `SetClipboardData` trước khi gọi. Luôn kiểm tra NULL sau `GlobalAlloc`/`GlobalLock`.
+- **Ngày:** 2026-06-16
+
+---
+
+## [E010] Worker gửi __DONE__ không kiểm tra send_done — premature UI completion ở parallel mode
+- **File:** `tool/features/collection/parkingv8_image.py` — `Parkingv8Worker.run()`
+- **Triệu chứng:** Khi chạy parallel (N > 1 worker), nếu bất kỳ P8 worker nào fail login, Start button bật lại trong khi các worker khác vẫn đang chạy.
+- **Nguyên nhân:** Đường dẫn login failure dùng `self.log_q.put("__DONE__")` trực tiếp, không guard `if self._send_done`. LotteWorker và Parkingv6Worker đã guard đúng.
+- **Cách sửa:** Thêm `if self._send_done:` trước `self.log_q.put("__DONE__")` ở mọi early-return path trong `run()`.
+- **Ngày:** 2026-06-16
+
+---
+
+## [E011] `_clear_log` tìm sai attribute — Ctrl+L không xóa log
+- **File:** `GetImageApp/RunGetParkingImage.py`, `tool/core/app.py`
+- **Triệu chứng:** Ctrl+L không làm gì, log không bị xóa
+- **Nguyên nhân:** `_clear_log` / `_global_ctrl_l` tìm attribute `("_log", "log")` — trong `IParkingImageTab`, `_log` là METHOD (truthy), nên `w = method`, `w.configure()` ném exception, nhưng `return` vẫn được gọi → widget `log_txt` không bao giờ được tìm thấy
+- **Cách sửa:** Đổi lookup thành `("log_txt", "log")` và thêm guard `not callable(w)` để bỏ qua method
+- **Ngày:** 2026-06-16
+
+---
+
+## [E012] `BuildGetImageGUI.py` dùng đường dẫn module cũ (pre-restructure)
+- **File:** `GetImageApp/BuildGetImageGUI.py`
+- **Triệu chứng:** Build exe thành công nhưng exe crash với `ModuleNotFoundError` khi chạy
+- **Nguyên nhân:** Sau khi restructure `tool/` thành `tool/core/`, `tool/features/`, `tool/utils/`, các `--hidden-import` vẫn dùng đường dẫn phẳng cũ: `tool.settings`, `tool.parkingv8_image`, `tool.tab_iparking_image`… Exe không tìm thấy module đúng package path
+- **Cách sửa:** Cập nhật toàn bộ `--hidden-import` sang đường dẫn mới: `tool.core.settings`, `tool.features.collection.parkingv8_image`, v.v.
+- **Ngày:** 2026-06-16
+
+---
+
 *Cập nhật file này mỗi khi gặp lỗi mới. Format: `[Ennn]` tăng dần.*

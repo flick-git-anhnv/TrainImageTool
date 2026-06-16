@@ -980,8 +980,9 @@ class CheckerTab(Frame):
         try:
             from PIL import Image
             img = Image.open(img_path).convert("RGB")
-            from ...core.ui_helpers import _zoom_image_window
-            _zoom_image_window(self.root, img, filename)
+            from ...core.ui_helpers import _zoom_image_window, _load_label_bboxes
+            bboxes = _load_label_bboxes(img_path)
+            _zoom_image_window(self.root, img, filename, bboxes=bboxes)
         except Exception:
             pass
 

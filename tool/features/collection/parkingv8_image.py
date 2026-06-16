@@ -70,18 +70,24 @@ def _p8_safe(s: str) -> str:
 def _p8_bad_reason(rec: dict) -> Optional[Tuple[str, str]]:
     """Return (reason, plate_label) if event has bad plate data, else None.
 
-    reason: 'none' | 'register_mismatch'
+    reason: 'none' | 'in_out_mismatch' | 'register_mismatch'
     plate_label: embedded in filename so both plates are visible.
       - none              → ""
+      - in_out_mismatch   → "BSX_entry_BSX_exit"
       - register_mismatch → "BSX_nhan_dien_BSX_dang_ky"  (xe tháng)
     """
-    plate_rec = re.sub(r"[^0-9A-Za-z]", "",
-                       str(rec.get("plateNumber") or rec.get("PlateNumber") or "")).upper()
-    plate_reg = re.sub(r"[^0-9A-Za-z]", "",
-                       str(_get_nested(rec, "accessKey.collection.plateNumber") or
-                           _get_nested(rec, "accessKey.plateNumber")           or "")).upper()
+    plate_rec   = re.sub(r"[^0-9A-Za-z]", "",
+                         str(rec.get("plateNumber") or rec.get("PlateNumber") or "")).upper()
+    plate_reg   = re.sub(r"[^0-9A-Za-z]", "",
+                         str(_get_nested(rec, "accessKey.collection.plateNumber") or
+                             _get_nested(rec, "accessKey.plateNumber")           or "")).upper()
+    plate_entry = re.sub(r"[^0-9A-Za-z]", "",
+                         str(_get_nested(rec, "entry.plateNumber") or
+                             _get_nested(rec, "entry.PlateNumber") or "")).upper()
     if not plate_rec:
         return ("none", "")
+    if plate_entry and plate_rec != plate_entry:
+        return ("in_out_mismatch", f"{plate_entry}_{plate_rec}")
     if plate_reg and plate_rec != plate_reg:
         return ("register_mismatch", f"{plate_rec}_{plate_reg}")
     return None
@@ -469,7 +475,8 @@ class Parkingv8Worker:
         self._log("Đang đăng nhập...")
         if not api.login():
             self._log("[LỖI] Không lấy được token — kiểm tra URL / tài khoản.")
-            self.log_q.put("__DONE__")
+            if self._send_done:
+                self.log_q.put("__DONE__")
             return
         self._log("Đăng nhập thành công.")
 
@@ -630,6 +637,21 @@ class Parkingv8Worker:
         bad_result = _p8_bad_reason(rec) if self.cfg.get("collect_bad") else None
         bad_reason = bad_result[0] if bad_result else None
         bad_label  = bad_result[1] if bad_result else ""
+        # GT plate: xe tháng → biển đăng ký; xe lượt → biển nếu exit==entry, else None
+        _plate_reg   = re.sub(r"[^0-9A-Za-z]", "",
+                              str(_get_nested(rec, "accessKey.collection.plateNumber") or
+                                  _get_nested(rec, "accessKey.plateNumber") or "")).upper()
+        _plate_exit  = re.sub(r"[^0-9A-Za-z]", "",
+                              str(rec.get("plateNumber") or rec.get("PlateNumber") or "")).upper()
+        _plate_entry = re.sub(r"[^0-9A-Za-z]", "",
+                              str(_get_nested(rec, "entry.plateNumber") or
+                                  _get_nested(rec, "entry.PlateNumber") or "")).upper()
+        if _plate_reg:
+            gt_plate = _p8_safe(_plate_reg)
+        elif _plate_exit and _plate_entry and _plate_exit == _plate_entry:
+            gt_plate = _p8_safe(_plate_exit)
+        else:
+            gt_plate = None
         self._log(
             f"  [{event_id}] {plate or '?':12s} | {lane} | "
             f"{dt.strftime('%Y-%m-%d %H:%M')} | vt={vtype} | {len(images)} ảnh"
@@ -640,12 +662,12 @@ class Parkingv8Worker:
             if self._stop.is_set():
                 return
             self._save_image(api, img_url, img_suffix, lane, vtype, dt, plate, out,
-                             bad_reason, bad_label, event_id, direction)
+                             bad_reason, bad_label, event_id, direction, gt_plate=gt_plate)
 
     def _save_image(self, api: Parkingv8ApiClient, url: str, suffix: str,
                     lane: str, vtype: str, dt: datetime, plate: str, out: Path,
                     bad_reason: Optional[str] = None, bad_label: str = "",
-                    event_id: str = "", direction: str = "in"):
+                    event_id: str = "", direction: str = "in", gt_plate: Optional[str] = None):
         self.stats["found"] += 1
 
         if bad_reason:
@@ -739,10 +761,9 @@ class Parkingv8Worker:
             hour_key = (lane, dt.strftime("%Y-%m-%d %H"))
             self._lane_hourly[hour_key] = self._lane_hourly.get(hour_key, 0) + 1
             self._log(f"      ✓ {lane}/{img_type}/{fpath.name}")
-            # Tạo file GT cho ảnh biển số cắt: <tên_file>\t<biển_số>
-            if img_type.endswith("_bsx_cut") and plate:
-                fpath.with_suffix(".txt").write_text(
-                    f"{fpath.name}\t{plate}\n", encoding="utf-8")
+            if gt_plate:
+                with open(save_dir / "gt.txt", "a", encoding="utf-8") as _f:
+                    _f.write(f"{fpath.name}\t{gt_plate}\n")
         else:
             self.stats["error"] += 1
             self._log(f"      ✗ Lỗi encode: {url[:80]}")

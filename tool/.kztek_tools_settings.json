@@ -2,12 +2,12 @@
   "bbox.line_width": 1,
   "ip.page_size": 100,
   "ip.max_pages": 10000,
-  "ip.max_per_lane": 1000,
+  "ip.max_per_lane": 0,
   "ip.max_per_cat": 0,
   "ip.max_per_hour": 0,
-  "ip.parallel": 1,
-  "yolo.interval": "2.0",
-  "yolo.line_width": 2,
+  "ip.parallel": 10,
+  "yolo.interval": "0.2",
+  "yolo.line_width": 5,
   "yolo.font_size": 11,
   "lpr.timeout": 10,
   "lpr.rotate": 0,
@@ -16,7 +16,18 @@
   "bbox.img": "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong",
   "h.bbox.img": [
     "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/DuAnKhac/INPUT1",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/TruongDinh",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte/ParkingAPI/RAMP8_RA",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte/ParkingAPI",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte/BaoTrong",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte-by-type-test/xe_may",
     "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong-by-type-test",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong-by-type-test/out/toan_canh",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong-by-type-test/out/o_to",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte-by-type-test/o_to",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong-by-type-test/out",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte",
     "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte/ParkingAPI/RAMP7-VAO"
   ],
   "history.slot_cls.model_path": [
@@ -39,12 +50,104 @@
   "h.crop.lbl": [
     "K:/Software/2.AI-Tranining/1.Images/2.Output"
   ],
-  "crop.out": "K:/Software/2.AI-Tranining/1.Images/2.Output-crop1",
+  "crop.out": "K:/Software/2.AI-Tranining/1.Images/2.Output-crop",
   "h.crop.out": [
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-crop",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-crop2",
     "K:/Software/2.AI-Tranining/1.Images/2.Output-crop1"
   ],
-  "lpr.folder": "K:/Software/2.AI-Tranining/1.Images/2.Output-crop1/license_plate",
+  "lpr.folder": "K:\\Software\\CheckLotte\\bad\\RAMP4-VAO\\in_out_mismatch",
   "h.lpr.folder": [
+    "K:\\Software\\CheckLotte\\bad\\RAMP4-VAO\\in_out_mismatch",
+    "K:\\Software\\CheckLotte\\bad\\CONG 5-VAO-OTO\\in_out_mismatch",
+    "K:\\Software\\CheckLotte\\bad\\CONG 5-VAO-XM-1",
+    "K:\\Check1\\CONG 5-VAO-XM-4\\xe_may",
+    "C:\\Users\\nguye\\Desktop\\Check\\CONG 5-VAO-XM-1\\xe_may\\2026-05-01\\11",
     "K:/Software/2.AI-Tranining/1.Images/2.Output-crop1/license_plate"
-  ]
+  ],
+  "lotte.kw_xe_may": "xe máy,motor",
+  "ip.out": "K:\\Software\\CheckLotte",
+  "h.ip.out": [
+    "K:\\Software\\CheckLotte",
+    "K:\\Software\\Check",
+    "K:\\Software/Check",
+    "K:/Check",
+    "K:/Check1",
+    "K/Check1",
+    "C:/Users/nguye/Desktop/Check"
+  ],
+  "ip.sleep": 0.01,
+  "ip.collect_bad": true,
+  "lpr.detect_mode": "lprdetect",
+  "h.lpr.url": [
+    "http://localhost:8000/alpr"
+  ],
+  "lpr.review_states": {
+    "K:\\Check1\\CONG 5-VAO-XM-4\\xe_may\\2026-05-03\\16\\160819_29E208516.jpg": "incorrect",
+    "K:\\Check1\\CONG 5-VAO-XM-4\\xe_may\\2026-04-29\\08\\085152_11F72835.jpg": "incorrect",
+    "K:\\Check1\\CONG 5-VAO-XM-4\\xe_may\\2026-05-02\\08\\084333_84H13554.jpg": "incorrect",
+    "K:\\Check1\\CONG 5-VAO-XM-4\\xe_may\\2026-05-02\\13\\131441_29A111169.jpg": "incorrect"
+  },
+  "bad_viewer.slideshow_delay": 30,
+  "bad_viewer.lpr_url": "http://127.0.0.1:8000/alpr",
+  "consolidate.max": 0,
+  "lpr.subfolder": true,
+  "h.lpr.plate_edit": [
+    "84H113554",
+    "29A11169",
+    "97H43617",
+    "37H43617"
+  ],
+  "ip.to": "2026-05-31 08:00:29",
+  "h.yolo.model": [
+    "C:/Users/nguye/Downloads/best (7).pt"
+  ],
+  "yolo.model_path": "C:/Users/nguye/Downloads/best (7).pt",
+  "yolo.check_folder": "K:/Software/2.AI-Tranining/1.Images/2.Output-crop2/car",
+  "h.yolo.path": [
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-crop2/car",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/Golden",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/Golden/10028.jpg",
+    "C:/Users/nguye/Desktop/z7845189639270_1db11c28a6c1a74b37984f82b8ebaeba.jpg",
+    "C:/Users/nguye/Desktop/z7853963418217_4841375c9a0046da38e866c31f1c0821.jpg",
+    "C:/Users/nguye/Desktop/16h55m22s_20MHJF_IMG.jpg",
+    "C:/Users/nguye/Desktop/z7899185154733_32004f15daccaea8faf3a30db844da9f.jpg",
+    "C:/Users/nguye/Desktop/z7917094169520_1ecbab811178ce7a96dbae31c28c1583.jpg",
+    "C:/Users/nguye/Desktop/z7928641425289_247224dd6eee8991904476a7116d13e1.jpg",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/XuanCuong-by-type-test",
+    "K:\\Software\\2.AI-Tranining\\1.Images\\1.Input\\XuanCuong-by-type-test\\Bao Lam Vao 3",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/XuanCuong-by-type-test/Bao Lam Vao 3/o_to_bsx_cut"
+  ],
+  "yolo.subfolder": true,
+  "yolo.review_states": {},
+  "split.out": "K:/Software/2.AI-Tranining/1.Images/A",
+  "h.split.out": [
+    "K:/Software/2.AI-Tranining/1.Images/A"
+  ],
+  "cls.split": 80,
+  "cls.root": "K:/Software/2.AI-Tranining/1.Images/2.Output-crop2",
+  "h.cls.root": [
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-crop2"
+  ],
+  "cls.out": "K:/Software/2.AI-Tranining/1.Images/2.Output-crop2result",
+  "h.cls.out": [
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-crop2result"
+  ],
+  "cls.device": "0",
+  "app.enabled_tabs": {
+    "✂ Split": true,
+    "✏ Rename": true,
+    "🖼 Crop": true,
+    "⚙ LabelNorm": true,
+    "🖊 BBox Editor": true,
+    "📷 iParking Image": true,
+    "✔ Checker": false,
+    "📊 Stats": false,
+    "🔎 Plate Search": false,
+    "🤖 YOLO Detect": true,
+    "🚀 Train": true,
+    "🧠 Classifier": true,
+    "🔬 LPR Tester": true,
+    "🅿 Slot Detect": false
+  }
 }

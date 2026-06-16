@@ -584,9 +584,10 @@ class PlateSearchTab(Frame):
             img = Image.open(self._current_img_path).convert("RGB")
         except Exception:
             return
-        from ...core.ui_helpers import _zoom_image_window
+        from ...core.ui_helpers import _zoom_image_window, _load_label_bboxes
         fname = os.path.basename(self._current_img_path)
-        _zoom_image_window(self.root, img, fname)
+        bboxes = _load_label_bboxes(self._current_img_path)
+        _zoom_image_window(self.root, img, fname, bboxes=bboxes)
 
     def _draw_text(self, msg: str):
         self._photo_ref = None

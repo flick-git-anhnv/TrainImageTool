@@ -89,9 +89,9 @@ class GetParkingImageApp(_AppBase):
                 return
 
     def _clear_log(self, tab):
-        for attr in ("_log", "log"):
+        for attr in ("log_txt", "log"):
             w = getattr(tab, attr, None)
-            if w:
+            if w and not callable(w):
                 try:
                     w.configure(state=NORMAL)
                     w.delete("1.0", END)

@@ -354,6 +354,23 @@ class ConsolidateWindow(Toplevel):
             total  = 0
             errors = 0
             counts: dict = {}
+            gt_cache: dict = {}  # {source_dir: {filename: plate}}
+
+            def _load_gt(src_dir: Path) -> dict:
+                if src_dir in gt_cache:
+                    return gt_cache[src_dir]
+                mapping = {}
+                gt_file = src_dir / "gt.txt"
+                if gt_file.exists():
+                    try:
+                        for line in gt_file.read_text(encoding="utf-8").splitlines():
+                            parts = line.split("\t", 1)
+                            if len(parts) == 2:
+                                mapping[parts[0].strip()] = parts[1].strip()
+                    except Exception:
+                        pass
+                gt_cache[src_dir] = mapping
+                return mapping
 
             for lane in sorted(data_snap):
                 lane_total = 0
@@ -369,6 +386,10 @@ class ConsolidateWindow(Toplevel):
                                 idx += 1
                                 dst  = d / f"{img_path.stem}_{idx:03d}.jpg"
                             shutil.copy2(img_path, dst)
+                            plate = _load_gt(img_path.parent).get(img_path.name)
+                            if plate:
+                                with open(d / "gt.txt", "a", encoding="utf-8") as _f:
+                                    _f.write(f"{dst.name}\t{plate}\n")
                             counts[vtype] = counts.get(vtype, 0) + 1
                             total += 1
                             lane_total += 1

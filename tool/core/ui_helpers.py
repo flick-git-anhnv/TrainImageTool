@@ -154,8 +154,48 @@ def _folder_row(parent, label_text, var, row, bg=BG, history_key=None):
     parent.columnconfigure(1, weight=1)
 
 
-def _zoom_image_window(root, pil_img, title="Phóng to ảnh"):
-    """Mở Toplevel hiển thị ảnh phóng to. Cuộn chuột để zoom thêm, Escape/Ctrl+W để đóng."""
+_ZOOM_PALETTE = [
+    "#F05922", "#4caf50", "#2196f3", "#9c27b0", "#ff9800",
+    "#00bcd4", "#e91e63", "#8bc34a", "#ff5722", "#607d8b",
+    "#ffeb3b", "#3f51b5", "#009688", "#795548", "#f44336",
+]
+
+
+def _load_label_bboxes(img_path, lbl_path=None):
+    """Đọc file YOLO .txt bên cạnh ảnh, trả về list [[cid,x1,y1,x2,y2]] pixel coords.
+    Trả về None nếu không có file label hoặc lỗi."""
+    try:
+        from PIL import Image as _PILImg
+        from pathlib import Path
+        img_p = Path(img_path)
+        lbl_p = Path(lbl_path) if lbl_path else img_p.parent / (img_p.stem + ".txt")
+        if not lbl_p.exists() or lbl_p.stat().st_size == 0:
+            return None
+        with _PILImg.open(img_p) as _im:
+            iw, ih = _im.size
+        bboxes = []
+        with open(lbl_p, encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) < 5:
+                    continue
+                cid = int(parts[0])
+                xc, yc, w, h = map(float, parts[1:5])
+                bboxes.append([cid,
+                                (xc - w / 2) * iw, (yc - h / 2) * ih,
+                                (xc + w / 2) * iw, (yc + h / 2) * ih])
+        return bboxes or None
+    except Exception:
+        return None
+
+
+def _zoom_image_window(root, pil_img, title="Phóng to ảnh",
+                       bboxes=None, label_names=None):
+    """Mở Toplevel hiển thị ảnh phóng to. Cuộn chuột để zoom thêm, Escape/Ctrl+W để đóng.
+
+    bboxes: list [[cid, x1, y1, x2, y2]] tọa độ pixel gốc — được overlay lên ảnh.
+    label_names: list[str] tên class theo index.
+    """
     try:
         from PIL import Image, ImageTk
     except ImportError:
@@ -195,6 +235,24 @@ def _zoom_image_window(root, pil_img, title="Phóng to ảnh"):
         cv._tk_img = tk_img
         cv.delete("all")
         cv.create_image(0, 0, anchor=NW, image=tk_img)
+        if bboxes:
+            sc = _s[0]
+            for bbox in bboxes:
+                cid = int(bbox[0])
+                cx1 = int(bbox[1] * sc)
+                cy1 = int(bbox[2] * sc)
+                cx2 = int(bbox[3] * sc)
+                cy2 = int(bbox[4] * sc)
+                color = _ZOOM_PALETTE[cid % len(_ZOOM_PALETTE)]
+                cv.create_rectangle(cx1, cy1, cx2, cy2, outline=color, width=2)
+                name = (label_names[cid] if (label_names and cid < len(label_names))
+                        else str(cid))
+                lbl_txt = f" {cid}:{name} "
+                lbl_w = max(len(lbl_txt) * 7, 30)
+                cv.create_rectangle(cx1, max(0, cy1 - 17), cx1 + lbl_w, cy1,
+                                    fill=color, outline="")
+                cv.create_text(cx1 + 3, max(8, cy1 - 8), text=lbl_txt, fill="white",
+                               font=("Segoe UI", 8, "bold"), anchor=W)
         cv.configure(scrollregion=(0, 0, nw, nh))
 
     def _on_wheel(e):

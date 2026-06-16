@@ -82,11 +82,28 @@ def _p6_get_nested(d: dict, path: str):
 
 
 def _p6_bad_reason(rec: dict) -> Optional[Tuple[str, str]]:
-    """Phát hiện sự kiện bất thường đơn giản — None nếu bình thường."""
-    plate = re.sub(r"[^0-9A-Za-z]", "",
-                   str(rec.get("plateNumber") or rec.get("PlateNumber") or "")).upper()
-    if not plate:
+    """Return (reason, plate_label) if event has bad plate data, else None.
+
+    reason: 'none' | 'in_out_mismatch' | 'register_mismatch'
+    """
+    plate     = re.sub(r"[^0-9A-Za-z]", "",
+                       str(rec.get("plateNumber") or rec.get("PlateNumber") or "")).upper()
+    plate_reg = re.sub(r"[^0-9A-Za-z]", "",
+                       str(rec.get("registeredPlate") or rec.get("RegisteredPlate") or
+                           rec.get("cardPlate")       or rec.get("CardPlate")       or "")).upper()
+    plate_in  = re.sub(r"[^0-9A-Za-z]", "",
+                       str(rec.get("plateIn")  or rec.get("PlateIn")  or
+                           rec.get("plateNumberIn") or "")).upper()
+    plate_out = re.sub(r"[^0-9A-Za-z]", "",
+                       str(rec.get("plateOut") or rec.get("PlateOut") or
+                           rec.get("plateNumberOut") or "")).upper()
+    if not plate and not plate_in and not plate_out:
         return ("none", "")
+    if plate_in and plate_out and plate_in != plate_out:
+        return ("in_out_mismatch", f"{plate_in}_{plate_out}")
+    effective = plate or plate_in or plate_out
+    if plate_reg and effective and effective != plate_reg:
+        return ("register_mismatch", f"{effective}_{plate_reg}")
     return None
 
 
@@ -492,6 +509,7 @@ class Parkingv6Worker:
         bad_result = _p6_bad_reason(rec) if self.cfg.get("collect_bad") else None
         bad_reason = bad_result[0] if bad_result else None
         bad_label  = bad_result[1] if bad_result else ""
+        gt_plate   = plate if plate else None
 
         self._log(
             f"  [{event_id}] {plate or '?':12s} | {lane} | "
@@ -508,18 +526,18 @@ class Parkingv6Worker:
             self._log(f"    [{idx+1}/{len(file_keys)}] {str(key)[:50]} → {img_type}")
             direction = "in" if "in" in source else "out"
             self._save_image(api, str(key), img_type, lane, dt, plate, out,
-                             bad_reason, bad_label, event_id, direction)
+                             bad_reason, bad_label, event_id, direction, gt_plate=gt_plate)
 
     # ── save one image ────────────────────────────────────────────────────────
 
     def _save_image(self, api: Parkingv6ApiClient, key: str, img_type: str,
                     lane: str, dt: datetime, plate: str, out: Path,
                     bad_reason: Optional[str] = None, bad_label: str = "",
-                    event_id: str = "", direction: str = "in"):
+                    event_id: str = "", direction: str = "in", gt_plate: Optional[str] = None):
         self.stats["found"] += 1
 
         if bad_reason:
-            if img_type == "toan_canh":
+            if img_type.startswith("toan_canh_"):
                 self.stats["skipped"] += 1
                 return
             img = api.fetch_image(key)
@@ -604,10 +622,9 @@ class Parkingv6Worker:
             hour_key = (lane, dt.strftime("%Y-%m-%d %H"))
             self._lane_hourly[hour_key] = self._lane_hourly.get(hour_key, 0) + 1
             self._log(f"      ✓ {lane}/{img_type}/{fpath.name}")
-            # Tạo file GT cho ảnh biển số cắt: <tên_file>\t<biển_số>
-            if img_type.endswith("_bsx_cut") and plate:
-                gt_path = fpath.with_suffix(".txt")
-                gt_path.write_text(f"{fpath.name}\t{plate}\n", encoding="utf-8")
+            if gt_plate:
+                with open(save_dir / "gt.txt", "a", encoding="utf-8") as _f:
+                    _f.write(f"{fpath.name}\t{gt_plate}\n")
         else:
             self.stats["error"] += 1
             self._log(f"      ✗ Lỗi encode: {key[:60]}")
