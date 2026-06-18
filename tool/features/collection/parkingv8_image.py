@@ -26,6 +26,27 @@ _FULL_SUFFIXES  = {"fo", "fi"}
 _PLATE_SUFFIXES = {"po", "pi"}
 
 
+def _p8_img_type_to_path_parts(img_type: str):
+    """Chuyển img_type → (vehicle_folder, sub_folder) cho cấu trúc mới."""
+    if img_type.startswith("toan_canh_"):
+        return img_type[len("toan_canh_"):], "anh_toan_canh"
+    if img_type == "toan_canh":
+        return "toan_canh", "anh_toan_canh"
+    if img_type.endswith("_bsx_cut"):
+        return img_type[:-len("_bsx_cut")], "anh_bsx"
+    return img_type, "anh_xe"
+
+
+def _p8_hour_to_buoi(hour: int) -> str:
+    if hour < 12:
+        return "sang"
+    if hour < 14:
+        return "trua"
+    if hour < 18:
+        return "chieu"
+    return "toi"
+
+
 def _p8_suffix_to_imgtype(suffix: str, vtype: str) -> str:
     """Ánh xạ suffix ảnh → tên thư mục lưu.
 
@@ -357,12 +378,13 @@ class Parkingv8ApiClient:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _P8SharedLaneState:
-    __slots__ = ("_lock", "lane_total", "lane_warned", "hist_lock")
+    __slots__ = ("_lock", "lane_total", "lane_warned", "known_lanes", "hist_lock")
 
     def __init__(self):
         self._lock        = threading.Lock()
         self.lane_total:  dict = {}
         self.lane_warned: set  = set()
+        self.known_lanes: set  = set()
         self.hist_lock    = threading.Lock()
 
 
@@ -395,6 +417,7 @@ class Parkingv8Worker:
         }
         self._lane_cat:    dict = {}   # {(lane, vtype, "YYYY-MM-DD"): count} ← daily
         self._lane_hourly: dict = {}   # {(lane, "YYYY-MM-DD HH"): count}
+        self._lane_buoi:   dict = {}   # {(lane, "YYYY-MM-DD", buoi): count}
         self._done_days:   set  = set()
         self._vtype_cfg:   dict = self._parse_vtype_cfg()
 
@@ -657,28 +680,45 @@ class Parkingv8Worker:
             f"{dt.strftime('%Y-%m-%d %H:%M')} | vt={vtype} | {len(images)} ảnh"
             + (f" | BAD:{bad_reason}[{bad_label}]" if bad_reason else ""))
 
+        max_lane = self.cfg.get("max_per_lane", 0)
+        if max_lane > 0:
+            with self._shared._lock:
+                self._shared.known_lanes.add(lane)
+
         direction = "out" if endpoint == "exits" else "in"
+        event_saved = False
         for img_url, img_suffix in images:
             if self._stop.is_set():
                 return
-            self._save_image(api, img_url, img_suffix, lane, vtype, dt, plate, out,
-                             bad_reason, bad_label, event_id, direction, gt_plate=gt_plate)
+            if self._save_image(api, img_url, img_suffix, lane, vtype, dt, plate, out,
+                                bad_reason, bad_label, event_id, direction, gt_plate=gt_plate):
+                event_saved = True
+        if event_saved:
+            self.stats["saved"] += 1
+
+        # Dừng sớm khi tất cả các làn đã đủ SK
+        if max_lane > 0:
+            with self._shared._lock:
+                if (self._shared.known_lanes
+                        and self._shared.lane_warned.issuperset(self._shared.known_lanes)):
+                    self._log("  ✅ Tất cả các làn đã đủ SK — dừng sớm")
+                    self._stop.set()
 
     def _save_image(self, api: Parkingv8ApiClient, url: str, suffix: str,
                     lane: str, vtype: str, dt: datetime, plate: str, out: Path,
                     bad_reason: Optional[str] = None, bad_label: str = "",
-                    event_id: str = "", direction: str = "in", gt_plate: Optional[str] = None):
+                    event_id: str = "", direction: str = "in", gt_plate: Optional[str] = None) -> bool:
         self.stats["found"] += 1
 
         if bad_reason:
             # chỉ lưu ảnh xe (bỏ ảnh toàn cảnh: fo=full-out, fi=full-in)
             if suffix in _FULL_SUFFIXES or suffix.lower() == "full":
                 self.stats["skipped"] += 1
-                return
+                return False
             img = api.fetch_image(url)
             if img is None:
                 self.stats["error"] += 1
-                return
+                return False
             eid = event_id or "evt"
             save_dir = out / "bad" / lane / bad_reason / dt.strftime("%Y-%m-%d") / eid / direction
             save_dir.mkdir(parents=True, exist_ok=True)
@@ -699,7 +739,23 @@ class Parkingv8Worker:
                 self._log(f"      ✗[{bad_reason}] {fpath.name}")
             else:
                 self.stats["error"] += 1
-            return
+            return False
+
+        # Xác định loại ảnh trước để áp dụng filter trước khi tải
+        img_type = _p8_suffix_to_imgtype(suffix, vtype)
+
+        # GT filter — chỉ lưu ảnh khi có biển số GT
+        if self.cfg.get("only_gt") and gt_plate is None:
+            self.stats["skipped"] += 1
+            return False
+
+        # Type filter — chỉ lưu loại ảnh được chọn
+        _allowed = self.cfg.get("allowed_vtypes")
+        if _allowed and img_type not in _allowed:
+            self.stats["skipped"] += 1
+            return False
+
+        buoi = _p8_hour_to_buoi(dt.hour)   # tính sớm để dùng cho limit check
 
         # giới hạn tổng ảnh/làn (dùng shared state để đồng bộ đa luồng)
         max_lane = self.cfg.get("max_per_lane", 0)
@@ -710,7 +766,7 @@ class Parkingv8Worker:
                         self._log(f"      ⏭ Làn [{lane}] đủ {max_lane} ảnh — bỏ qua")
                         self._shared.lane_warned.add(lane)
                     self.stats["skipped"] += 1
-                    return
+                    return False
 
         # giới hạn ảnh/loại/làn/ngày → mỗi ngày đều có đủ mẫu
         max_cat = self.cfg.get("max_per_cat", 0)
@@ -718,27 +774,24 @@ class Parkingv8Worker:
             cat_key = (lane, vtype, dt.strftime("%Y-%m-%d"))
             if self._lane_cat.get(cat_key, 0) >= max_cat:
                 self.stats["skipped"] += 1
-                return
+                return False
 
-        # giới hạn ảnh/giờ/làn
-        max_hour = self.cfg.get("max_per_hour", 0)
-        if max_hour > 0:
-            hour_key = (lane, dt.strftime("%Y-%m-%d %H"))
-            if self._lane_hourly.get(hour_key, 0) >= max_hour:
+        # giới hạn ảnh/buổi/làn/ngày
+        max_buoi = self.cfg.get("max_per_buoi", 0)
+        if max_buoi > 0:
+            buoi_key = (lane, dt.strftime("%Y-%m-%d"), buoi)
+            if self._lane_buoi.get(buoi_key, 0) >= max_buoi:
                 self.stats["skipped"] += 1
-                return
+                return False
 
         img = api.fetch_image(url)
         if img is None:
             self.stats["error"] += 1
             self._log(f"      ✗ Lỗi tải: {url[:80]}")
-            return
+            return False
 
-        # Xác định thư mục theo loại ảnh (overview/vehicle/plate)
-        img_type = _p8_suffix_to_imgtype(suffix, vtype)
-
-        # cấu trúc: <out>/<lane>/<img_type>/<YYYY-MM-DD>/<HH>/HHmmss_BSX_suffix.jpg
-        save_dir = out / lane / img_type / dt.strftime("%Y-%m-%d") / dt.strftime("%H")
+        vtype_folder, sub_folder = _p8_img_type_to_path_parts(img_type)
+        save_dir = out / vtype_folder / sub_folder / dt.strftime("%Y-%m-%d") / buoi / lane
         save_dir.mkdir(parents=True, exist_ok=True)
         base = f"{dt.strftime('%H%M%S')}_{plate}_{suffix}" if plate else \
                f"{dt.strftime('%H%M%S')}_{suffix}"
@@ -753,17 +806,18 @@ class Parkingv8Worker:
         ok_enc, buf = _cv2_mod.imencode(".jpg", img)
         if ok_enc:
             fpath.write_bytes(buf.tobytes())
-            self.stats["saved"] += 1
             with self._shared._lock:
                 self._shared.lane_total[lane] = self._shared.lane_total.get(lane, 0) + 1
             cat_key  = (lane, vtype, dt.strftime("%Y-%m-%d"))
             self._lane_cat[cat_key] = self._lane_cat.get(cat_key, 0) + 1
-            hour_key = (lane, dt.strftime("%Y-%m-%d %H"))
-            self._lane_hourly[hour_key] = self._lane_hourly.get(hour_key, 0) + 1
-            self._log(f"      ✓ {lane}/{img_type}/{fpath.name}")
-            if gt_plate:
+            buoi_key = (lane, dt.strftime("%Y-%m-%d"), buoi)
+            self._lane_buoi[buoi_key] = self._lane_buoi.get(buoi_key, 0) + 1
+            self._log(f"      ✓ {vtype_folder}/{sub_folder}/{buoi}/{fpath.name}")
+            if gt_plate and sub_folder in ("anh_xe", "anh_bsx"):
                 with open(save_dir / "gt.txt", "a", encoding="utf-8") as _f:
                     _f.write(f"{fpath.name}\t{gt_plate}\n")
+            return True
         else:
             self.stats["error"] += 1
             self._log(f"      ✗ Lỗi encode: {url[:80]}")
+            return False

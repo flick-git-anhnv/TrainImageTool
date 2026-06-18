@@ -97,6 +97,8 @@ class BBoxEditorTab(Frame):
         self._undo_stack = []
         self._redo_stack = []
 
+        self._copy_count_var = IntVar(value=1)
+
         # Grid panel (paginated)
         self._thumb_n_var   = IntVar(value=3)
         self._thumb_w       = 160
@@ -346,10 +348,7 @@ class BBoxEditorTab(Frame):
         self._cls_combo = ttk.Combobox(tb, width=18, state="readonly", font=F_MAIN)
         self._cls_combo.pack(side=LEFT, padx=(4, 6))
 
-        Button(tb, text="🏷 Đặt nhãn", command=self._relabel_selected,
-               bg=ACCENT2, fg="white", activebackground=ACCENT,
-               activeforeground="white", font=F_MAIN,
-               relief="flat", padx=8, cursor="hand2").pack(side=LEFT, padx=2)
+        self._cls_combo.bind("<<ComboboxSelected>>", self._on_cls_combo_change)
         Button(tb, text="🗑 Xóa bbox (Del)", command=self._delete_selected,
                bg="#c62828", fg="white", activebackground="#8b0000",
                activeforeground="white", font=F_MAIN,
@@ -362,10 +361,15 @@ class BBoxEditorTab(Frame):
                activeforeground="white", font=F_BOLD,
                relief="flat", padx=10, cursor="hand2").pack(side=LEFT, padx=2)
 
-        Button(tb, text="📋 Sao chép sang ảnh tiếp", command=self._copy_to_next,
+        Label(tb, text="📋 Copy sang", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(4, 2))
+        Spinbox(tb, from_=1, to=999, textvariable=self._copy_count_var,
+                width=4, bg="#16162a", fg=TEXT, insertbackground=TEXT,
+                buttonbackground=ACCENT2, relief="flat", font=F_MAIN).pack(side=LEFT)
+        Label(tb, text="ảnh tiếp", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(2, 0))
+        Button(tb, text="▶", command=self._copy_to_next,
                bg=ACCENT2, fg="white", activebackground=ACCENT,
-               activeforeground="white", font=F_MAIN,
-               relief="flat", padx=8, cursor="hand2").pack(side=LEFT, padx=2)
+               activeforeground="white", font=F_BOLD,
+               relief="flat", padx=6, cursor="hand2").pack(side=LEFT, padx=(4, 2))
 
         self._info_lbl = Label(tb, text="", bg=CARD, fg=DIM, font=F_MAIN)
         self._info_lbl.pack(side=RIGHT, padx=8)
@@ -547,50 +551,59 @@ class BBoxEditorTab(Frame):
 
     def _copy_to_next(self):
         if not self._filtered_files or self._pil_img is None: return
+        if not self._bboxes:
+            self._status.config(text="Không có bbox nào để sao chép")
+            return
         cur_fi = next((i for i, (ri, _) in enumerate(self._filtered_files)
                        if ri == self.current_idx), -1)
         if cur_fi < 0 or cur_fi >= len(self._filtered_files) - 1:
             self._status.config(text="Không có ảnh tiếp theo để sao chép")
             return
-        if not self._bboxes:
-            self._status.config(text="Không có bbox nào để sao chép")
-            return
-
-        next_fi  = cur_fi + 1
-        next_ri  = self._filtered_files[next_fi][0]
-        next_fp  = self.image_files[next_ri]
-        lbl_dir  = self.lbl_dir_var.get().strip()
-        next_lbl = (Path(lbl_dir) / (next_fp.stem + ".txt")
-                    if lbl_dir else next_fp.parent / (next_fp.stem + ".txt"))
 
         try:
-            next_img = self._PIL_Image.open(next_fp).convert("RGB")
-            niw, nih = next_img.size
-            ciw, cih = self._pil_img.size
-            import copy
-            bboxes_copy = copy.deepcopy(self._bboxes)
-            # Scale coords proportionally if image sizes differ
-            lines = []
-            for cid, x1, y1, x2, y2 in bboxes_copy:
-                xc = max(0.0, min(1.0, ((x1 + x2) / 2) / ciw))
-                yc = max(0.0, min(1.0, ((y1 + y2) / 2) / cih))
-                bw = max(1e-4, min(1.0, (x2 - x1) / ciw))
-                bh = max(1e-4, min(1.0, (y2 - y1) / cih))
-                lines.append(f"{int(cid)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
-            with open(next_lbl, "w", encoding="utf-8") as f:
-                f.write("\n".join(lines))
-        except Exception as e:
-            messagebox.showerror("Lỗi sao chép", str(e))
-            return
+            count = max(1, int(self._copy_count_var.get()))
+        except (ValueError, TypeError):
+            count = 1
 
-        n = len(self._bboxes)
+        lbl_dir = self.lbl_dir_var.get().strip()
+        ciw, cih = self._pil_img.size
+        import copy as _copy
+        nb = len(self._bboxes)
+        copied = 0
+        last_fi = cur_fi
+
+        for step in range(1, count + 1):
+            target_fi = cur_fi + step
+            if target_fi >= len(self._filtered_files):
+                break
+            target_ri = self._filtered_files[target_fi][0]
+            target_fp = self.image_files[target_ri]
+            target_lbl = (Path(lbl_dir) / (target_fp.stem + ".txt")
+                          if lbl_dir else target_fp.parent / (target_fp.stem + ".txt"))
+            try:
+                lines = []
+                for cid, x1, y1, x2, y2 in _copy.deepcopy(self._bboxes):
+                    xc = max(0.0, min(1.0, ((x1 + x2) / 2) / ciw))
+                    yc = max(0.0, min(1.0, ((y1 + y2) / 2) / cih))
+                    bw = max(1e-4, min(1.0, (x2 - x1) / ciw))
+                    bh = max(1e-4, min(1.0, (y2 - y1) / cih))
+                    lines.append(f"{int(cid)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
+                with open(target_lbl, "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines))
+                copied += 1
+                last_fi = target_fi
+            except Exception as e:
+                messagebox.showerror("Lỗi sao chép", str(e))
+                break
+
         self._autosave()
-        self._img_lb.selection_clear(0, END)
-        self._img_lb.selection_set(next_fi)
-        self._img_lb.see(next_fi)
-        self._load_image(next_ri)
-        self._status.config(
-            text=f"Đã sao chép {n} bbox sang  {next_fp.name}")
+        if copied:
+            self._img_lb.selection_clear(0, END)
+            self._img_lb.selection_set(last_fi)
+            self._img_lb.see(last_fi)
+            self._load_image(self._filtered_files[last_fi][0])
+            self._status.config(
+                text=f"Đã sao chép {nb} bbox sang {copied} ảnh tiếp theo")
 
     # ── Parse label list ──────────────────────────────────────────────────
 
@@ -682,6 +695,22 @@ class BBoxEditorTab(Frame):
         idx = sel[0]
         if idx < len(self._cls_combo["values"]):
             self._cls_combo.current(idx)
+        if self._selected_set:
+            self._relabel_selected()
+
+    def _on_cls_combo_change(self, _event):
+        """Combo thay đổi → sync cls_lb và tự relabel nếu đang chọn bbox."""
+        val = self._cls_combo.get()
+        if not val: return
+        try:
+            idx = int(val.split(":")[0])
+            self._cls_lb.selection_clear(0, END)
+            self._cls_lb.selection_set(idx)
+            self._cls_lb.see(idx)
+        except (ValueError, IndexError):
+            pass
+        if self._selected_set:
+            self._relabel_selected()
 
     def _load_image(self, idx):
         self.current_idx = idx

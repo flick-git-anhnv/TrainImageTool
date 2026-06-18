@@ -39,6 +39,27 @@ def _p6_vtype_to_category(vt_int) -> str:
         return "o_to"
 
 
+def _p6_img_type_to_path_parts(img_type: str):
+    """Chuyển img_type → (vehicle_folder, sub_folder) cho cấu trúc mới."""
+    if img_type.startswith("toan_canh_"):
+        return img_type[len("toan_canh_"):], "anh_toan_canh"
+    if img_type == "toan_canh":
+        return "toan_canh", "anh_toan_canh"
+    if img_type.endswith("_bsx_cut"):
+        return img_type[:-len("_bsx_cut")], "anh_bsx"
+    return img_type, "anh_xe"
+
+
+def _p6_hour_to_buoi(hour: int) -> str:
+    if hour < 12:
+        return "sang"
+    if hour < 14:
+        return "trua"
+    if hour < 18:
+        return "chieu"
+    return "toi"
+
+
 def _p6_img_type_from_key(key: str, idx: int, vehicle_category: str) -> str:
     """Xác định loại ảnh từ tên key MinIO và vị trí trong fileKeys.
 
@@ -110,12 +131,13 @@ def _p6_bad_reason(rec: dict) -> Optional[Tuple[str, str]]:
 # ── Shared state thread-safe cho parallel mode ────────────────────────────────
 
 class _P6SharedLaneState:
-    __slots__ = ("_lock", "lane_total", "lane_warned", "hist_lock")
+    __slots__ = ("_lock", "lane_total", "lane_warned", "known_lanes", "hist_lock")
 
     def __init__(self):
         self._lock        = threading.Lock()
         self.lane_total:  dict = {}
         self.lane_warned: set  = set()
+        self.known_lanes: set  = set()
         self.hist_lock    = threading.Lock()
 
 
@@ -236,6 +258,7 @@ class Parkingv6Worker:
         }
         self._lane_cat:     dict = {}
         self._lane_hourly:  dict = {}
+        self._lane_buoi:    dict = {}  # {(lane, "YYYY-MM-DD", buoi): count}
         self._done_days:    set  = set()
         self._vgroup_cache: dict = {}   # {identityGroupId/name (lowercase) → vehicleType int}
 
@@ -517,6 +540,12 @@ class Parkingv6Worker:
             f"{len(file_keys)} ảnh"
             + (f" | BAD:{bad_reason}" if bad_reason else ""))
 
+        max_lane = self.cfg.get("max_per_lane", 0)
+        if max_lane > 0:
+            with self._shared._lock:
+                self._shared.known_lanes.add(lane)
+
+        event_saved = False
         for idx, key in enumerate(file_keys):
             if self._stop.is_set():
                 return
@@ -525,25 +554,36 @@ class Parkingv6Worker:
             img_type = _p6_img_type_from_key(key, idx, category)
             self._log(f"    [{idx+1}/{len(file_keys)}] {str(key)[:50]} → {img_type}")
             direction = "in" if "in" in source else "out"
-            self._save_image(api, str(key), img_type, lane, dt, plate, out,
-                             bad_reason, bad_label, event_id, direction, gt_plate=gt_plate)
+            if self._save_image(api, str(key), img_type, lane, dt, plate, out,
+                                bad_reason, bad_label, event_id, direction, gt_plate=gt_plate):
+                event_saved = True
+        if event_saved:
+            self.stats["saved"] += 1
+
+        # Dừng sớm khi tất cả các làn đã đủ SK
+        if max_lane > 0:
+            with self._shared._lock:
+                if (self._shared.known_lanes
+                        and self._shared.lane_warned.issuperset(self._shared.known_lanes)):
+                    self._log("  ✅ Tất cả các làn đã đủ SK — dừng sớm")
+                    self._stop.set()
 
     # ── save one image ────────────────────────────────────────────────────────
 
     def _save_image(self, api: Parkingv6ApiClient, key: str, img_type: str,
                     lane: str, dt: datetime, plate: str, out: Path,
                     bad_reason: Optional[str] = None, bad_label: str = "",
-                    event_id: str = "", direction: str = "in", gt_plate: Optional[str] = None):
+                    event_id: str = "", direction: str = "in", gt_plate: Optional[str] = None) -> bool:
         self.stats["found"] += 1
 
         if bad_reason:
             if img_type.startswith("toan_canh_"):
                 self.stats["skipped"] += 1
-                return
+                return False
             img = api.fetch_image(key)
             if img is None:
                 self.stats["error"] += 1
-                return
+                return False
             eid = event_id or "evt"
             save_dir = out / "bad" / lane / bad_reason / dt.strftime("%Y-%m-%d") / eid / direction
             save_dir.mkdir(parents=True, exist_ok=True)
@@ -563,7 +603,20 @@ class Parkingv6Worker:
                 self._log(f"      ✗[{bad_reason}] {fpath.name}")
             else:
                 self.stats["error"] += 1
-            return
+            return False
+
+        # GT filter — chỉ lưu ảnh khi có biển số GT
+        if self.cfg.get("only_gt") and gt_plate is None:
+            self.stats["skipped"] += 1
+            return False
+
+        # Type filter — chỉ lưu loại ảnh được chọn
+        _allowed = self.cfg.get("allowed_vtypes")
+        if _allowed and img_type not in _allowed:
+            self.stats["skipped"] += 1
+            return False
+
+        buoi = _p6_hour_to_buoi(dt.hour)   # tính sớm để dùng cho limit check
 
         # Giới hạn tổng ảnh/làn
         max_lane = self.cfg.get("max_per_lane", 0)
@@ -574,7 +627,7 @@ class Parkingv6Worker:
                         self._log(f"      ⏭ Làn [{lane}] đủ {max_lane} ảnh — bỏ qua")
                         self._shared.lane_warned.add(lane)
                     self.stats["skipped"] += 1
-                    return
+                    return False
 
         # Giới hạn ảnh/loại/làn/ngày
         max_cat = self.cfg.get("max_per_cat", 0)
@@ -582,24 +635,24 @@ class Parkingv6Worker:
             cat_key = (lane, img_type, dt.strftime("%Y-%m-%d"))
             if self._lane_cat.get(cat_key, 0) >= max_cat:
                 self.stats["skipped"] += 1
-                return
+                return False
 
-        # Giới hạn ảnh/giờ/làn
-        max_hour = self.cfg.get("max_per_hour", 0)
-        if max_hour > 0:
-            hour_key = (lane, dt.strftime("%Y-%m-%d %H"))
-            if self._lane_hourly.get(hour_key, 0) >= max_hour:
+        # Giới hạn ảnh/buổi/làn/ngày
+        max_buoi = self.cfg.get("max_per_buoi", 0)
+        if max_buoi > 0:
+            buoi_key = (lane, dt.strftime("%Y-%m-%d"), buoi)
+            if self._lane_buoi.get(buoi_key, 0) >= max_buoi:
                 self.stats["skipped"] += 1
-                return
+                return False
 
         img = api.fetch_image(key)
         if img is None:
             self.stats["error"] += 1
             self._log(f"      ✗ Lỗi tải: {key[:60]}")
-            return
+            return False
 
-        # cấu trúc: <out>/<lane>/<img_type>/<YYYY-MM-DD>/<HH>/HHmmss_BSX.jpg
-        save_dir = out / lane / img_type / dt.strftime("%Y-%m-%d") / dt.strftime("%H")
+        vtype_folder, sub_folder = _p6_img_type_to_path_parts(img_type)
+        save_dir = out / vtype_folder / sub_folder / dt.strftime("%Y-%m-%d") / buoi / lane
         save_dir.mkdir(parents=True, exist_ok=True)
         ts_str    = dt.strftime("%H%M%S")
         base_name = f"{ts_str}_{plate}" if plate else ts_str
@@ -613,18 +666,19 @@ class Parkingv6Worker:
         ok_enc, buf = _cv2_mod.imencode(".jpg", img)
         if ok_enc:
             fpath.write_bytes(buf.tobytes())
-            self.stats["saved"] += 1
             with self._shared._lock:
                 self._shared.lane_total[lane] = (
                     self._shared.lane_total.get(lane, 0) + 1)
             cat_key  = (lane, img_type, dt.strftime("%Y-%m-%d"))
             self._lane_cat[cat_key] = self._lane_cat.get(cat_key, 0) + 1
-            hour_key = (lane, dt.strftime("%Y-%m-%d %H"))
-            self._lane_hourly[hour_key] = self._lane_hourly.get(hour_key, 0) + 1
-            self._log(f"      ✓ {lane}/{img_type}/{fpath.name}")
-            if gt_plate:
+            buoi_key = (lane, dt.strftime("%Y-%m-%d"), buoi)
+            self._lane_buoi[buoi_key] = self._lane_buoi.get(buoi_key, 0) + 1
+            self._log(f"      ✓ {vtype_folder}/{sub_folder}/{buoi}/{fpath.name}")
+            if gt_plate and sub_folder in ("anh_xe", "anh_bsx"):
                 with open(save_dir / "gt.txt", "a", encoding="utf-8") as _f:
                     _f.write(f"{fpath.name}\t{gt_plate}\n")
+            return True
         else:
             self.stats["error"] += 1
             self._log(f"      ✗ Lỗi encode: {key[:60]}")
+            return False

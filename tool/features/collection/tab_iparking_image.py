@@ -127,12 +127,18 @@ class IParkingImageTab(Frame):
         inner.bind("<Configure>",
                    lambda _: canvas.configure(scrollregion=canvas.bbox("all")))
 
+        _mw_entered = [False]
+
+        def _mw(ev): canvas.yview_scroll(int(-1 * (ev.delta / 120)), "units")
+
         def _on_enter(_):
-            canvas.bind_all(
-                "<MouseWheel>",
-                lambda ev: canvas.yview_scroll(int(-1 * (ev.delta / 120)), "units"))
+            _mw_entered[0] = True
+            canvas.bind_all("<MouseWheel>", _mw)
+
         def _on_leave(_):
-            canvas.unbind_all("<MouseWheel>")
+            _mw_entered[0] = False
+            canvas.after(20, lambda: canvas.unbind_all("<MouseWheel>") if not _mw_entered[0] else None)
+
         canvas.bind("<Enter>", _on_enter)
         canvas.bind("<Leave>", _on_leave)
 
@@ -226,9 +232,9 @@ class IParkingImageTab(Frame):
             ("Page size:",     "page_size_var",    10,  500,   6,   100),
             ("Max pages:",     "max_pages_var",     1,  99999, 8, 10000),
             ("Nghỉ (s):",      None,                0,  0,     0,     0),
-            ("Max ảnh/làn:",   "max_per_lane_var",  0,  999999,8,  1000),
-            ("Max ảnh/loại:",  "max_per_cat_var",   0,  999999,8,     0),
-            ("Max ảnh/giờ:",   "max_per_hour_var",  0,  99999, 7,     0),
+            ("Max SK/làn:",    "max_per_lane_var",  0,  999999,8,  1000),
+            ("Max SK/loại:",   "max_per_cat_var",   0,  999999,8,     0),
+            ("Max SK/buổi:",   "max_per_buoi_var",  0,  99999, 7,     0),
         ]):
             Label(row1, text=lbl, bg=BG, fg=TEXT, font=F_MAIN).grid(
                 row=0, column=col * 2, padx=(14 if col else 0, 4), sticky=W)
@@ -262,8 +268,103 @@ class IParkingImageTab(Frame):
         Label(row2, text="(chia ngày cho N luồng chạy đồng thời — áp dụng cho cả 3 nguồn)",
               bg=BG, fg=DIM, font=("Segoe UI", 8)).grid(
             row=0, column=2, padx=(4, 0), sticky=W)
-        Label(f, text="Max ảnh/làn: tổng cả lần chạy  ·  Max ảnh/loại: tối đa mỗi ngày/loại/làn  ·  Max ảnh/giờ: trải đều theo giờ  ·  0 = không giới hạn",
+        Label(f, text="Max SK/làn: tổng cả lần chạy  ·  Max SK/loại: tối đa/ngày/loại/làn  ·  Max SK/buổi: trải đều sáng-trưa-chiều-tối  ·  0 = không giới hạn",
               font=("Segoe UI", 7), fg=DIM, bg=BG, anchor=W).pack(fill=X, pady=(4, 0))
+
+        # ── Hướng dẫn thiết lập (collapsible) ────────────────────────────────
+        _guide_row = Frame(f, bg=BG)
+        _guide_row.pack(fill=X, pady=(4, 0))
+        _guide_body = Frame(f, bg=CARD, padx=10, pady=6)
+
+        def _toggle_guide():
+            if _guide_body.winfo_ismapped():
+                _guide_body.pack_forget()
+                _guide_toggle_btn.config(text="▶  Hướng dẫn thiết lập Max SK")
+            else:
+                _guide_body.pack(fill=X, pady=(2, 4))
+                _guide_toggle_btn.config(text="▼  Hướng dẫn thiết lập Max SK")
+
+        _guide_toggle_btn = Button(
+            _guide_row, text="▶  Hướng dẫn thiết lập Max SK",
+            bg=BG, fg=DIM, font=("Segoe UI", 8, "underline"),
+            relief="flat", padx=0, pady=0, cursor="hand2",
+            activebackground=BG, activeforeground=TEXT,
+            command=_toggle_guide)
+        _guide_toggle_btn.pack(anchor=W)
+
+        _GUIDE_LINES = (
+            "Mục tiêu: N ảnh/loại xe  ·  K làn  ·  10 ngày liên tiếp  ·  4 buổi/ngày\n"
+            "\n"
+            "  Max SK/làn   =  N ÷ K                   ví dụ  N=1000, K=3  →   334\n"
+            "  Max SK/loại  =  N ÷ (K × 10)            ví dụ  N=1000, K=3  →    34\n"
+            "  Max SK/buổi  =  N ÷ (K × 10 × 4)       ví dụ  N=1000, K=3  →     9\n"
+            "\n"
+            "  Bảng nhanh (N = 1000):\n"
+            "    K = 2 làn  →  Max SK/làn = 500  ·  Max SK/loại = 50  ·  Max SK/buổi = 13\n"
+            "    K = 3 làn  →  Max SK/làn = 334  ·  Max SK/loại = 34  ·  Max SK/buổi =  9\n"
+            "    K = 4 làn  →  Max SK/làn = 250  ·  Max SK/loại = 25  ·  Max SK/buổi =  7\n"
+            "    K = 5 làn  →  Max SK/làn = 200  ·  Max SK/loại = 20  ·  Max SK/buổi =  5\n"
+            "\n"
+            "  Lưu ý: chỉ tick 1 loại xe mỗi lần chạy — nếu tick nhiều loại, Max SK/làn\n"
+            "         bị chia sẻ giữa các loại và không đảm bảo đủ 1000 ảnh/loại."
+        )
+        Label(_guide_body, text=_GUIDE_LINES, bg=CARD, fg=TEXT,
+              font=("Segoe UI", 8), justify=LEFT, anchor=W).pack(fill=X)
+
+        # GT filter
+        row_gt = Frame(f, bg=BG)
+        row_gt.pack(fill=X, pady=(8, 0))
+        self.only_gt_var = BooleanVar(value=False)
+        _bind_cfg("ip.only_gt", self.only_gt_var)
+        Checkbutton(row_gt,
+                    text="Chỉ lấy ảnh có GT  (biển vào = biển ra  hoặc  có biển số đăng ký)",
+                    variable=self.only_gt_var, bg=BG, fg=TEXT, selectcolor="#251C53",
+                    activebackground=BG, font=F_MAIN, cursor="hand2").pack(side=LEFT)
+
+        # Image type filter
+        self._sep(f, "Loại ảnh lấy")
+        _VTYPE_LABELS = {
+            "toan_canh_o_to":   "Toàn cảnh ô tô",
+            "toan_canh_xe_may": "Toàn cảnh xe máy",
+            "toan_canh_xe_dap": "Toàn cảnh xe đạp",
+            "toan_canh":        "Toàn cảnh",
+            "o_to":             "Ô tô",
+            "xe_may":           "Xe máy",
+            "xe_dap":           "Xe đạp",
+            "xe_tai":           "Xe tải",
+            "o_to_bsx_cut":     "Ô tô biển cắt",
+            "xe_may_bsx_cut":   "Xe máy biển cắt",
+            "xe_dap_bsx_cut":   "Xe đạp biển cắt",
+        }
+        self._vtype_vars: dict = {}
+        for vt in _VTYPE_ORDER:
+            var = BooleanVar(value=True)
+            _bind_cfg(f"ip.vtype.{vt}", var)
+            self._vtype_vars[vt] = var
+        vt_btn_row = Frame(f, bg=BG)
+        vt_btn_row.pack(fill=X, pady=(0, 4))
+        Button(vt_btn_row, text="✔ Chọn tất cả",
+               command=lambda: [v.set(True)  for v in self._vtype_vars.values()],
+               bg=CARD, fg=TEXT, font=("Segoe UI", 8), relief="flat",
+               padx=8, pady=2, cursor="hand2").pack(side=LEFT, padx=(0, 4))
+        Button(vt_btn_row, text="✘ Bỏ tất cả",
+               command=lambda: [v.set(False) for v in self._vtype_vars.values()],
+               bg=CARD, fg=DIM, font=("Segoe UI", 8), relief="flat",
+               padx=8, pady=2, cursor="hand2").pack(side=LEFT)
+        vt_grid = Frame(f, bg=BG)
+        vt_grid.pack(fill=X)
+        for i, vt in enumerate(_VTYPE_ORDER):
+            r, c = divmod(i, 4)
+            Checkbutton(vt_grid,
+                        text=_VTYPE_LABELS.get(vt, vt),
+                        variable=self._vtype_vars[vt],
+                        bg=BG, fg=TEXT, selectcolor="#251C53",
+                        activebackground=BG, font=("Segoe UI", 8),
+                        cursor="hand2").grid(
+                row=r, column=c, sticky=W,
+                padx=(0 if c == 0 else 14, 0), pady=1)
+        Label(f, text="Bỏ check để bỏ qua loại đó  ·  bsx_cut chỉ có Parkingv8/v6",
+              font=("Segoe UI", 7), fg=DIM, bg=BG, anchor=W).pack(fill=X, pady=(2, 0))
 
     # ── Lotte settings ────────────────────────────────────────────────────────
 
@@ -526,6 +627,11 @@ class IParkingImageTab(Frame):
                activebackground="#3a6028", activeforeground="white",
                relief="flat", padx=10, pady=4, cursor="hand2").pack(
             side=LEFT, padx=(0, 4))
+        Button(f, text="🗑 Xóa tiến độ", command=self._clear_progress,
+               bg="#3a1a1a", fg="#e08080", font=F_MAIN,
+               activebackground="#5a2020", activeforeground="white",
+               relief="flat", padx=10, pady=4, cursor="hand2").pack(
+            side=LEFT, padx=(0, 4))
         self.status_lbl = Label(f, text="Sẵn sàng", font=F_MAIN,
                                 fg=ACCENT2, bg=BG)
         self.status_lbl.pack(side=RIGHT)
@@ -597,21 +703,21 @@ class IParkingImageTab(Frame):
                 text="iParking Lotte · phân loại theo từ khóa · không có ảnh cắt biển số")
             self._time_hint_lbl.config(text="UTC  ·  Việt Nam = UTC+7")
             self._struct_lbl.config(
-                text="Cấu trúc thư mục: <out>/<làn>/toan_canh_o_to|toan_canh_xe_may|o_to|xe_may|xe_dap/<YYYY-MM-DD>/<HH>/HHmmss_BSX.jpg")
+                text="Cấu trúc: <out>/<o_to|xe_may|xe_dap>/anh_toan_canh|anh_xe|anh_bsx/<YYYY-MM-DD>/<sang|trua|chieu|toi>/<làn>/HHmmss_BSX.jpg  ·  bad: <out>/bad/<làn>/…")
         elif src == "Parkingv8":
             self._p8_frm.pack(fill=X)
             self._src_desc_lbl.config(
                 text="iParking v8 · vehicleType integer · có ảnh cắt biển số (*_bsx_cut)")
             self._time_hint_lbl.config(text="UTC  ·  Việt Nam = UTC+7")
             self._struct_lbl.config(
-                text="Cấu trúc thư mục: <out>/<làn>/toan_canh_o_to|o_to|o_to_bsx_cut|xe_may|…/<YYYY-MM-DD>/<HH>/HHmmss_BSX_type.jpg")
+                text="Cấu trúc: <out>/<o_to|xe_may|xe_dap>/anh_toan_canh|anh_xe|anh_bsx/<YYYY-MM-DD>/<sang|trua|chieu|toi>/<làn>/HHmmss_BSX_type.jpg  ·  bad: <out>/bad/<làn>/…")
         elif src == "Parkingv6":
             self._p6_frm.pack(fill=X)
             self._src_desc_lbl.config(
                 text="iParking v6 · vehicleType integer · MinIO · Bearer token")
             self._time_hint_lbl.config(text="UTC  ·  Việt Nam = UTC+7  (API nhận UTC)")
             self._struct_lbl.config(
-                text="Cấu trúc thư mục: <out>/<làn>/toan_canh_o_to|o_to|o_to_bsx_cut|xe_may|…/<YYYY-MM-DD>/<HH>/HHmmss_BSX.jpg")
+                text="Cấu trúc: <out>/<o_to|xe_may|xe_dap>/anh_toan_canh|anh_xe|anh_bsx/<YYYY-MM-DD>/<sang|trua|chieu|toi>/<làn>/HHmmss_BSX.jpg  ·  bad: <out>/bad/<làn>/…")
 
     # ── actions ───────────────────────────────────────────────────────────────
 
@@ -735,6 +841,35 @@ class IParkingImageTab(Frame):
             self._migrate_win.lift(); return
         self._migrate_win = _open_migrate_window(self.root, out)
 
+    def _clear_progress(self):
+        out = self.out_var.get().strip()
+        if not out:
+            messagebox.showerror("Lỗi", "Chưa chọn thư mục lưu ảnh."); return
+        out_path = Path(out)
+        history_files = [
+            (".lotte_done.json", "LotteImage"),
+            (".p6_done.json",    "Parkingv6"),
+            (".p8_done.json",    "Parkingv8"),
+        ]
+        found = [(f, label) for f, label in history_files if (out_path / f).exists()]
+        if not found:
+            messagebox.showinfo("Xóa tiến độ", "Không tìm thấy file tiến độ nào trong thư mục."); return
+        names = "\n".join(f"  • {label} ({f})" for f, label in found)
+        if not messagebox.askyesno(
+                "Xóa tiến độ cũ",
+                f"Xóa tiến độ đã lưu của:\n{names}\n\n"
+                "Lần chạy tiếp theo sẽ tải lại tất cả các ngày từ đầu.\nTiếp tục?"):
+            return
+        cleared = []
+        for fname, label in found:
+            try:
+                (out_path / fname).unlink()
+                cleared.append(label)
+            except Exception as e:
+                messagebox.showerror("Lỗi", f"Không xóa được {fname}:\n{e}"); return
+        self._log("🗑 Đã xóa tiến độ: " + ", ".join(cleared))
+        messagebox.showinfo("Xóa tiến độ", "Đã xóa tiến độ: " + ", ".join(cleared))
+
     # ── start dispatch ────────────────────────────────────────────────────────
 
     def _prepare_run(self):
@@ -762,15 +897,18 @@ class IParkingImageTab(Frame):
                 except queue.Empty: break
 
     def _get_common_cfg(self):
+        checked = [vt for vt, var in self._vtype_vars.items() if var.get()]
         return {
-            "output_dir":    self.out_var.get().strip(),
-            "page_size":     self.page_size_var.get(),
-            "max_pages":     self.max_pages_var.get(),
-            "sleep":         self.sleep_var.get(),
-            "max_per_lane":  self.max_per_lane_var.get(),
-            "max_per_cat":   self.max_per_cat_var.get(),
-            "max_per_hour":  self.max_per_hour_var.get(),
-            "collect_bad":   self.collect_bad_var.get(),
+            "output_dir":     self.out_var.get().strip(),
+            "page_size":      self.page_size_var.get(),
+            "max_pages":      self.max_pages_var.get(),
+            "sleep":          self.sleep_var.get(),
+            "max_per_lane":   self.max_per_lane_var.get(),
+            "max_per_cat":    self.max_per_cat_var.get(),
+            "max_per_buoi":   self.max_per_buoi_var.get(),
+            "collect_bad":    self.collect_bad_var.get(),
+            "only_gt":        self.only_gt_var.get(),
+            "allowed_vtypes": checked if len(checked) < len(_VTYPE_ORDER) else [],
         }
 
     def _start(self):
@@ -1102,15 +1240,22 @@ class IParkingImageTab(Frame):
     # ── polling ───────────────────────────────────────────────────────────────
 
     def _poll(self):
-        try:
-            while True:
+        # Gom tối đa 200 message/tick, batch insert 1 lần để tránh freeze
+        batch, done_flag = [], False
+        for _ in range(200):
+            try:
                 msg = self._log_q.get_nowait()
                 if msg == "__DONE__":
-                    self._on_done()
+                    done_flag = True
+                    break
                 else:
-                    self._log(msg)
-        except queue.Empty:
-            pass
+                    batch.append(msg)
+            except queue.Empty:
+                break
+        if batch:
+            self._log_batch(batch)
+        if done_flag:
+            self._on_done()
         _last_s = None
         try:
             while True:
@@ -1199,14 +1344,19 @@ class IParkingImageTab(Frame):
                   f"Lỗi: {s.get('error',0)}"))
 
     def _log(self, msg):
+        self._log_batch([msg])
+
+    def _log_batch(self, msgs: list):
+        """Insert nhiều dòng log trong 1 lần configure — tránh freeze khi queue lớn."""
+        ts = datetime.now().strftime("%H:%M:%S")
         self.log_txt.configure(state=NORMAL)
-        ts   = datetime.now().strftime("%H:%M:%S")
-        line = f"[{ts}] {msg}\n"
-        m = re.match(r'\[T(\d+)\]', msg)
-        if m:
-            self.log_txt.insert(END, line, (f"T{m.group(1)}",))
-        else:
-            self.log_txt.insert(END, line)
+        for msg in msgs:
+            line = f"[{ts}] {msg}\n"
+            m = re.match(r'\[T(\d+)\]', msg)
+            if m:
+                self.log_txt.insert(END, line, (f"T{m.group(1)}",))
+            else:
+                self.log_txt.insert(END, line)
         lines = int(self.log_txt.index("end-1c").split(".")[0])
         if lines > self._LOG_MAX:
             self.log_txt.delete("1.0", f"{lines - self._LOG_MAX}.0")
@@ -1302,7 +1452,7 @@ class IParkingImageTab(Frame):
             loading_lbl.destroy()
         except Exception:
             return  # stats window was closed before scan finished
-        if not data["lt"]:
+        if not data["detail"]:
             Label(self._stats_body,
                   text=f"Không tìm thấy ảnh trong:\n{out}",
                   bg=BG, fg=DIM, font=F_MAIN, justify=CENTER).pack(expand=True)
@@ -1318,34 +1468,65 @@ class IParkingImageTab(Frame):
         is_chart = self._stats_view.get() == "chart"
         self._stats_tab_summary(nb, data, is_chart)
         self._stats_tab_date(nb,    data, is_chart)
-        self._stats_tab_hour(nb,    data, is_chart)
+        self._stats_tab_buoi(nb,    data, is_chart)
+
+    _BUOI_DISP_ORDER = ["Sáng", "Trưa", "Chiều", "Tối"]
+    _BUOI_RAW_MAP    = {"sang": "Sáng", "trua": "Trưa", "chieu": "Chiều", "toi": "Tối"}
+
+    @staticmethod
+    def _hour_to_buoi_disp(h: int) -> str:
+        if h < 12: return "Sáng"
+        if h < 14: return "Trưa"
+        if h < 18: return "Chiều"
+        return "Tối"
 
     @staticmethod
     def _scan_stats(out_path):
-        from collections import defaultdict
-        lt  = defaultdict(lambda: defaultdict(int))
-        bd  = defaultdict(lambda: defaultdict(int))
-        bhl = defaultdict(lambda: defaultdict(int))
+        from collections import Counter, defaultdict
+        detail  = Counter()          # (loai_xe, lan, buoi_disp) -> count
+        by_date = defaultdict(Counter)  # date_str -> Counter{(loai_xe, lan): count}
+        buoi_raw = {"sang": "Sáng", "trua": "Trưa", "chieu": "Chiều", "toi": "Tối"}
+
+        def _h2b(h):
+            if h < 12: return "Sáng"
+            if h < 14: return "Trưa"
+            if h < 18: return "Chiều"
+            return "Tối"
+
         if out_path.exists():
             for img in out_path.rglob("*.jpg"):
                 try:
                     parts = img.relative_to(out_path).parts
-                    if len(parts) == 5:
-                        lane, vtype, date_s, hour_s, _ = parts
-                    elif len(parts) == 4:
-                        lane, vtype, date_s, fname = parts
-                        hour_s = fname[:2]
-                    else:
+                    if parts[0] in ("bad", "out", "train"):
                         continue
-                    if lane in ("bad", "out", "train") or vtype in ("bad",):
+                    if len(parts) == 6:
+                        p0, p1, p2, p3, p4, _ = parts
+                        if p1.startswith("anh_"):
+                            # cấu trúc mới: <loai_xe>/<sub>/<date>/<buoi>/<lan>/<file>
+                            loai_xe, _, date_s, p3b, lan, _ = parts
+                            buoi = buoi_raw.get(p3b) or (_h2b(int(p3b)) if p3b.isdigit() else "?")
+                        else:
+                            # cấu trúc cũ: <loai_xe>/<lan>/<sub>/<date>/<buoi>/<file>
+                            loai_xe, lan, _, date_s, p4b, _ = parts
+                            buoi = buoi_raw.get(p4b) or (_h2b(int(p4b)) if p4b.isdigit() else "?")
+                    elif len(parts) == 5:
+                        # cấu trúc cũ: <loai_xe>/<sub>/<date>/<buoi|HH>/<file>
+                        loai_xe, _, date_s, p3, _ = parts
+                        lan = ""
+                        buoi = buoi_raw.get(p3) or (_h2b(int(p3)) if p3.isdigit() else "?")
+                    elif len(parts) == 4:
+                        loai_xe, _, date_s, fname = parts
+                        lan = ""
+                        h_s = fname[:2]
+                        buoi = _h2b(int(h_s)) if h_s.isdigit() else "?"
+                    else:
                         continue
                 except Exception:
                     continue
-                lt[lane][vtype]  += 1
-                bd[date_s][lane] += 1
-                if hour_s.isdigit() and 0 <= int(hour_s) <= 23:
-                    bhl[int(hour_s)][lane] += 1
-        return {"lt": dict(lt), "date": dict(bd), "hour": dict(bhl)}
+                detail[(loai_xe, lan, buoi)] += 1
+                by_date[date_s][(loai_xe, lan)] += 1
+
+        return {"detail": dict(detail), "date": dict(by_date)}
 
     @staticmethod
     def _make_tree(parent, cols, col_widths, anchor_first="w"):
@@ -1391,120 +1572,184 @@ class IParkingImageTab(Frame):
                   bg=BG, fg=DIM, font=F_MAIN, justify=CENTER).pack(expand=True)
 
     def _stats_tab_summary(self, nb, data, is_chart):
-        found_vtypes = {v for lane_d in data["lt"].values() for v in lane_d}
-        vtypes = [v for v in _VTYPE_ORDER if v in found_vtypes]
-        if not vtypes:
-            vtypes = sorted(found_vtypes)
-        lanes = sorted(data["lt"])
+        """Tổng quan: rows = (loại xe, làn), columns = Sáng/Trưa/Chiều/Tối/Tổng."""
+        from collections import defaultdict
+        detail = data["detail"]   # (loai_xe, lan, buoi) -> count
+
+        loai_xe_found = {k[0] for k in detail}
+        loai_xe_list  = [v for v in _VTYPE_ORDER if v in loai_xe_found] + \
+                        sorted(loai_xe_found - set(_VTYPE_ORDER))
+        buoi_list     = self._BUOI_DISP_ORDER
+
+        # (loai_xe, lan) -> {buoi: count}
+        agg = defaultdict(lambda: defaultdict(int))
+        for (lx, ln, b), cnt in detail.items():
+            agg[(lx, ln)][b] += cnt
+
         tab = Frame(nb, bg=BG)
-        nb.add(tab, text="  Làn × Loại xe  ")
+        nb.add(tab, text="  Tổng quan  ")
+
         if not is_chart:
-            cols   = ["Làn"] + vtypes + ["Tổng"]
-            widths = [180] + [90] * len(vtypes) + [80]
+            cols   = ["Loại xe", "Làn"] + buoi_list + ["Tổng"]
+            widths = [130, 160] + [70] * 4 + [80]
             tree   = self._make_tree(tab, cols, widths)
-            totals = {v: 0 for v in vtypes}
-            grand  = 0
-            for i, lane in enumerate(lanes):
-                row, rt = [lane], 0
-                for v in vtypes:
-                    n = data["lt"][lane].get(v, 0)
-                    row.append(str(n) if n else "-")
-                    totals[v] += n; rt += n
-                grand += rt
-                row.append(str(rt))
-                tree.insert("", END, values=row,
-                            tags=("odd" if i % 2 else "even",))
-            tree.insert("", END,
-                        values=("TỔNG", *[str(totals[v]) for v in vtypes], str(grand)),
-                        tags=("total",))
+            grand_buoi  = {b: 0 for b in buoi_list}
+            grand_total = 0
+
+            for row_idx, lx in enumerate(loai_xe_list):
+                lanes = sorted({k[1] for k in agg if k[0] == lx})
+                lx_buoi = {b: sum(agg[(lx, ln)].get(b, 0) for ln in lanes)
+                           for b in buoi_list}
+                lx_total = sum(lx_buoi.values())
+
+                for i, ln in enumerate(lanes):
+                    ln_total = sum(agg[(lx, ln)].values())
+                    row = [lx, ln or "(chung)"]
+                    for b in buoi_list:
+                        n = agg[(lx, ln)].get(b, 0)
+                        row.append(str(n) if n else "─")
+                    row.append(str(ln_total))
+                    tree.insert("", END, values=row,
+                                tags=("odd" if i % 2 else "even",))
+
+                # subtotal per loại xe
+                sub_row = [f"∑ {lx}", f"({len(lanes)} làn)"]
+                for b in buoi_list:
+                    sub_row.append(str(lx_buoi[b]) if lx_buoi[b] else "─")
+                sub_row.append(str(lx_total))
+                tree.insert("", END, values=sub_row, tags=("total",))
+
+                for b in buoi_list:
+                    grand_buoi[b] += lx_buoi[b]
+                grand_total += lx_total
+
+            grand_row = ["TỔNG", ""]
+            for b in buoi_list:
+                grand_row.append(str(grand_buoi[b]))
+            grand_row.append(str(grand_total))
+            tree.insert("", END, values=grand_row, tags=("total",))
         else:
             def draw(ax):
-                x = range(len(lanes))
-                w = max(0.1, 0.8 / max(len(vtypes), 1))
-                for i, vt in enumerate(vtypes):
-                    vals = [data["lt"][l].get(vt, 0) for l in lanes]
-                    clr  = _VTYPE_COLORS.get(vt, "#888888")
+                x      = range(len(loai_xe_list))
+                w      = max(0.1, 0.8 / max(len(buoi_list), 1))
+                colors = ["#F05922", "#4A3F8C", "#B8B3D6", "#FFAA80"]
+                for i, b in enumerate(buoi_list):
+                    vals = []
+                    for lx in loai_xe_list:
+                        lanes = {k[1] for k in agg if k[0] == lx}
+                        vals.append(sum(agg[(lx, ln)].get(b, 0) for ln in lanes))
                     ax.bar([xi + i * w for xi in x], vals, w,
-                           label=vt, color=clr, zorder=3)
-                ax.set_xticks([xi + w * len(vtypes) / 2 for xi in x])
-                ax.set_xticklabels(lanes, rotation=18, ha="right",
+                           label=b, color=colors[i], zorder=3)
+                ax.set_xticks([xi + w * 2 for xi in x])
+                ax.set_xticklabels(loai_xe_list, rotation=15, ha="right",
                                    fontsize=7, color="#d4d4d4")
-                ax.set_title("Số ảnh theo làn và loại xe",
+                ax.set_title("Số ảnh theo loại xe và buổi",
                              color="#d4d4d4", fontsize=10)
             self._make_chart(tab, draw)
 
     def _stats_tab_date(self, nb, data, is_chart):
-        lanes = sorted({l for d in data["date"].values() for l in d})
-        dates = sorted(data["date"])
+        """Theo ngày: rows = ngày, columns = loại xe."""
+        from collections import defaultdict
+        by_date = data["date"]   # date -> Counter{(loai_xe, lan): count}
+
+        loai_xe_found = {k[0] for cnt in by_date.values() for k in cnt}
+        loai_xe_list  = [v for v in _VTYPE_ORDER if v in loai_xe_found] + \
+                        sorted(loai_xe_found - set(_VTYPE_ORDER))
+        dates = sorted(by_date)
+
+        # aggregate: {date: {loai_xe: count}}
+        date_lx: dict = {}
+        for d, cnt in by_date.items():
+            agg: dict = defaultdict(int)
+            for (lx, _), n in cnt.items():
+                agg[lx] += n
+            date_lx[d] = dict(agg)
+
         tab = Frame(nb, bg=BG)
         nb.add(tab, text="  Theo ngày  ")
+
         if not is_chart:
-            cols   = ["Ngày", "Tổng"] + lanes
-            widths = [110, 70] + [max(100, len(l) * 8) for l in lanes]
+            cols   = ["Ngày", "Tổng"] + loai_xe_list
+            widths = [110, 70] + [max(90, len(lx) * 8) for lx in loai_xe_list]
             tree   = self._make_tree(tab, cols, widths)
-            grand  = {l: 0 for l in lanes}
+            grand  = {lx: 0 for lx in loai_xe_list}
             grand_t = 0
             for i, d in enumerate(dates):
-                row_t = sum(data["date"][d].values())
-                row = [d, str(row_t)]
-                for l in lanes:
-                    n = data["date"][d].get(l, 0)
-                    row.append(str(n) if n else "-")
-                    grand[l] += n
+                row_t = sum(date_lx[d].values())
+                row   = [d, str(row_t)]
+                for lx in loai_xe_list:
+                    n = date_lx[d].get(lx, 0)
+                    row.append(str(n) if n else "─")
+                    grand[lx] += n
                 grand_t += row_t
                 tree.insert("", END, values=row,
                             tags=("odd" if i % 2 else "even",))
             tree.insert("", END,
-                        values=("TỔNG", str(grand_t), *[str(grand[l]) for l in lanes]),
+                        values=("TỔNG", str(grand_t),
+                                *[str(grand[lx]) for lx in loai_xe_list]),
                         tags=("total",))
         else:
             def draw(ax):
                 bottom = [0] * len(dates)
-                for i, lane in enumerate(lanes):
-                    vals = [data["date"][d].get(lane, 0) for d in dates]
-                    clr  = _LANE_PALETTE[i % len(_LANE_PALETTE)]
-                    ax.bar(dates, vals, bottom=bottom, label=lane, color=clr, zorder=3)
+                for i, lx in enumerate(loai_xe_list):
+                    vals = [date_lx[d].get(lx, 0) for d in dates]
+                    clr  = _VTYPE_COLORS.get(lx, _LANE_PALETTE[i % len(_LANE_PALETTE)])
+                    ax.bar(dates, vals, bottom=bottom, label=lx, color=clr, zorder=3)
                     bottom = [b + v for b, v in zip(bottom, vals)]
                 ax.set_xticklabels(dates, rotation=20, ha="right",
                                    fontsize=7, color="#d4d4d4")
                 ax.set_title("Số ảnh theo ngày", color="#d4d4d4", fontsize=10)
             self._make_chart(tab, draw)
 
-    def _stats_tab_hour(self, nb, data, is_chart):
-        lanes = sorted({l for h in data["hour"].values() for l in h})
+    def _stats_tab_buoi(self, nb, data, is_chart):
+        """Theo buổi: rows = Sáng/Trưa/Chiều/Tối, columns = loại xe."""
+        from collections import defaultdict
+        detail = data["detail"]   # (loai_xe, lan, buoi) -> count
+
+        loai_xe_found = {k[0] for k in detail}
+        loai_xe_list  = [v for v in _VTYPE_ORDER if v in loai_xe_found] + \
+                        sorted(loai_xe_found - set(_VTYPE_ORDER))
+        buoi_list     = self._BUOI_DISP_ORDER
+
+        # buoi -> loai_xe -> count (sum across lanes)
+        buoi_lx: dict = defaultdict(lambda: defaultdict(int))
+        for (lx, _, b), cnt in detail.items():
+            buoi_lx[b][lx] += cnt
+
         tab = Frame(nb, bg=BG)
-        nb.add(tab, text="  Theo giờ  ")
+        nb.add(tab, text="  Theo buổi  ")
+
         if not is_chart:
-            cols   = ["Giờ", "Tổng"] + lanes
-            widths = [55, 70] + [max(100, len(l) * 8) for l in lanes]
+            cols   = ["Buổi", "Tổng"] + loai_xe_list
+            widths = [80, 70] + [max(90, len(lx) * 8) for lx in loai_xe_list]
             tree   = self._make_tree(tab, cols, widths, anchor_first="center")
-            grand  = {l: 0 for l in lanes}
+            grand  = {lx: 0 for lx in loai_xe_list}
             grand_t = 0
-            for i in range(24):
-                row_t = sum(data["hour"].get(i, {}).values())
-                row = [f"{i:02d}:00", str(row_t) if row_t else "-"]
-                for l in lanes:
-                    n = data["hour"].get(i, {}).get(l, 0)
-                    row.append(str(n) if n else "-")
-                    grand[l] += n
+            for i, b in enumerate(buoi_list):
+                row_t = sum(buoi_lx[b].values())
+                row   = [b, str(row_t) if row_t else "─"]
+                for lx in loai_xe_list:
+                    n = buoi_lx[b].get(lx, 0)
+                    row.append(str(n) if n else "─")
+                    grand[lx] += n
                 grand_t += row_t
                 tree.insert("", END, values=row,
                             tags=("odd" if i % 2 else "even",))
             tree.insert("", END,
-                        values=("TỔNG", str(grand_t), *[str(grand[l]) for l in lanes]),
+                        values=("TỔNG", str(grand_t),
+                                *[str(grand[lx]) for lx in loai_xe_list]),
                         tags=("total",))
         else:
             def draw(ax):
-                hrs = list(range(24))
-                bottom = [0] * 24
-                for i, lane in enumerate(lanes):
-                    vals = [data["hour"].get(h, {}).get(lane, 0) for h in hrs]
-                    clr  = _LANE_PALETTE[i % len(_LANE_PALETTE)]
-                    ax.bar([f"{h:02d}" for h in hrs], vals,
-                           bottom=bottom, label=lane, color=clr, zorder=3)
-                    bottom = [b + v for b, v in zip(bottom, vals)]
-                ax.set_xticklabels([f"{h:02d}" for h in hrs],
-                                   fontsize=7, color="#d4d4d4")
-                ax.set_title("Phân phối ảnh theo giờ",
+                x = range(len(buoi_list))
+                w = max(0.1, 0.8 / max(len(loai_xe_list), 1))
+                for i, lx in enumerate(loai_xe_list):
+                    vals = [buoi_lx[b].get(lx, 0) for b in buoi_list]
+                    clr  = _VTYPE_COLORS.get(lx, _LANE_PALETTE[i % len(_LANE_PALETTE)])
+                    ax.bar([xi + i * w for xi in x], vals, w,
+                           label=lx, color=clr, zorder=3)
+                ax.set_xticks([xi + w * len(loai_xe_list) / 2 for xi in x])
+                ax.set_xticklabels(buoi_list, fontsize=9, color="#d4d4d4")
+                ax.set_title("Phân phối ảnh theo buổi",
                              color="#d4d4d4", fontsize=10)
             self._make_chart(tab, draw)

@@ -36,6 +36,11 @@ except ImportError:
 
 _REVIEW_ICON = {"correct": "✓", "incorrect": "✗", "": "○"}
 
+_THUMB_PALETTE = [
+    "#F05922", "#4caf50", "#2196f3", "#9c27b0", "#ff9800",
+    "#00bcd4", "#e91e63", "#8bc34a", "#ff5722", "#607d8b",
+]
+
 
 class YoloTab(Frame):
     def __init__(self, master, root):
@@ -77,6 +82,32 @@ class YoloTab(Frame):
         self._base_folder = None
         self._active_filter = "all"
         self._review_state = dict(_CFG.get("yolo.review_states", {}))
+
+        # Detect All cache & filters
+        # box tuple: (cid, cx_n, cy_n, w_n, h_n, w_px, h_px)  ← indices 0-6
+        self._det_cache = {}
+        self._det_stop_flag = False
+        self._det_running = False
+        self._flt_class_var = StringVar(value="Tất cả")
+        self._flt_ndet_min_var = StringVar(value="")
+        self._flt_ndet_max_var = StringVar(value="")
+        self._flt_area_min_var = StringVar(value="")
+        self._flt_area_max_var = StringVar(value="")
+        self._flt_w_min_var = StringVar(value="")
+        self._flt_w_max_var = StringVar(value="")
+        self._flt_h_min_var = StringVar(value="")
+        self._flt_h_max_var = StringVar(value="")
+        self._flt_schedule_after = None
+
+        # Grid panel (filmstrip)
+        self._grid_page = 0
+        self._grid_cols_var = IntVar(value=4)
+        self._grid_thumb_w = 160
+        self._grid_thumb_h = 100
+        self._grid_rendered_cache = {}
+        self._grid_cells = []
+        self._grid_render_idx = 0
+        self._grid_rebuild_after = None
 
         _bind_cfg("yolo.model_path",    self.v_model_path)
         _bind_cfg("yolo.check_folder",  self.v_check_folder)
@@ -302,6 +333,15 @@ class YoloTab(Frame):
                bg="#4a3f00", fg="#ffcc00", font=F_MAIN, relief="flat",
                padx=8, cursor="hand2").pack(side=LEFT)
 
+        self.btn_detect_all = Button(r3, text="⚡ Detect All",
+                                     command=self._detect_all,
+                                     bg="#103020", fg="#4caf50", font=F_MAIN,
+                                     relief="flat", padx=8, cursor="hand2",
+                                     activebackground="#1a5030", activeforeground="#4caf50")
+        self.btn_detect_all.pack(side=LEFT, padx=(4, 0))
+        self.lbl_cache_info = Label(r3, text="", font=F_MONO, bg=CARD, fg=DIM)
+        self.lbl_cache_info.pack(side=LEFT, padx=(4, 0))
+
         Frame(r3, bg=DIM, width=1).pack(side=LEFT, fill=Y, padx=(12, 6))
 
         Label(r3, text="Nét:", font=F_BOLD, bg=CARD, fg=TEXT).pack(side=LEFT)
@@ -328,7 +368,7 @@ class YoloTab(Frame):
         content.pack(fill=BOTH, expand=True)
 
         # Sidebar — image list
-        sidebar = Frame(content, bg=CARD, width=200)
+        sidebar = Frame(content, bg=CARD, width=240)
         sidebar.pack(side=LEFT, fill=Y, padx=(0, 2))
         sidebar.pack_propagate(False)
 
@@ -362,6 +402,124 @@ class YoloTab(Frame):
             b.pack(side=LEFT, padx=1)
             self._filter_btns[code] = b
         self._filter_btns["all"].config(relief="sunken", bg="#252540")
+
+        # ── Detect result filters ────────────────────────────────────────────
+        Frame(sidebar, bg=DIM, height=1).pack(fill=X, padx=6, pady=(2, 2))
+
+        det_hdr = Frame(sidebar, bg=CARD)
+        det_hdr.pack(fill=X, padx=4, pady=(0, 1))
+        Label(det_hdr, text="Filter detect:", bg=CARD, fg=DIM,
+              font=F_MAIN).pack(side=LEFT)
+        Button(det_hdr, text="×", command=self._clear_det_filters,
+               bg=CARD, fg=DIM, font=F_MAIN, relief="flat",
+               cursor="hand2", padx=2).pack(side=RIGHT)
+
+        flt_cls_row = Frame(sidebar, bg=CARD)
+        flt_cls_row.pack(fill=X, padx=4, pady=(0, 2))
+        Label(flt_cls_row, text="Class:", bg=CARD, fg=DIM,
+              font=F_MAIN, width=7, anchor=W).pack(side=LEFT)
+        self._flt_class_combo = ttk.Combobox(
+            flt_cls_row, textvariable=self._flt_class_var,
+            state="readonly", font=F_MAIN)
+        self._flt_class_combo["values"] = ["Tất cả", "Không detect"]
+        self._flt_class_combo.pack(side=LEFT, fill=X, expand=True)
+        self._flt_class_combo.bind("<<ComboboxSelected>>",
+                                   lambda _: self._apply_filter(self._active_filter))
+
+        flt_n_row = Frame(sidebar, bg=CARD)
+        flt_n_row.pack(fill=X, padx=4, pady=(0, 2))
+        Label(flt_n_row, text="#Det:", bg=CARD, fg=DIM,
+              font=F_MAIN, width=7, anchor=W).pack(side=LEFT)
+        Entry(flt_n_row, textvariable=self._flt_ndet_min_var,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MONO, bd=2, width=5).pack(side=LEFT)
+        Label(flt_n_row, text="–", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=1)
+        Entry(flt_n_row, textvariable=self._flt_ndet_max_var,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MONO, bd=2, width=5).pack(side=LEFT)
+        self._flt_ndet_min_var.trace_add("write", lambda *_: self._schedule_det_filter())
+        self._flt_ndet_max_var.trace_add("write", lambda *_: self._schedule_det_filter())
+
+        flt_area_row = Frame(sidebar, bg=CARD)
+        flt_area_row.pack(fill=X, padx=4, pady=(0, 2))
+        Label(flt_area_row, text="BBox px²:", bg=CARD, fg=DIM,
+              font=F_MAIN, width=7, anchor=W).pack(side=LEFT)
+        Entry(flt_area_row, textvariable=self._flt_area_min_var,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MONO, bd=2, width=5).pack(side=LEFT)
+        Label(flt_area_row, text="–", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=1)
+        Entry(flt_area_row, textvariable=self._flt_area_max_var,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MONO, bd=2, width=5).pack(side=LEFT)
+        self._flt_area_min_var.trace_add("write", lambda *_: self._schedule_det_filter())
+        self._flt_area_max_var.trace_add("write", lambda *_: self._schedule_det_filter())
+
+        flt_w_row = Frame(sidebar, bg=CARD)
+        flt_w_row.pack(fill=X, padx=4, pady=(0, 2))
+        Label(flt_w_row, text="BBox W:", bg=CARD, fg=DIM,
+              font=F_MAIN, width=7, anchor=W).pack(side=LEFT)
+        Entry(flt_w_row, textvariable=self._flt_w_min_var,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MONO, bd=2, width=5).pack(side=LEFT)
+        Label(flt_w_row, text="–", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=1)
+        Entry(flt_w_row, textvariable=self._flt_w_max_var,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MONO, bd=2, width=5).pack(side=LEFT)
+        self._flt_w_min_var.trace_add("write", lambda *_: self._schedule_det_filter())
+        self._flt_w_max_var.trace_add("write", lambda *_: self._schedule_det_filter())
+
+        flt_h_row = Frame(sidebar, bg=CARD)
+        flt_h_row.pack(fill=X, padx=4, pady=(0, 2))
+        Label(flt_h_row, text="BBox H:", bg=CARD, fg=DIM,
+              font=F_MAIN, width=7, anchor=W).pack(side=LEFT)
+        Entry(flt_h_row, textvariable=self._flt_h_min_var,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MONO, bd=2, width=5).pack(side=LEFT)
+        Label(flt_h_row, text="–", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=1)
+        Entry(flt_h_row, textvariable=self._flt_h_max_var,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MONO, bd=2, width=5).pack(side=LEFT)
+        self._flt_h_min_var.trace_add("write", lambda *_: self._schedule_det_filter())
+        self._flt_h_max_var.trace_add("write", lambda *_: self._schedule_det_filter())
+
+        # ── Phải có / không có nhãn ─────────────────────────────────────────
+        Frame(sidebar, bg=DIM, height=1).pack(fill=X, padx=6, pady=(3, 2))
+
+        Label(sidebar, text="✔ Phải có nhãn:", bg=CARD, fg=DIM,
+              font=F_MAIN, anchor=W).pack(fill=X, padx=6)
+        mh_frm = Frame(sidebar, bg=CARD)
+        mh_frm.pack(fill=X, padx=6, pady=(1, 2))
+        self._must_have_lb = Listbox(mh_frm, bg="#16162a", fg=TEXT,
+                                     selectbackground=ACCENT2,
+                                     selectforeground="white",
+                                     font=F_MONO, relief="flat", bd=0,
+                                     selectmode=MULTIPLE, height=3,
+                                     activestyle="none", exportselection=False)
+        mh_sb = Scrollbar(mh_frm, command=self._must_have_lb.yview)
+        self._must_have_lb.configure(yscrollcommand=mh_sb.set)
+        mh_sb.pack(side=RIGHT, fill=Y)
+        self._must_have_lb.pack(fill=X, expand=True)
+        self._must_have_lb.bind("<<ListboxSelect>>",
+                                lambda _: self._schedule_det_filter())
+
+        Label(sidebar, text="✕ Không có nhãn:", bg=CARD, fg=DIM,
+              font=F_MAIN, anchor=W).pack(fill=X, padx=6, pady=(2, 0))
+        mn_frm = Frame(sidebar, bg=CARD)
+        mn_frm.pack(fill=X, padx=6, pady=(1, 3))
+        self._must_not_lb = Listbox(mn_frm, bg="#16162a", fg=TEXT,
+                                    selectbackground="#c62828",
+                                    selectforeground="white",
+                                    font=F_MONO, relief="flat", bd=0,
+                                    selectmode=MULTIPLE, height=3,
+                                    activestyle="none", exportselection=False)
+        mn_sb = Scrollbar(mn_frm, command=self._must_not_lb.yview)
+        self._must_not_lb.configure(yscrollcommand=mn_sb.set)
+        mn_sb.pack(side=RIGHT, fill=Y)
+        self._must_not_lb.pack(fill=X, expand=True)
+        self._must_not_lb.bind("<<ListboxSelect>>",
+                               lambda _: self._schedule_det_filter())
+
+        Frame(sidebar, bg=DIM, height=1).pack(fill=X, padx=6, pady=(2, 2))
 
         tree_frame = Frame(sidebar, bg=CARD)
         tree_frame.pack(fill=BOTH, expand=True, padx=2, pady=(0, 6))
@@ -422,9 +580,18 @@ class YoloTab(Frame):
                                      bg=BG, fg=DIM)
         self.lbl_mark_state.pack(side=LEFT, padx=(12, 0))
 
-        # Panel container for single/side-by-side display
-        self.panels_frame = Frame(right, bg=BG)
-        self.panels_frame.pack(fill=BOTH, expand=True)
+        # Horizontal split: image view (left) | filmstrip grid (right)
+        from tkinter import PanedWindow as _PW
+        self._view_paned = _PW(right, orient=HORIZONTAL, sashwidth=5,
+                               bg="#0d0d1e", sashrelief=RAISED, bd=0)
+        self._view_paned.pack(fill=BOTH, expand=True)
+
+        self.panels_frame = Frame(self._view_paned, bg=BG)
+        self._view_paned.add(self.panels_frame, minsize=200, stretch="always")
+
+        self._grid_outer = Frame(self._view_paned, bg="#0d0d1e")
+        self._view_paned.add(self._grid_outer, minsize=220, stretch="always")
+        self._build_grid_panel()
 
         # Panel 1
         self.panel1_frame = Frame(self.panels_frame, bg=BG)
@@ -573,6 +740,7 @@ class YoloTab(Frame):
             for cid, cname in sorted(self.model.names.items()):
                 self.class_ids.append(cid)
                 self.lb_classes.insert(END, f"[{cid}] {cname}")
+        self._update_must_have_lists()
 
     def _update_path_combo(self, path: str):
         self.v_check_folder.set(path)
@@ -675,6 +843,14 @@ class YoloTab(Frame):
 
     def _load_image_list(self, files: list):
         self._all_images = list(files)
+        self._det_cache.clear()
+        self._grid_rendered_cache.clear()
+        self._grid_page = 0
+        if hasattr(self, "lbl_cache_info"):
+            self.lbl_cache_info.config(text="")
+        if hasattr(self, "_flt_class_combo"):
+            self._flt_class_combo["values"] = ["Tất cả", "Không detect"]
+            self._flt_class_var.set("Tất cả")
         if not self._base_folder and files:
             self._base_folder = os.path.dirname(files[0])
         self._active_filter = "all"
@@ -739,6 +915,8 @@ class YoloTab(Frame):
             tree.selection_set(iid)
             tree.see(iid)
 
+        self._schedule_grid_rebuild()
+
     def _schedule_search(self):
         if self._search_after:
             self.after_cancel(self._search_after)
@@ -765,6 +943,7 @@ class YoloTab(Frame):
         if search:
             filtered = [f for f in filtered
                         if search in os.path.basename(f).lower()]
+        filtered = self._apply_det_filters(filtered)
         self._rebuild_tree(filtered)
 
     def _update_filter_counts(self):
@@ -883,6 +1062,7 @@ class YoloTab(Frame):
             pos = 0
         label = f"{pos}/{n}  " if n else ""
         self.v_status.set(f"{label}{os.path.basename(path)}")
+        self._update_filmstrip()
         self._detect_and_display()
 
     def _is_active(self):
@@ -1149,6 +1329,555 @@ class YoloTab(Frame):
 
         threading.Thread(target=run, daemon=True).start()
 
+    # ======================================================== DETECT ALL ==
+
+    def _detect_all(self):
+        if not self.model:
+            messagebox.showwarning("Chưa có model",
+                                   "Vui lòng chọn model trước.", parent=self.root)
+            return
+        if not self._all_images:
+            messagebox.showwarning("Chưa có ảnh",
+                                   "Vui lòng chọn thư mục ảnh trước.", parent=self.root)
+            return
+        if self._det_running:
+            self._det_stop_flag = True
+            return
+        if not _CV2_OK or not _YOLO_OK:
+            messagebox.showerror("Thiếu thư viện",
+                                  "pip install ultralytics opencv-python", parent=self.root)
+            return
+
+        self._det_stop_flag = False
+        self._det_running = True
+        self.btn_detect_all.config(text="■ Dừng", bg=ACCENT, fg="white")
+        all_images = list(self._all_images)
+        total = len(all_images)
+
+        def run():
+            sel_cls = self._get_sel_classes()
+            conf = max(self.v_conf_thresh.get(), self.v_conf.get())
+            iou = self.v_iou.get()
+            for i, img_path in enumerate(all_images):
+                if self._det_stop_flag:
+                    break
+                try:
+                    results = self.model.predict(
+                        source=img_path, classes=sel_cls,
+                        conf=conf, iou=iou, imgsz=640,
+                        agnostic_nms=True, verbose=False)
+                    boxes = results[0].boxes
+                    n_det = len(boxes) if boxes is not None else 0
+                    classes_count = {}
+                    box_list = []
+                    if boxes is not None and len(boxes):
+                        for box in boxes:
+                            cid = int(box.cls[0])
+                            classes_count[cid] = classes_count.get(cid, 0) + 1
+                            cx_n, cy_n, w_n, h_n = box.xywhn[0].tolist()
+                            w_px = float(box.xywh[0][2])
+                            h_px = float(box.xywh[0][3])
+                            box_list.append((cid, cx_n, cy_n, w_n, h_n, w_px, h_px))
+                    self._det_cache[img_path] = {
+                        "n": n_det,
+                        "classes": classes_count,
+                        "boxes": box_list,
+                    }
+                except Exception:
+                    pass
+                if (i + 1) % 10 == 0 or (i + 1) == total:
+                    done = i + 1
+                    self.root.after(0, lambda d=done, t=total:
+                                    self._on_detect_all_progress(d, t))
+            self.root.after(0, self._on_detect_all_done)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_detect_all_progress(self, done: int, total: int):
+        self.lbl_cache_info.config(text=f"{done}/{total}")
+        self._update_class_filter_combo()
+        self._apply_filter(self._active_filter)
+
+    def _on_detect_all_done(self):
+        self._det_running = False
+        self._det_stop_flag = False
+        self.btn_detect_all.config(text="⚡ Detect All",
+                                   bg="#103020", fg="#4caf50")
+        n = len(self._det_cache)
+        total = len(self._all_images)
+        self.lbl_cache_info.config(text=f"✓{n}/{total}")
+        self._grid_rendered_cache.clear()
+        self._update_class_filter_combo()
+        self._apply_filter(self._active_filter)
+        self._rebuild_grid()
+
+    def _update_class_filter_combo(self):
+        if not hasattr(self, "_flt_class_combo"):
+            return
+        all_classes = {}
+        for data in self._det_cache.values():
+            for cid in data["classes"]:
+                name = (self.model.names.get(cid, str(cid))
+                        if self.model and hasattr(self.model, "names") else str(cid))
+                all_classes[cid] = name
+        vals = (["Tất cả", "Không detect"] +
+                [f"[{cid}] {name}" for cid, name in sorted(all_classes.items())])
+        cur = self._flt_class_var.get()
+        self._flt_class_combo["values"] = vals
+        if cur not in vals:
+            self._flt_class_var.set("Tất cả")
+        self._update_must_have_lists()
+
+    def _schedule_det_filter(self):
+        if self._flt_schedule_after:
+            self.after_cancel(self._flt_schedule_after)
+        self._flt_schedule_after = self.after(
+            300, lambda: self._apply_filter(self._active_filter))
+
+    def _clear_det_filters(self):
+        self._flt_class_var.set("Tất cả")
+        self._flt_ndet_min_var.set("")
+        self._flt_ndet_max_var.set("")
+        self._flt_area_min_var.set("")
+        self._flt_area_max_var.set("")
+        self._flt_w_min_var.set("")
+        self._flt_w_max_var.set("")
+        self._flt_h_min_var.set("")
+        self._flt_h_max_var.set("")
+        if hasattr(self, "_must_have_lb"):
+            self._must_have_lb.selection_clear(0, END)
+        if hasattr(self, "_must_not_lb"):
+            self._must_not_lb.selection_clear(0, END)
+        self._apply_filter(self._active_filter)
+
+    def _get_must_have_ids(self) -> set:
+        if not hasattr(self, "_must_have_lb"):
+            return set()
+        try:
+            return {int(self._must_have_lb.get(i).split("]")[0].lstrip("["))
+                    for i in self._must_have_lb.curselection()}
+        except Exception:
+            return set()
+
+    def _get_must_not_have_ids(self) -> set:
+        if not hasattr(self, "_must_not_lb"):
+            return set()
+        try:
+            return {int(self._must_not_lb.get(i).split("]")[0].lstrip("["))
+                    for i in self._must_not_lb.curselection()}
+        except Exception:
+            return set()
+
+    def _update_must_have_lists(self):
+        """Điền danh sách class vào 2 listbox phải/không có nhãn."""
+        if not hasattr(self, "_must_have_lb"):
+            return
+        all_classes: dict = {}
+        if self.model and hasattr(self.model, "names"):
+            all_classes = dict(self.model.names)
+        elif self._det_cache:
+            for data in self._det_cache.values():
+                for cid in data["classes"]:
+                    all_classes.setdefault(cid, str(cid))
+        mh_sel = set(self._must_have_lb.curselection())
+        mn_sel = set(self._must_not_lb.curselection())
+        self._must_have_lb.delete(0, END)
+        self._must_not_lb.delete(0, END)
+        for cid, name in sorted(all_classes.items()):
+            color = _THUMB_PALETTE[cid % len(_THUMB_PALETTE)]
+            label = f"[{cid}] {name}"
+            self._must_have_lb.insert(END, label)
+            self._must_have_lb.itemconfig(END, fg=color)
+            self._must_not_lb.insert(END, label)
+            self._must_not_lb.itemconfig(END, fg=color)
+        # Khôi phục selection (nếu list không thay đổi)
+        for i in mh_sel:
+            if i < self._must_have_lb.size():
+                self._must_have_lb.selection_set(i)
+        for i in mn_sel:
+            if i < self._must_not_lb.size():
+                self._must_not_lb.selection_set(i)
+
+    def _apply_det_filters(self, files: list) -> list:
+        """Lọc ảnh theo detect cache (class, n_det, kích thước bbox)."""
+        def _fv(var):
+            v = var.get().strip()
+            try: return float(v) if v else None
+            except ValueError: return None
+
+        cls_filter    = self._flt_class_var.get()
+        ndet_min      = _fv(self._flt_ndet_min_var)
+        ndet_max      = _fv(self._flt_ndet_max_var)
+        area_min      = _fv(self._flt_area_min_var)
+        area_max      = _fv(self._flt_area_max_var)
+        w_min         = _fv(self._flt_w_min_var)
+        w_max         = _fv(self._flt_w_max_var)
+        h_min         = _fv(self._flt_h_min_var)
+        h_max         = _fv(self._flt_h_max_var)
+        must_have_ids = self._get_must_have_ids()
+        must_not_ids  = self._get_must_not_have_ids()
+
+        has_filter = (
+            cls_filter not in ("Tất cả", "") or
+            any(v is not None for v in (ndet_min, ndet_max,
+                                        area_min, area_max,
+                                        w_min, w_max, h_min, h_max)) or
+            bool(must_have_ids) or
+            bool(must_not_ids)
+        )
+        if not has_filter or not self._det_cache:
+            return files
+
+        result = []
+        for f in files:
+            data = self._det_cache.get(f)
+            if data is None:
+                # Chưa detect → ẩn nếu có filter tích cực
+                if ndet_min is not None and ndet_min > 0:
+                    continue
+                if cls_filter not in ("Tất cả", ""):
+                    continue
+                if any(v is not None for v in (area_min, area_max,
+                                               w_min, w_max, h_min, h_max)):
+                    continue
+                if must_have_ids or must_not_ids:
+                    continue
+                result.append(f)
+                continue
+
+            n = data["n"]
+            detected_cls = set(data["classes"].keys())
+
+            # Filter class (combobox)
+            if cls_filter == "Không detect":
+                if n > 0:
+                    continue
+            elif cls_filter not in ("Tất cả", ""):
+                try:
+                    flt_cid = int(cls_filter.split("]")[0].lstrip("["))
+                    if flt_cid not in data["classes"]:
+                        continue
+                except (ValueError, IndexError):
+                    pass
+
+            # Filter số lượng detection
+            if ndet_min is not None and n < ndet_min:
+                continue
+            if ndet_max is not None and n > ndet_max:
+                continue
+
+            # Filter kích thước bbox (ít nhất 1 bbox thỏa mãn)
+            dim_on = any(v is not None for v in (area_min, area_max,
+                                                  w_min, w_max, h_min, h_max))
+            if dim_on:
+                boxes = data.get("boxes", [])
+                if not boxes:
+                    continue
+                match = False
+                for box in boxes:
+                    bw, bh = box[5], box[6]
+                    area = bw * bh
+                    if area_min is not None and area < area_min: continue
+                    if area_max is not None and area > area_max: continue
+                    if w_min is not None and bw < w_min: continue
+                    if w_max is not None and bw > w_max: continue
+                    if h_min is not None and bh < h_min: continue
+                    if h_max is not None and bh > h_max: continue
+                    match = True
+                    break
+                if not match:
+                    continue
+
+            # Filter must-have / must-not labels
+            if must_have_ids and not must_have_ids.issubset(detected_cls):
+                continue
+            if must_not_ids and must_not_ids.intersection(detected_cls):
+                continue
+
+            result.append(f)
+        return result
+
+    # ============================================================= GRID PANEL ==
+
+    def _build_grid_panel(self):
+        """Xây dựng filmstrip grid panel (bên phải, luôn hiển thị)."""
+        parent = self._grid_outer
+
+        # ── Nav bar (bottom) ───────────────────────────────────────────────
+        nav = Frame(parent, bg=CARD, pady=4)
+        nav.pack(side=BOTTOM, fill=X)
+
+        Button(nav, text="◀  Trước", width=8,
+               command=lambda: self._go_grid_page(-1),
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", relief=FLAT, font=F_MAIN
+               ).pack(side=LEFT, padx=(6, 4))
+
+        self._grid_nav_lbl = Label(nav, text="—", bg=CARD, fg=TEXT, font=F_BOLD)
+        self._grid_nav_lbl.pack(side=LEFT, expand=True)
+
+        Button(nav, text="Sau  ▶", width=8,
+               command=lambda: self._go_grid_page(1),
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", relief=FLAT, font=F_MAIN
+               ).pack(side=RIGHT, padx=(4, 6))
+
+        # ── Toolbar (cols + size) ──────────────────────────────────────────
+        gtb = Frame(parent, bg=CARD, padx=6, pady=3)
+        gtb.pack(side=BOTTOM, fill=X)
+
+        Label(gtb, text="Cột:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        spn = Spinbox(gtb, from_=1, to=8, textvariable=self._grid_cols_var,
+                      width=2, bg="#16162a", fg=TEXT, insertbackground=TEXT,
+                      buttonbackground=ACCENT2, relief="flat", font=F_MAIN,
+                      command=self._schedule_grid_rebuild)
+        spn.bind("<Return>",   lambda e: self._schedule_grid_rebuild())
+        spn.bind("<FocusOut>", lambda e: self._schedule_grid_rebuild())
+        spn.pack(side=LEFT, padx=(2, 10))
+
+        Label(gtb, text="W:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        self._grid_w_spn = Spinbox(gtb, from_=80, to=400, increment=20,
+                                   width=4, bg="#16162a", fg=TEXT,
+                                   insertbackground=TEXT,
+                                   buttonbackground=ACCENT2, relief="flat",
+                                   font=F_MAIN,
+                                   command=self._on_grid_size_change)
+        self._grid_w_spn.delete(0, END)
+        self._grid_w_spn.insert(0, str(self._grid_thumb_w))
+        self._grid_w_spn.bind("<Return>",   lambda e: self._on_grid_size_change())
+        self._grid_w_spn.bind("<FocusOut>", lambda e: self._on_grid_size_change())
+        self._grid_w_spn.pack(side=LEFT, padx=(2, 0))
+
+        # ── Scrollable grid area ───────────────────────────────────────────
+        grid_area = Frame(parent, bg="#0d0d1e")
+        grid_area.pack(fill=BOTH, expand=True)
+
+        self._grid_canvas = Canvas(grid_area, bg="#0d0d1e", highlightthickness=0)
+        gsb = Scrollbar(grid_area, orient=VERTICAL, command=self._grid_canvas.yview)
+        gsb.pack(side=RIGHT, fill=Y)
+        self._grid_canvas.config(yscrollcommand=gsb.set)
+        self._grid_canvas.pack(side=LEFT, fill=BOTH, expand=True)
+
+        self._grid_inner = Frame(self._grid_canvas, bg="#0d0d1e")
+        self._grid_canvas_win = self._grid_canvas.create_window(
+            (0, 0), window=self._grid_inner, anchor="nw")
+
+        self._grid_inner.bind("<Configure>", lambda e:
+            self._grid_canvas.configure(
+                scrollregion=self._grid_canvas.bbox("all")))
+        self._grid_canvas.bind("<Configure>", lambda e:
+            self._grid_canvas.itemconfig(self._grid_canvas_win, width=e.width))
+
+        def _scroll(e):
+            self._grid_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        self._grid_canvas.bind("<MouseWheel>", _scroll)
+        self._grid_inner.bind("<MouseWheel>", _scroll)
+
+    def _on_grid_size_change(self):
+        try:
+            w = int(self._grid_w_spn.get())
+            self._grid_thumb_w = max(80, min(400, w))
+            self._grid_thumb_h = int(self._grid_thumb_w * 0.625)
+        except (ValueError, AttributeError):
+            pass
+        self._grid_rendered_cache.clear()
+        self._schedule_grid_rebuild()
+
+    def _go_grid_page(self, delta: int):
+        if not self.image_list:
+            return
+        n_cols   = max(1, self._grid_cols_var.get())
+        per_page = n_cols * 4
+        total    = len(self.image_list)
+        max_page = max(0, (total - 1) // per_page)
+        self._grid_page = max(0, min(max_page, self._grid_page + delta))
+        self._rebuild_grid()
+
+    def _schedule_grid_rebuild(self):
+        if self._grid_rebuild_after:
+            self.after_cancel(self._grid_rebuild_after)
+        self._grid_rebuild_after = self.after(200, self._rebuild_grid)
+
+    def _rebuild_grid(self):
+        if not hasattr(self, "_grid_inner"):
+            return
+
+        for w in self._grid_inner.winfo_children():
+            w.destroy()
+        self._grid_cells.clear()
+
+        files    = self.image_list
+        n_cols   = max(1, self._grid_cols_var.get())
+        per_page = n_cols * 4
+        total    = len(files)
+
+        if not total:
+            self._grid_nav_lbl.config(text="—")
+            Label(self._grid_inner, text="Không có ảnh",
+                  bg="#0d0d1e", fg=DIM, font=F_MAIN).grid(
+                  row=0, column=0, pady=20)
+            return
+
+        max_page = max(0, (total - 1) // per_page)
+        self._grid_page = max(0, min(max_page, self._grid_page))
+
+        start      = self._grid_page * per_page
+        end        = min(start + per_page, total)
+        page_files = files[start:end]
+
+        self._grid_nav_lbl.config(
+            text=f"Trang {self._grid_page + 1}/{max_page + 1}  ({total} ảnh)")
+
+        # Auto-calculate thumb width from panel width
+        canvas_w = self._grid_canvas.winfo_width() or 500
+        pad = 4
+        tw = max(100, (canvas_w - pad * (n_cols + 1) - 14) // n_cols)
+        th = max(64,  int(tw * 0.625))
+        if self._grid_thumb_w != tw or self._grid_thumb_h != th:
+            self._grid_rendered_cache.clear()
+        self._grid_thumb_w, self._grid_thumb_h = tw, th
+
+        blank_img = self._make_blank_thumb(tw, th)
+
+        for fi_off, fpath in enumerate(page_files):
+            row, col = divmod(fi_off, n_cols)
+            is_cur   = (fpath == self.current_image_path)
+            border   = ACCENT if is_cur else "#2a2a3e"
+
+            cell = Frame(self._grid_inner, bg=border, padx=2, pady=2,
+                         cursor="hand2")
+            cell.grid(row=row, column=col, padx=3, pady=3, sticky="nw")
+
+            img_lbl = Label(cell, image=blank_img, bg="#1a1a2e", bd=0)
+            img_lbl.pack()
+
+            det_data = self._det_cache.get(fpath)
+            fname    = os.path.basename(fpath)
+            n_suffix = (f" [{det_data['n']}]" if det_data is not None else "")
+            if len(fname) > 22:
+                fname = fname[:20] + "…"
+            fn_lbl = Label(cell, text=fname + n_suffix, bg="#111130",
+                           fg="#9090bb", font=("Consolas", 7), anchor=W, padx=2)
+            fn_lbl.pack(fill=X)
+
+            state = _path_review_state(fpath)
+            if state == "correct":
+                indicator = Label(cell, text="✔", bg="#1a3a1a",
+                                  fg=SUCCESS, font=F_MAIN)
+                indicator.pack(fill=X)
+            elif state == "incorrect":
+                indicator = Label(cell, text="✖", bg="#3a1a1a",
+                                  fg="#e06060", font=F_MAIN)
+                indicator.pack(fill=X)
+
+            for widget in (cell, img_lbl, fn_lbl):
+                widget.bind("<Button-1>",
+                            lambda e, p=fpath: self._grid_click(p))
+                widget.bind("<MouseWheel>", lambda e: (
+                    self._grid_canvas.yview_scroll(
+                        int(-1 * (e.delta / 120)), "units")))
+
+            self._grid_cells.append({
+                "path": fpath, "frame": cell, "img_lbl": img_lbl,
+                "fn_lbl": fn_lbl, "rendered": False
+            })
+
+        for c in range(n_cols):
+            self._grid_inner.columnconfigure(c, weight=1)
+
+        self._grid_canvas.update_idletasks()
+        self._grid_canvas.configure(scrollregion=self._grid_canvas.bbox("all"))
+        self._grid_canvas.yview_moveto(0)
+
+        self._grid_render_idx = 0
+        self._schedule_film_render()
+
+    def _make_blank_thumb(self, tw: int, th: int):
+        if not _PIL_OK:
+            return None
+        blank = Image.new("RGB", (tw, th), "#1a1a2e")
+        return ImageTk.PhotoImage(blank)
+
+    def _schedule_film_render(self):
+        BATCH = 10
+        end = min(self._grid_render_idx + BATCH, len(self._grid_cells))
+        for cell in self._grid_cells[self._grid_render_idx:end]:
+            if not cell["rendered"]:
+                pil = self._render_grid_thumb(cell["path"])
+                if pil is not None:
+                    try:
+                        tk_img = ImageTk.PhotoImage(pil)
+                        cell["img_lbl"].config(image=tk_img, width=0, height=0)
+                        cell["img_lbl"]._tk_img = tk_img
+                    except Exception:
+                        pass
+                cell["rendered"] = True
+        self._grid_render_idx = end
+        if end < len(self._grid_cells):
+            self.after(40, self._schedule_film_render)
+
+    def _render_grid_thumb(self, img_path: str):
+        """Thumbnail với bbox overlay từ detect cache."""
+        if not _PIL_OK:
+            return None
+        tw, th   = self._grid_thumb_w, self._grid_thumb_h
+        in_cache = img_path in self._det_cache
+        lw       = max(1, self.v_line_width.get())
+        cache_key = (img_path, tw, th, in_cache, lw)
+        if cache_key in self._grid_rendered_cache:
+            return self._grid_rendered_cache[cache_key]
+        try:
+            pil = Image.open(img_path).convert("RGB")
+        except Exception:
+            return None
+        data = self._det_cache.get(img_path)
+        if data and data["n"] > 0:
+            from PIL import ImageDraw as _ID
+            drw = _ID.Draw(pil)
+            iw, ih = pil.size
+            for box in data["boxes"]:
+                cid, cx_n, cy_n, w_n, h_n = box[0], box[1], box[2], box[3], box[4]
+                x1 = max(0, int((cx_n - w_n / 2) * iw))
+                y1 = max(0, int((cy_n - h_n / 2) * ih))
+                x2 = min(iw - 1, int((cx_n + w_n / 2) * iw))
+                y2 = min(ih - 1, int((cy_n + h_n / 2) * ih))
+                color = _THUMB_PALETTE[cid % len(_THUMB_PALETTE)]
+                drw.rectangle([x1, y1, x2, y2], outline=color, width=lw)
+        pil.thumbnail((tw, th), Image.Resampling.LANCZOS)
+        bg_img = Image.new("RGB", (tw, th), "#1a1a2e")
+        ox = (tw - pil.width) // 2
+        oy = (th - pil.height) // 2
+        bg_img.paste(pil, (ox, oy))
+        self._grid_rendered_cache[cache_key] = bg_img
+        return bg_img
+
+    def _grid_click(self, fpath: str):
+        """Click thumbnail → điều hướng đến ảnh đó."""
+        if fpath == self.current_image_path:
+            return
+        self._open_image(fpath)
+
+    def _update_filmstrip(self):
+        """Cập nhật highlight; chuyển trang nếu current image không ở trang hiện tại."""
+        if not self.image_list or not hasattr(self, "_grid_inner"):
+            return
+        n_cols   = max(1, self._grid_cols_var.get())
+        per_page = n_cols * 4
+        if self.current_image_path in self.image_list:
+            fi           = self.image_list.index(self.current_image_path)
+            target_page  = fi // per_page
+            if target_page != self._grid_page:
+                self._grid_page = target_page
+                self._rebuild_grid()
+                return
+        # Same page — just update borders
+        for cell in self._grid_cells:
+            is_cur = (cell["path"] == self.current_image_path)
+            try:
+                cell["frame"].config(bg=ACCENT if is_cur else "#2a2a3e")
+            except Exception:
+                pass
+
     # =========================================================== DETECTION ==
 
     def _sync_slider_labels(self):
@@ -1170,6 +1899,55 @@ class YoloTab(Frame):
     def _get_sel_classes(self):
         sel_idx = self.lb_classes.curselection()
         return [self.class_ids[i] for i in sel_idx] if sel_idx else None
+
+    def _cache_single_result(self, img_path: str, results):
+        """Ghi kết quả detect vào _det_cache và refresh grid cell tương ứng."""
+        boxes_obj = results[0].boxes
+        classes_count = {}
+        box_list = []
+        if boxes_obj is not None and len(boxes_obj):
+            for box in boxes_obj:
+                cid = int(box.cls[0])
+                classes_count[cid] = classes_count.get(cid, 0) + 1
+                cx_n, cy_n, w_n, h_n = box.xywhn[0].tolist()
+                w_px = float(box.xywh[0][2])
+                h_px = float(box.xywh[0][3])
+                box_list.append((cid, cx_n, cy_n, w_n, h_n, w_px, h_px))
+        self._det_cache[img_path] = {
+            "n": len(box_list), "classes": classes_count, "boxes": box_list
+        }
+        # Xóa thumbnail cache của ảnh này để render lại với bbox mới
+        for key in list(self._grid_rendered_cache.keys()):
+            if key[0] == img_path:
+                del self._grid_rendered_cache[key]
+        self._refresh_grid_cell(img_path)
+
+    def _refresh_grid_cell(self, img_path: str):
+        """Re-render thumbnail + label cho đúng 1 cell, không rebuild toàn grid."""
+        if not hasattr(self, "_grid_cells"):
+            return
+        for cell in self._grid_cells:
+            if cell["path"] != img_path:
+                continue
+            pil = self._render_grid_thumb(img_path)
+            if pil is not None and _PIL_OK:
+                try:
+                    tk_img = ImageTk.PhotoImage(pil)
+                    cell["img_lbl"].config(image=tk_img, width=0, height=0)
+                    cell["img_lbl"]._tk_img = tk_img
+                    cell["rendered"] = True
+                except Exception:
+                    pass
+            det_data = self._det_cache.get(img_path)
+            fname    = os.path.basename(img_path)
+            if len(fname) > 22:
+                fname = fname[:20] + "…"
+            n_suffix = (f" [{det_data['n']}]" if det_data is not None else "")
+            try:
+                cell["fn_lbl"].config(text=fname + n_suffix)
+            except Exception:
+                pass
+            break
 
     def _run_model(self, mdl, image_path, sel_cls):
         conf = max(self.v_conf_thresh.get(), self.slider_conf.get())
@@ -1196,8 +1974,10 @@ class YoloTab(Frame):
         return 0, ""
 
     def _on_plot_param_change(self):
+        self._grid_rendered_cache.clear()
         if self.current_image_path and self.model:
             self._detect_and_display()
+        self._schedule_grid_rebuild()
 
     def _annotated_to_pil(self, results):
         annotated = results[0].plot(
@@ -1223,6 +2003,8 @@ class YoloTab(Frame):
             sel_cls = self._get_sel_classes()
             results1 = self._run_model(self.model, self.current_image_path, sel_cls)
             n_det, summary = self._results_summary(results1, self.model.names)
+
+            self._cache_single_result(self.current_image_path, results1)
 
             pil1, ann1_bgr = self._annotated_to_pil(results1)
             self._last_annotated_bgr = ann1_bgr

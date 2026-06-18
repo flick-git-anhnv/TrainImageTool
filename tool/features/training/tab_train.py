@@ -115,6 +115,7 @@ class TrainTab(Frame):
         self._history_win  = None
         self._ckpt_win     = None
         self._aug_win      = None
+        self._miss_win     = None
 
         self._build()
 
@@ -346,6 +347,12 @@ class TrainTab(Frame):
 
         Button(ctrl, text="📈  Phân tích",
                command=self._analyze_results,
+               bg=ACCENT2, fg="white",
+               activebackground=ACCENT, activeforeground="white",
+               font=F_BOLD, relief="flat", padx=14, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+
+        Button(ctrl, text="🔍  Miss Analysis",
+               command=self._open_miss_analysis,
                bg=ACCENT2, fg="white",
                activebackground=ACCENT, activeforeground="white",
                font=F_BOLD, relief="flat", padx=14, cursor="hand2").pack(side=LEFT, padx=(8, 0))
@@ -1899,3 +1906,405 @@ class TrainTab(Frame):
             self._gloss_train_frame.pack(fill=X)
             self._gloss_train_toggle_btn.config(text="ℹ  Giải thích thuật ngữ  ▴")
             self._gloss_train_open.set(True)
+
+    # ── Miss Detection Analysis ───────────────────────────────────────────────
+
+    def _open_miss_analysis(self):
+        """Cửa sổ phân tích False Negative (bị bỏ sót) theo class."""
+        if self._miss_win and self._miss_win.winfo_exists():
+            self._miss_win.lift()
+            return
+
+        win = Toplevel(self.root)
+        win.title("KZTEK – Miss Detection Analysis")
+        win.geometry("820x660")
+        win.configure(bg=BG)
+        win.resizable(True, True)
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+        self._miss_win = win
+
+        # ── Config ────────────────────────────────────────────────────
+        cfg = Frame(win, bg=CARD, padx=12, pady=10)
+        cfg.pack(fill=X, padx=8, pady=(8, 4))
+        cfg.columnconfigure(1, weight=1)
+
+        Label(cfg, text="Phân tích ảnh bị bỏ sót (False Negative) theo class",
+              bg=CARD, fg=TEXT, font=F_BOLD).grid(
+                  row=0, column=0, columnspan=3, sticky=W, pady=(0, 8))
+
+        miss_model_var = StringVar()
+        best_pt = os.path.join(self._output_dir, "weights", "best.pt") if self._output_dir else ""
+        if best_pt and os.path.isfile(best_pt):
+            miss_model_var.set(best_pt)
+
+        miss_img_var = StringVar()
+        miss_lbl_var = StringVar()
+
+        def _pick_model():
+            p = filedialog.askopenfilename(
+                title="Chọn model .pt",
+                filetypes=[("PyTorch model", "*.pt"), ("All", "*.*")],
+                initialdir=str(Path(miss_model_var.get()).parent)
+                           if miss_model_var.get() and os.path.isfile(miss_model_var.get()) else ".")
+            if p:
+                miss_model_var.set(p)
+
+        def _pick_imgs():
+            p = filedialog.askdirectory(title="Chọn thư mục val/images",
+                                        initialdir=miss_img_var.get() or ".")
+            if p:
+                miss_img_var.set(p)
+                cand = str(Path(p).parent / "labels")
+                if os.path.isdir(cand):
+                    miss_lbl_var.set(cand)
+
+        def _pick_lbls():
+            p = filedialog.askdirectory(title="Chọn thư mục val/labels",
+                                        initialdir=miss_lbl_var.get() or miss_img_var.get() or ".")
+            if p:
+                miss_lbl_var.set(p)
+
+        for row, (lbl_txt, var, cmd) in enumerate([
+            ("Model (.pt):",  miss_model_var, _pick_model),
+            ("Val images:",   miss_img_var,   _pick_imgs),
+            ("Val labels:",   miss_lbl_var,   _pick_lbls),
+        ], start=1):
+            Label(cfg, text=lbl_txt, bg=CARD, fg=DIM, font=F_MAIN,
+                  width=14, anchor=W).grid(row=row, column=0, sticky=W, pady=3)
+            Entry(cfg, textvariable=var, bg="#16162a", fg=TEXT,
+                  insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).grid(
+                      row=row, column=1, sticky=EW, padx=(8, 4))
+            Button(cfg, text="…", command=cmd,
+                   bg=ACCENT2, fg="white", font=F_MAIN, relief="flat",
+                   padx=8, cursor="hand2").grid(row=row, column=2)
+
+        pr = Frame(cfg, bg=CARD)
+        pr.grid(row=4, column=0, columnspan=3, sticky=W, pady=(8, 0))
+        miss_conf_var = StringVar(value="0.25")
+        miss_iou_var  = StringVar(value="0.3")
+        miss_max_var  = StringVar(value="80")
+        miss_cls_var  = StringVar(value=self._labels_var.get())
+        for lbl_t, var, w in [("Conf:", miss_conf_var, 5),
+                               ("IoU:",  miss_iou_var,  5),
+                               ("Max save:", miss_max_var, 5)]:
+            Label(pr, text=lbl_t, bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+            Entry(pr, textvariable=var, bg="#16162a", fg=TEXT,
+                  insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4,
+                  width=w).pack(side=LEFT, padx=(4, 12))
+        Label(pr, text="Classes:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Entry(pr, textvariable=miss_cls_var, bg="#16162a", fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4,
+              width=32).pack(side=LEFT, padx=(4, 0))
+        Label(pr, text="  (để trống = tất cả)", bg=CARD, fg=DIM,
+              font=("Segoe UI", 7, "italic")).pack(side=LEFT)
+
+        # ── Controls ──────────────────────────────────────────────────
+        ctrl_row = Frame(win, bg=BG, padx=8, pady=4)
+        ctrl_row.pack(fill=X)
+        miss_run_btn = Button(ctrl_row, text="▶  Chạy phân tích",
+                              bg="#2e7d32", fg="white",
+                              activebackground="#1b5e20", activeforeground="white",
+                              font=F_BOLD, relief="flat", padx=16, cursor="hand2")
+        miss_run_btn.pack(side=LEFT)
+        miss_open_btn = Button(ctrl_row, text="📂  Mở thư mục",
+                               bg=ACCENT2, fg="white",
+                               activebackground=ACCENT, activeforeground="white",
+                               font=F_MAIN, relief="flat", padx=12, cursor="hand2",
+                               state=DISABLED)
+        miss_open_btn.pack(side=LEFT, padx=(8, 0))
+        miss_status = Label(ctrl_row, text="", bg=BG, fg=DIM, font=F_MAIN)
+        miss_status.pack(side=LEFT, padx=12)
+
+        pb_f = Frame(win, bg=BG, padx=8)
+        pb_f.pack(fill=X)
+        miss_pb = ttk.Progressbar(pb_f, maximum=100)
+        miss_pb.pack(fill=X, pady=(2, 4))
+
+        # ── Results table ─────────────────────────────────────────────
+        res_f = Frame(win, bg=BG, padx=8)
+        res_f.pack(fill=BOTH, expand=True, pady=(4, 0))
+        cols = ("cls", "total", "missed", "rate",
+                "tiny", "small", "med", "large", "avg_sz")
+        miss_tree = ttk.Treeview(res_f, columns=cols, show="headings",
+                                  style="Dark.Treeview", height=10)
+        for col, hdr, w, anc in [
+            ("cls",    "Class",      120, W),
+            ("total",  "Tổng GT",     70, CENTER),
+            ("missed", "Missed",      70, CENTER),
+            ("rate",   "Miss %",      80, CENTER),
+            ("tiny",   "Tiny <2%",    80, CENTER),
+            ("small",  "Small 2-5%",  80, CENTER),
+            ("med",    "Med 5-15%",   80, CENTER),
+            ("large",  "Large >15%",  80, CENTER),
+            ("avg_sz", "Avg size%",   80, CENTER),
+        ]:
+            miss_tree.heading(col, text=hdr)
+            miss_tree.column(col, width=w, anchor=anc, stretch=(col == "cls"))
+        vsb = ttk.Scrollbar(res_f, orient=VERTICAL,   command=miss_tree.yview)
+        hsb = ttk.Scrollbar(res_f, orient=HORIZONTAL, command=miss_tree.xview)
+        miss_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        vsb.pack(side=RIGHT, fill=Y)
+        hsb.pack(side=BOTTOM, fill=X)
+        miss_tree.pack(fill=BOTH, expand=True)
+        miss_tree.tag_configure("ok",   foreground=SUCCESS)
+        miss_tree.tag_configure("warn", foreground="#f0c040")
+        miss_tree.tag_configure("bad",  foreground="#f05050")
+
+        sum_lbl = Label(win, text="", bg=BG, fg=DIM,
+                        font=("Consolas", 9), anchor=W, padx=8)
+        sum_lbl.pack(fill=X, pady=(2, 6))
+
+        miss_out_dir = [None]
+
+        def _do_run():
+            model_path = miss_model_var.get().strip()
+            img_dir    = miss_img_var.get().strip()
+            lbl_dir    = miss_lbl_var.get().strip()
+            if not model_path or not os.path.isfile(model_path):
+                messagebox.showwarning("Thiếu model", "Chọn file model .pt hợp lệ.", parent=win)
+                return
+            if not img_dir or not os.path.isdir(img_dir):
+                messagebox.showwarning("Thiếu val images", "Chọn thư mục val/images.", parent=win)
+                return
+            if not lbl_dir:
+                lbl_dir = str(Path(img_dir).parent / "labels")
+            if not os.path.isdir(lbl_dir):
+                messagebox.showwarning("Thiếu labels",
+                                       f"Không tìm thấy thư mục labels:\n{lbl_dir}", parent=win)
+                return
+            try:
+                conf_v    = float(miss_conf_var.get())
+                iou_v     = float(miss_iou_var.get())
+                max_save  = int(miss_max_var.get())
+            except ValueError:
+                conf_v, iou_v, max_save = 0.25, 0.3, 80
+            cls_filter = [c.strip() for c in
+                          miss_cls_var.get().replace(",", " ").split() if c.strip()]
+            out_dir = os.path.normpath(
+                os.path.join(self._output_dir if self._output_dir else img_dir,
+                             "missed_analysis"))
+            miss_out_dir[0] = out_dir
+            miss_run_btn.config(state=DISABLED)
+            miss_open_btn.config(state=DISABLED)
+            miss_pb["value"] = 0
+            miss_status.config(text="Đang chạy…", fg=ACCENT)
+            for iid in miss_tree.get_children():
+                miss_tree.delete(iid)
+            sum_lbl.config(text="")
+            threading.Thread(
+                target=self._run_miss_analysis,
+                args=(model_path, img_dir, lbl_dir, out_dir, conf_v, iou_v,
+                      max_save, cls_filter, miss_pb, miss_status, miss_tree,
+                      sum_lbl, miss_run_btn, miss_open_btn),
+                daemon=True).start()
+
+        def _open_out():
+            d = miss_out_dir[0]
+            if d and os.path.isdir(d):
+                subprocess.Popen(["explorer", os.path.normpath(d)])
+            else:
+                messagebox.showinfo("Chưa có kết quả", "Chạy phân tích trước.", parent=win)
+
+        miss_run_btn.config(command=_do_run)
+        miss_open_btn.config(command=_open_out)
+        win.lift()
+        win.focus_set()
+
+    def _run_miss_analysis(self, model_path, img_dir, lbl_dir, out_dir,
+                            conf, iou_thresh, max_save, cls_filter,
+                            pb, status_lbl, tree, sum_lbl, run_btn, open_btn):
+        """Thread: batch predict → tính FN per class → lưu ảnh → cập nhật UI."""
+        def _ui(fn):
+            self.root.after(0, fn)
+
+        try:
+            import cv2 as _cv2
+            from ultralytics import YOLO as _YOLO
+        except ImportError as exc:
+            _ui(lambda e=str(exc): status_lbl.config(text=f"Lỗi import: {e}", fg="#f05050"))
+            _ui(lambda: run_btn.config(state=NORMAL))
+            return
+
+        _ui(lambda: status_lbl.config(text="Đang load model…", fg=ACCENT))
+        _ui(lambda: pb.config(value=5))
+
+        try:
+            model = _YOLO(model_path)
+        except Exception as exc:
+            _ui(lambda e=str(exc): status_lbl.config(text=f"Lỗi load model: {e}", fg="#f05050"))
+            _ui(lambda: run_btn.config(state=NORMAL))
+            return
+
+        names = model.names  # {0: 'car', ...}
+        target_ids = ([cid for cid, nm in names.items() if nm in cls_filter]
+                      if cls_filter else list(names.keys()))
+        if not target_ids:
+            target_ids = list(names.keys())
+
+        _EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+        img_paths = [p for p in Path(img_dir).iterdir()
+                     if p.is_file() and p.suffix.lower() in _EXTS]
+        target_imgs = []
+        for ip in img_paths:
+            lp = Path(lbl_dir) / (ip.stem + ".txt")
+            if not lp.exists():
+                continue
+            try:
+                with open(lp) as f:
+                    classes = [int(l.split()[0]) for l in f if l.strip()]
+            except Exception:
+                continue
+            if any(c in target_ids for c in classes):
+                target_imgs.append(ip)
+
+        total_imgs = len(target_imgs)
+        _ui(lambda n=total_imgs: status_lbl.config(
+            text=f"Tìm thấy {n} ảnh có target classes…", fg=DIM))
+
+        if not target_imgs:
+            _ui(lambda: status_lbl.config(text="Không có ảnh nào!", fg="#f0c040"))
+            _ui(lambda: run_btn.config(state=NORMAL))
+            return
+
+        stats = {cid: {"name": names[cid], "total": 0, "missed": 0,
+                       "sizes": [], "cases": []}
+                 for cid in target_ids}
+
+        def _iou(b1, b2):
+            ix1 = max(b1[0], b2[0]); iy1 = max(b1[1], b2[1])
+            ix2 = min(b1[2], b2[2]); iy2 = min(b1[3], b2[3])
+            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+            a1 = (b1[2]-b1[0])*(b1[3]-b1[1])
+            a2 = (b2[2]-b2[0])*(b2[3]-b2[1])
+            return inter / (a1 + a2 - inter + 1e-9)
+
+        def _to_xyxy(cx, cy, w, h, W, H):
+            return [int((cx-w/2)*W), int((cy-h/2)*H),
+                    int((cx+w/2)*W), int((cy+h/2)*H)]
+
+        import time as _time
+
+        def _fmt_sec(s):
+            s = int(s)
+            return f"{s//3600}h{(s%3600)//60:02d}m" if s >= 3600 else f"{s//60}m{s%60:02d}s"
+
+        t_start = _time.monotonic()
+        BATCH = 32
+        for i in range(0, total_imgs, BATCH):
+            batch = target_imgs[i:i+BATCH]
+            try:
+                results = model(batch, conf=conf, verbose=False)
+            except Exception as exc:
+                _ui(lambda e=str(exc): status_lbl.config(text=f"Lỗi inference: {e}", fg="#f05050"))
+                break
+
+            for img_path, result in zip(batch, results):
+                lp = Path(lbl_dir) / (img_path.stem + ".txt")
+                img_tmp = _cv2.imread(str(img_path))
+                if img_tmp is None:
+                    continue
+                H_img, W_img = img_tmp.shape[:2]
+                gt = {cid: [] for cid in target_ids}
+                try:
+                    with open(lp) as f:
+                        for line in f:
+                            parts = line.strip().split()
+                            if len(parts) < 5:
+                                continue
+                            cid = int(parts[0])
+                            if cid in target_ids:
+                                gt[cid].append(_to_xyxy(*map(float, parts[1:5]),
+                                                        W_img, H_img))
+                except Exception:
+                    pass
+                pred = {cid: [] for cid in target_ids}
+                for box in result.boxes:
+                    cid = int(box.cls)
+                    if cid in target_ids:
+                        pred[cid].append(box.xyxy[0].tolist())
+                for cid in target_ids:
+                    for g in gt[cid]:
+                        stats[cid]["total"] += 1
+                        if not any(_iou(g, p) >= iou_thresh for p in pred[cid]):
+                            stats[cid]["missed"] += 1
+                            x1, y1, x2, y2 = g
+                            stats[cid]["sizes"].append(
+                                (x2-x1)*(y2-y1)/(W_img*H_img)*100)
+                            if len(stats[cid]["cases"]) < max_save:
+                                stats[cid]["cases"].append(
+                                    (str(img_path), g,
+                                     {c: list(pred[c]) for c in target_ids}))
+
+            pct  = min(100, int((i + BATCH) / total_imgs * 100))
+            done = min(i + BATCH, total_imgs)
+            elapsed = _time.monotonic() - t_start
+            eta     = (elapsed / done * (total_imgs - done)) if done > 0 else 0
+            _ui(lambda v=pct: pb.config(value=v))
+            _ui(lambda d=done, el=elapsed, et=eta: status_lbl.config(
+                text=f"Inference {d}/{total_imgs} ({d*100//total_imgs}%)"
+                     f"  ⏱ {_fmt_sec(el)} / ETA {_fmt_sec(et)}",
+                fg=DIM))
+
+        # Save annotated images
+        _ui(lambda: status_lbl.config(text="Đang lưu ảnh missed…", fg=DIM))
+        import os as _os
+        _os.makedirs(out_dir, exist_ok=True)
+        COLORS = [(0, 165, 255), (0, 255, 0), (255, 165, 0),
+                  (255, 0, 255), (0, 255, 255), (255, 255, 0)]
+        for idx, cid in enumerate(target_ids):
+            cls_name = stats[cid]["name"]
+            cls_out  = _os.path.join(out_dir, cls_name + "_missed")
+            _os.makedirs(cls_out, exist_ok=True)
+            for img_path, gt_box, all_preds in stats[cid]["cases"]:
+                img = _cv2.imread(img_path)
+                if img is None:
+                    continue
+                x1, y1, x2, y2 = [int(v) for v in gt_box]
+                _cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                _cv2.putText(img, f"MISSED {cls_name}", (x1, max(y1-8, 16)),
+                             _cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                for ci, (c, preds) in enumerate(all_preds.items()):
+                    color = COLORS[ci % len(COLORS)]
+                    for p in preds:
+                        _cv2.rectangle(img,
+                                       (int(p[0]), int(p[1])),
+                                       (int(p[2]), int(p[3])), color, 2)
+                _cv2.imwrite(_os.path.join(cls_out,
+                                           Path(img_path).stem + "_miss.jpg"), img)
+
+        def _refresh_tree():
+            for iid in tree.get_children():
+                tree.delete(iid)
+            parts = []
+            for cid in sorted(target_ids, key=lambda c: names[c]):
+                s    = stats[cid]
+                tot  = s["total"]
+                miss = s["missed"]
+                rate = (miss / tot * 100) if tot else 0.0
+                szs  = s["sizes"]
+                if szs:
+                    tiny  = sum(1 for x in szs if x < 2)
+                    small = sum(1 for x in szs if 2 <= x < 5)
+                    med   = sum(1 for x in szs if 5 <= x < 15)
+                    large = sum(1 for x in szs if x >= 15)
+                    avg   = sum(szs) / len(szs)
+                else:
+                    tiny = small = med = large = 0
+                    avg  = 0.0
+                tag = "ok" if rate < 5 else ("warn" if rate < 20 else "bad")
+                tree.insert("", END,
+                            values=(s["name"], tot, miss, f"{rate:.1f}%",
+                                    tiny, small, med, large, f"{avg:.1f}%"),
+                            tags=(tag,))
+                parts.append(f"{s['name']}: {miss}/{tot} ({rate:.1f}%)")
+            elapsed_total = _time.monotonic() - t_start
+            sum_lbl.config(
+                text="  " + "   |   ".join(parts) if parts else "", fg=DIM)
+            pb.config(value=100)
+            status_lbl.config(
+                text=f"✔  Hoàn tất trong {_fmt_sec(elapsed_total)} — ảnh lưu tại: {out_dir}",
+                fg=SUCCESS)
+            run_btn.config(state=NORMAL)
+            open_btn.config(state=NORMAL)
+
+        _ui(_refresh_tree)

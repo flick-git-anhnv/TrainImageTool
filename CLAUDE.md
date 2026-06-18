@@ -36,12 +36,13 @@
 | `tool/utils/` | Widget/tiện ích dùng chung: BadImageViewer, migrate_structure |
 | `.kztek_tools_settings.json` | Persistence tất cả cài đặt người dùng |
 
-### 12 Tab hiện có
+### 15 Tab hiện có
 
 ```
 ✂ Split | ✏ Rename | 🖼 Crop | ⚙ LabelNorm | 🖊 BBox Editor
-🅻 LotteImage | 🅿 Parkingv8Image | ✔ Checker | 📊 Stats
-🔎 Plate Search | 🤖 YOLO Detect | 🚀 Train
+📷 iParking Image | ✔ Checker | 📊 Stats | 🔎 Plate Search
+🤖 YOLO Detect | 🚀 Train | 🧠 Classifier | 🔬 LPR Tester
+🅿 Slot Detect | 🧪 Cls Tester
 ```
 
 ### Palette màu (KZTEK brand)

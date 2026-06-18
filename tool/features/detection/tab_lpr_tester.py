@@ -171,6 +171,17 @@ class LprTesterTab(Frame):
         self._gt_btns: dict = {}
         self._gt_filter  = "all"   # gt: all/match/mismatch/no_gt
 
+        # ── 4-point single-image crop state ──────────────────────────────
+        self._lpr4_pts:     list = []
+        self._lpr4_drag_idx      = None
+        self._lpr4_pil           = None   # perspective-warped result
+        self._lpr4_active        = False
+        self._sv_scale           = 1.0
+        self._sv_off_x           = 0
+        self._sv_off_y           = 0
+        self.v_lpr4_line_w       = IntVar(value=2)
+        _bind_cfg("lpr.sv4_line_w", self.v_lpr4_line_w)
+
         self._build()
 
     # ═══════════════════════════════ BUILD ════════════════════════════════
@@ -255,13 +266,19 @@ class LprTesterTab(Frame):
         pic_outer = Frame(parent, bg="#0d0d1a", bd=2, relief="groove", height=300)
         pic_outer.pack(fill=X, padx=8, pady=(2, 2))
         pic_outer.pack_propagate(False)
-        hint = "(Kéo-thả ảnh vào đây  |  Click để chọn file)" if _DND_OK else "(Click để chọn file)"
-        self._pic_vehicle = Label(pic_outer, bg="#0d0d1a", fg=DIM, font=F_MAIN,
-                                   text=hint, cursor="hand2", wraplength=340)
-        self._pic_vehicle.pack(fill=BOTH, expand=True, padx=4, pady=4)
-        self._pic_vehicle.bind("<Button-1>",        lambda e: self._load_image())
-        self._pic_vehicle.bind("<Double-Button-1>", lambda e: _zoom_image_window(
-            self.root, self._pil_single, "Ảnh xe"))
+        hint = "(Kéo-thả ảnh  |  Click để chọn file)" if _DND_OK else "(Click để chọn file)"
+        self._pic_vehicle = Canvas(pic_outer, bg="#0d0d1a", highlightthickness=0,
+                                    cursor="hand2")
+        self._pic_vehicle.pack(fill=BOTH, expand=True)
+        self._pic_vehicle.create_text(200, 140, text=hint, fill=DIM, font=F_MAIN,
+                                       justify=CENTER, tags="hint")
+        self._pic_vehicle.bind("<Button-1>",        self._on_sv_press)
+        self._pic_vehicle.bind("<B1-Motion>",        self._on_sv_drag)
+        self._pic_vehicle.bind("<ButtonRelease-1>",  self._on_sv_release)
+        self._pic_vehicle.bind("<Motion>",           self._on_sv_motion)
+        self._pic_vehicle.bind("<Button-3>",         self._on_sv_rclick)
+        self._pic_vehicle.bind("<Double-Button-1>",  self._on_sv_dbl)
+        self._pic_vehicle.bind("<Configure>",        lambda e: self._render_single())
         if _DND_OK:
             try:
                 self._pic_vehicle.drop_target_register("DND_Files")
@@ -269,6 +286,26 @@ class LprTesterTab(Frame):
                 pic_outer.drop_target_register("DND_Files")
                 pic_outer.dnd_bind("<<Drop>>", self._on_drop)
             except Exception: pass
+
+        # 4pt toolbar
+        pt_bar = Frame(parent, bg=BG)
+        pt_bar.pack(fill=X, padx=8, pady=(1, 0))
+        self._btn_sv4pt = Button(
+            pt_bar, text="◈ 4 điểm",
+            command=self._sv_toggle_4pt,
+            bg=CARD, fg=TEXT, font=F_MAIN, relief="flat",
+            padx=8, pady=3, cursor="hand2",
+            activebackground=ACCENT, activeforeground="white")
+        self._btn_sv4pt.pack(side=LEFT)
+        Frame(pt_bar, bg=DIM, width=1).pack(side=LEFT, fill=Y, padx=(8, 8))
+        Label(pt_bar, text="Nét:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Spinbox(pt_bar, from_=1, to=8, textvariable=self.v_lpr4_line_w,
+                width=2, bg="#16162a", fg=ACCENT, font=("Consolas", 9),
+                buttonbackground=BG, relief="flat", insertbackground=TEXT,
+                command=self._sv_redraw_overlay,
+                state="readonly").pack(side=LEFT, padx=(4, 0))
+        self._sv4pt_lbl = Label(pt_bar, text="", bg=BG, fg=DIM, font=F_MAIN)
+        self._sv4pt_lbl.pack(side=LEFT, padx=(10, 0))
 
         self._img_lbl = Label(parent, text="", bg=BG, fg=DIM,
                                font=F_MONO, wraplength=360, anchor=CENTER)
@@ -615,7 +652,8 @@ class LprTesterTab(Frame):
             self._pil_single  = img.copy()
             self._loaded_path = path
             img.close()
-            self._show_img(self._pic_vehicle, self._pil_single, 400, 290)
+            self._sv_clear_4pt()
+            self.root.after(50, self._render_single)
             self._img_lbl.config(text=os.path.basename(path))
             self._clear_single_result()
             _append_log(self._log, f"✔ Đã tải: {path}")
@@ -635,8 +673,14 @@ class LprTesterTab(Frame):
 
         self._btn_detect.config(state=DISABLED, text="Đang nhận dạng...")
         self._clear_single_result()
-        path     = self._loaded_path
-        pil_copy = self._pil_single.copy() if self._pil_single else None
+        # Nếu 4pt mode đang active và có ảnh warped → gửi ảnh đã crop
+        if self._lpr4_active and self._lpr4_pil:
+            path     = None
+            pil_copy = self._lpr4_pil.copy()
+            _append_log(self._log, "◈ Dùng vùng 4 điểm đã crop")
+        else:
+            path     = self._loaded_path
+            pil_copy = self._pil_single.copy() if self._pil_single else None
         timeout  = self._timeout_var.get()
         mode     = self._detect_mode.get()
         lpr_type = self._type_var.get()
@@ -683,6 +727,7 @@ class LprTesterTab(Frame):
         for v in self._res.values(): v.set("-")
         self._pic_lpr.config(image="", text="(chưa nhận dạng)")
         self._pil_lpr = None
+        self._lpr4_pil = None
 
     # ═══════════════════════════ FOLDER BATCH ═════════════════════════════
 
@@ -1594,6 +1639,193 @@ class LprTesterTab(Frame):
         t = ch[min(len(ch) - 1, idx + 1)]
         self._tree.selection_set(t); self._tree.see(t)
 
+    # ══════════════════════════════════ SINGLE-IMAGE 4-POINT CROP ══════════
+
+    def _render_single(self):
+        if not self._pil_single or not _PIL_OK:
+            return
+        cv = self._pic_vehicle
+        cv.update_idletasks()
+        cw = max(cv.winfo_width(),  100)
+        ch = max(cv.winfo_height(), 100)
+        scale = min(cw / self._pil_single.width, ch / self._pil_single.height)
+        nw = max(1, int(self._pil_single.width  * scale))
+        nh = max(1, int(self._pil_single.height * scale))
+        self._sv_scale  = scale
+        self._sv_off_x  = (cw - nw) // 2
+        self._sv_off_y  = (ch - nh) // 2
+        resized = self._pil_single.resize((nw, nh), Image.LANCZOS)
+        tk_img  = ImageTk.PhotoImage(resized)
+        cv.delete("all")
+        cv.create_image(self._sv_off_x, self._sv_off_y,
+                        anchor=NW, image=tk_img, tags="img")
+        cv._tk_img = tk_img
+        if self._lpr4_active and self._lpr4_pts:
+            self._sv_draw_4pt()
+
+    def _sv_c2i(self, cx, cy):
+        if self._sv_scale == 0:
+            return 0.0, 0.0
+        ix = (cx - self._sv_off_x) / self._sv_scale
+        iy = (cy - self._sv_off_y) / self._sv_scale
+        if self._pil_single:
+            ix = max(0.0, min(float(self._pil_single.width),  ix))
+            iy = max(0.0, min(float(self._pil_single.height), iy))
+        return ix, iy
+
+    def _sv_i2c(self, ix, iy):
+        return (ix * self._sv_scale + self._sv_off_x,
+                iy * self._sv_scale + self._sv_off_y)
+
+    def _sv_pt_hit_test(self, cx, cy):
+        r = max(6, 5 + self.v_lpr4_line_w.get()) + 5
+        for i, (ix, iy) in enumerate(self._lpr4_pts):
+            pcx, pcy = self._sv_i2c(ix, iy)
+            if abs(cx - pcx) <= r and abs(cy - pcy) <= r:
+                return i
+        return None
+
+    def _sv_draw_4pt(self):
+        cv = self._pic_vehicle
+        cv.delete("4pt")
+        n     = len(self._lpr4_pts)
+        pts_c = [self._sv_i2c(ix, iy) for ix, iy in self._lpr4_pts]
+        lw    = max(1, self.v_lpr4_line_w.get())
+        _DOT_COLORS = [ACCENT, "#4fc3f7", "#81c784", "#fff176"]
+
+        if n >= 2:
+            flat = [c for pt in pts_c for c in pt]
+            if n >= 3:
+                cv.create_polygon(flat, outline=ACCENT, fill="",
+                                  width=lw, dash=(5, 3), tags="4pt")
+            else:
+                cv.create_line(flat, fill=ACCENT, width=lw, dash=(5, 3), tags="4pt")
+
+        r = max(6, 5 + lw)
+        for i, (pcx, pcy) in enumerate(pts_c):
+            cv.create_oval(pcx - r, pcy - r, pcx + r, pcy + r,
+                           fill=_DOT_COLORS[i % 4], outline="white", width=1, tags="4pt")
+            cv.create_text(pcx, pcy, text=str(i + 1),
+                           fill="white", font=("Segoe UI", 7, "bold"), tags="4pt")
+
+        if n < 4:
+            self._sv4pt_lbl.config(
+                text=f"{n}/4 điểm  — click để thêm  |  chuột phải: xóa điểm cuối",
+                fg=DIM)
+
+    def _sv_clear_4pt(self):
+        try:
+            self._pic_vehicle.delete("4pt")
+        except Exception:
+            pass
+        self._lpr4_pts     = []
+        self._lpr4_drag_idx = None
+        self._lpr4_pil     = None
+        self._sv4pt_lbl.config(text="")
+
+    def _sv_redraw_overlay(self, _=None):
+        if self._lpr4_active and self._lpr4_pts:
+            self._sv_draw_4pt()
+
+    def _sv_toggle_4pt(self):
+        self._lpr4_active = not self._lpr4_active
+        if self._lpr4_active:
+            self._btn_sv4pt.config(relief="sunken", bg="#252540")
+            self._pic_vehicle.config(cursor="crosshair")
+            self._sv4pt_lbl.config(text="0/4 điểm  — click góc để thêm  |  chuột phải: xóa", fg=DIM)
+        else:
+            self._btn_sv4pt.config(relief="flat", bg=CARD)
+            self._pic_vehicle.config(
+                cursor="crosshair" if self._pil_single else "hand2")
+            self._sv_clear_4pt()
+
+    # ── Canvas events ──────────────────────────────────────────────────────
+
+    def _on_sv_press(self, e):
+        if not self._pil_single:
+            self._load_image(); return
+
+        if self._lpr4_active:
+            # Kéo điểm cũ?
+            if self._lpr4_pts:
+                hit = self._sv_pt_hit_test(e.x, e.y)
+                if hit is not None:
+                    self._lpr4_drag_idx = hit
+                    return
+            # Thêm điểm mới
+            if len(self._lpr4_pts) >= 4:
+                self._sv_clear_4pt()
+            ix, iy = self._sv_c2i(e.x, e.y)
+            self._lpr4_pts.append((ix, iy))
+            self._sv_draw_4pt()
+            if len(self._lpr4_pts) == 4:
+                self._sv_apply_persp()
+
+    def _on_sv_drag(self, e):
+        if not self._lpr4_active or self._lpr4_drag_idx is None:
+            return
+        ix, iy = self._sv_c2i(e.x, e.y)
+        self._lpr4_pts[self._lpr4_drag_idx] = (ix, iy)
+        self._sv_draw_4pt()
+
+    def _on_sv_release(self, e):
+        if not self._lpr4_active or self._lpr4_drag_idx is None:
+            return
+        ix, iy = self._sv_c2i(e.x, e.y)
+        self._lpr4_pts[self._lpr4_drag_idx] = (ix, iy)
+        self._lpr4_drag_idx = None
+        self._sv_draw_4pt()
+        if len(self._lpr4_pts) == 4:
+            self._sv_apply_persp()
+
+    def _on_sv_motion(self, e):
+        if not self._lpr4_active:
+            return
+        hit = self._sv_pt_hit_test(e.x, e.y) if self._lpr4_pts else None
+        self._pic_vehicle.config(cursor="fleur" if hit is not None else "crosshair")
+
+    def _on_sv_rclick(self, e):
+        if self._lpr4_active and self._lpr4_pts:
+            self._lpr4_pts.pop()
+            self._lpr4_pil = None
+            self._sv_draw_4pt()
+
+    def _on_sv_dbl(self, e):
+        target = self._lpr4_pil or self._pil_single
+        if target:
+            _zoom_image_window(self.root, target,
+                               "4-pt crop" if self._lpr4_pil else "Ảnh xe")
+
+    # ── Perspective warp ───────────────────────────────────────────────────
+
+    def _sv_apply_persp(self):
+        if not self._pil_single or len(self._lpr4_pts) != 4:
+            return
+        s = sorted(self._lpr4_pts, key=lambda p: p[1])
+        top = sorted(s[:2], key=lambda p: p[0])
+        bot = sorted(s[2:], key=lambda p: p[0])
+        ordered  = [top[0], top[1], bot[1], bot[0]]
+        pil_full = self._pil_single
+
+        def _compute():
+            try:
+                warped = _warp_perspective_lpr(pil_full, ordered)
+                self.root.after(0, lambda w=warped: self._sv_persp_done(w))
+            except Exception as ex:
+                self.root.after(0, lambda e=str(ex): _append_log(
+                    self._log, f"[LỖI] 4-pt warp: {e}"))
+
+        threading.Thread(target=_compute, daemon=True).start()
+
+    def _sv_persp_done(self, warped):
+        self._lpr4_pil = warped
+        self._show_img(self._pic_lpr, warped, 360, 80)
+        self._sv4pt_lbl.config(
+            text=f"✔ Crop {warped.width}×{warped.height}  — F5 để nhận dạng",
+            fg=SUCCESS)
+        if self._auto_var.get():
+            self.root.after(50, self._detect_single)
+
 
 # ════════════════════════ MODULE-LEVEL API HELPERS ════════════════════════
 
@@ -1660,6 +1892,39 @@ def _cmp_plate(plate: str, gt: str) -> str:
     if not p and not g:
         return ""
     return "✓ Đúng" if p == g else "✗ Sai"
+
+
+def _warp_perspective_lpr(pil_img, pts4):
+    """Warp quadrilateral (TL,TR,BR,BL) → rectangle. Returns PIL.Image."""
+    import math
+    def _d(a, b): return math.hypot(b[0]-a[0], b[1]-a[1])
+    tl, tr, br, bl = pts4
+    W = max(1, int(max(_d(tl, tr), _d(bl, br))))
+    H = max(1, int(max(_d(tl, bl), _d(tr, br))))
+    try:
+        import cv2, numpy as np
+        src = np.float32([[p[0], p[1]] for p in pts4])
+        dst = np.float32([[0, 0], [W, 0], [W, H], [0, H]])
+        M   = cv2.getPerspectiveTransform(src, dst)
+        arr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        out = cv2.warpPerspective(arr, M, (W, H))
+        return Image.fromarray(cv2.cvtColor(out, cv2.COLOR_BGR2RGB))
+    except ImportError:
+        pass
+    try:
+        import numpy as np
+        A, b = [], []
+        for (xs, ys), (xd, yd) in zip(pts4, [(0,0),(W,0),(W,H),(0,H)]):
+            A.append([xd, yd, 1, 0, 0, 0, -xs*xd, -xs*yd])
+            A.append([0,  0,  0, xd, yd, 1, -ys*xd, -ys*yd])
+            b.extend([xs, ys])
+        coeffs = tuple(np.linalg.lstsq(np.array(A), np.array(b), rcond=None)[0])
+        return pil_img.transform((W, H), Image.PERSPECTIVE, coeffs, Image.BICUBIC)
+    except Exception:
+        pass
+    x1 = int(min(p[0] for p in pts4)); y1 = int(min(p[1] for p in pts4))
+    x2 = int(max(p[0] for p in pts4)); y2 = int(max(p[1] for p in pts4))
+    return pil_img.crop((x1, y1, x2, y2))
 
 
 def _api_call_pil(pil_img, url, timeout, mode, lpr_type) -> tuple:

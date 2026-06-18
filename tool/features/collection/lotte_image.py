@@ -16,6 +16,27 @@ from ...core.constants import (
 from ...core.imports import _req_mod, _REQUESTS_OK, _cv2_mod, _np_mod, _CV2_OK
 
 
+def _li_img_type_to_path_parts(img_type: str):
+    """Chuyển img_type → (vehicle_folder, sub_folder) cho cấu trúc mới."""
+    if img_type.startswith("toan_canh_"):
+        return img_type[len("toan_canh_"):], "anh_toan_canh"
+    if img_type == "toan_canh":
+        return "toan_canh", "anh_toan_canh"
+    if img_type.endswith("_bsx_cut"):
+        return img_type[:-len("_bsx_cut")], "anh_bsx"
+    return img_type, "anh_xe"
+
+
+def _li_hour_to_buoi(hour: int) -> str:
+    if hour < 12:
+        return "sang"
+    if hour < 14:
+        return "trua"
+    if hour < 18:
+        return "chieu"
+    return "toi"
+
+
 def _li_safe(s: str) -> str:
     nfkd = unicodedata.normalize("NFKD", str(s).strip())
     ascii_only = nfkd.encode("ascii", errors="ignore").decode("ascii")
@@ -117,12 +138,13 @@ def _li_b64_like(s: str) -> bool:
 
 class _SharedLaneState:
     """Thread-safe lane state shared across parallel LotteWorker instances."""
-    __slots__ = ("_lock", "lane_total", "lane_warned", "hist_lock")
+    __slots__ = ("_lock", "lane_total", "lane_warned", "known_lanes", "hist_lock")
 
     def __init__(self):
         self._lock        = threading.Lock()
         self.lane_total:  dict = {}   # {lane: total_saved}
         self.lane_warned: set  = set()
+        self.known_lanes: set  = set()
         self.hist_lock    = threading.Lock()
 
 
@@ -262,6 +284,7 @@ class LotteWorker:
         }
         self._lane_cat: dict    = {}  # {(lane, cat, "YYYY-MM-DD"): count}
         self._lane_hourly: dict = {}  # {(lane, "YYYY-MM-DD HH"): count}
+        self._lane_buoi: dict   = {}  # {(lane, "YYYY-MM-DD", buoi): count}
         self._done_days: set    = set()
         self._vtype_cfg: dict   = self._parse_vtype_cfg()
 
@@ -492,16 +515,25 @@ class LotteWorker:
         self._log(f"  [{event_id}] {plate or '?':12s} | {lane_in} | {dt_in.strftime('%Y-%m-%d %H:%M')}"
                   f"{cg_display} | {len(imgs_in)+len(imgs_out)} ảnh"
                   + (f" | BAD:{bad_reason}[{bad_label}]" if bad_reason else ""))
+        max_lane = self.cfg.get("max_per_lane", 0)
+        if max_lane > 0:
+            with self._shared._lock:
+                self._shared.known_lanes.add(lane_in)
+                if lane_out != lane_in:
+                    self._shared.known_lanes.add(lane_out)
+
         event_folder = _li_safe(str(rec.get("Id") or event_id or "evt"))
+        event_saved = False
         for idx, img_obj in enumerate(imgs_in, 1):
             if self._stop.is_set():
                 return
             desc  = img_obj.get("Description", "") if isinstance(img_obj, dict) else ""
             vtype = _li_categorize(desc, card_group, self._vtype_cfg)
             self._log(f"    IN  [{idx}/{len(imgs_in)}] \"{desc}\" → {vtype}")
-            self._save_image(api, img_obj, lane_in, dt_in, plate, out,
-                             bad_reason, bad_label, card_group, "in", bad_direction,
-                             event_folder, gt_plate=gt_plate)
+            if self._save_image(api, img_obj, lane_in, dt_in, plate, out,
+                                bad_reason, bad_label, card_group, "in", bad_direction,
+                                event_folder, gt_plate=gt_plate):
+                event_saved = True
         for idx, img_obj in enumerate(imgs_out, 1):
             if self._stop.is_set():
                 return
@@ -509,21 +541,32 @@ class LotteWorker:
             vtype = _li_categorize(desc, card_group, self._vtype_cfg)
             self._log(f"    OUT [{idx}/{len(imgs_out)}] \"{desc}\" → {vtype}")
             save_lane = lane_in if bad_reason else lane_out
-            self._save_image(api, img_obj, save_lane, dt_out, plate, out,
-                             bad_reason, bad_label, card_group, "out", bad_direction,
-                             event_folder, gt_plate=gt_plate)
+            if self._save_image(api, img_obj, save_lane, dt_out, plate, out,
+                                bad_reason, bad_label, card_group, "out", bad_direction,
+                                event_folder, gt_plate=gt_plate):
+                event_saved = True
+        if event_saved:
+            self.stats["saved"] += 1
+
+        # Dừng sớm khi tất cả các làn đã đủ SK
+        if max_lane > 0:
+            with self._shared._lock:
+                if (self._shared.known_lanes
+                        and self._shared.lane_warned.issuperset(self._shared.known_lanes)):
+                    self._log("  ✅ Tất cả các làn đã đủ SK — dừng sớm")
+                    self._stop.set()
 
     def _save_image(self, api: LotteApiClient, img_obj, lane: str,
                     dt: datetime, plate: str, out: Path,
                     bad_reason: Optional[str] = None, bad_label: str = "",
                     card_group: str = "", direction: str = "", bad_direction: str = "",
-                    event_id: str = "", gt_plate: Optional[str] = None):
+                    event_id: str = "", gt_plate: Optional[str] = None) -> bool:
         if not isinstance(img_obj, dict):
-            return
+            return False
         file_path   = img_obj.get("FilePath")   or ""
         description = img_obj.get("Description") or ""
         if not file_path:
-            return
+            return False
 
         img_type = _li_categorize(description, card_group, self._vtype_cfg)
         self.stats["found"] += 1
@@ -532,16 +575,16 @@ class LotteWorker:
             # chỉ lưu ảnh xe: bỏ qua toàn cảnh và xe đạp
             if img_type.startswith("toan_canh_") or img_type == "xe_dap":
                 self.stats["skipped"] += 1
-                return
+                return False
             # register_mismatch: chỉ lưu ảnh theo chiều có lỗi
             if bad_reason == "register_mismatch" and bad_direction in ("in", "out"):
                 if direction != bad_direction:
                     self.stats["skipped"] += 1
-                    return
+                    return False
             img = api.fetch_image(file_path)
             if img is None:
                 self.stats["error"] += 1
-                return
+                return False
             # folder: bad/{lane}/{reason}/{date}/{event_id}/{in|out}/
             eid = event_id or "evt"
             save_dir = out / "bad" / lane / bad_reason / dt.strftime("%Y-%m-%d") / eid / direction
@@ -562,7 +605,20 @@ class LotteWorker:
                 self._log(f"      ✗[{bad_reason}] {fpath.name}")
             else:
                 self.stats["error"] += 1
-            return
+            return False
+
+        # GT filter — chỉ lưu ảnh khi có biển số GT
+        if self.cfg.get("only_gt") and gt_plate is None:
+            self.stats["skipped"] += 1
+            return False
+
+        # Type filter — chỉ lưu loại ảnh được chọn
+        _allowed = self.cfg.get("allowed_vtypes")
+        if _allowed and img_type not in _allowed:
+            self.stats["skipped"] += 1
+            return False
+
+        buoi = _li_hour_to_buoi(dt.hour)   # tính sớm để dùng cho limit check
 
         # --- giới hạn tổng ảnh/làn (thread-safe) ---
         max_lane = self.cfg.get("max_per_lane", 0)
@@ -573,7 +629,7 @@ class LotteWorker:
                         self._log(f"      ⏭ Làn [{lane}] đủ {max_lane} ảnh — bỏ qua")
                         self._shared.lane_warned.add(lane)
                     self.stats["skipped"] += 1
-                    return
+                    return False
 
         # --- giới hạn ảnh/loại/làn/ngày → mỗi ngày đều có đủ mẫu ---
         max_cat = self.cfg.get("max_per_cat", 0)
@@ -581,24 +637,24 @@ class LotteWorker:
             cat_key = (lane, img_type, dt.strftime("%Y-%m-%d"))
             if self._lane_cat.get(cat_key, 0) >= max_cat:
                 self.stats["skipped"] += 1
-                return
+                return False
 
-        # --- giới hạn ảnh/giờ/làn → đa dạng thời gian trong ngày ---
-        max_hour = self.cfg.get("max_per_hour", 0)
-        if max_hour > 0:
-            hour_key = (lane, dt.strftime("%Y-%m-%d %H"))
-            if self._lane_hourly.get(hour_key, 0) >= max_hour:
+        # --- giới hạn ảnh/buổi/làn/ngày → đa dạng thời gian trong ngày ---
+        max_buoi = self.cfg.get("max_per_buoi", 0)
+        if max_buoi > 0:
+            buoi_key = (lane, dt.strftime("%Y-%m-%d"), buoi)
+            if self._lane_buoi.get(buoi_key, 0) >= max_buoi:
                 self.stats["skipped"] += 1
-                return
+                return False
 
         img = api.fetch_image(file_path)
         if img is None:
             self.stats["error"] += 1
             self._log(f"      ✗ Lỗi tải: {file_path}")
-            return
+            return False
 
-        # cấu trúc: <out>/<làn>/<loại_xe>/<YYYY-MM-DD>/<HH>/HHmmss_BSX.jpg
-        save_dir = out / lane / img_type / dt.strftime("%Y-%m-%d") / dt.strftime("%H")
+        vtype_folder, sub_folder = _li_img_type_to_path_parts(img_type)
+        save_dir = out / vtype_folder / sub_folder / dt.strftime("%Y-%m-%d") / buoi / lane
         save_dir.mkdir(parents=True, exist_ok=True)
         ts_str    = dt.strftime("%H%M%S")
         base_name = f"{ts_str}_{plate}" if plate else ts_str
@@ -612,17 +668,18 @@ class LotteWorker:
         ok_enc, buf = _cv2_mod.imencode(".jpg", img)
         if ok_enc:
             fpath.write_bytes(buf.tobytes())
-            self.stats["saved"] += 1
             with self._shared._lock:
                 self._shared.lane_total[lane] = self._shared.lane_total.get(lane, 0) + 1
             cat_key  = (lane, img_type, dt.strftime("%Y-%m-%d"))
             self._lane_cat[cat_key] = self._lane_cat.get(cat_key, 0) + 1
-            hour_key = (lane, dt.strftime("%Y-%m-%d %H"))
-            self._lane_hourly[hour_key] = self._lane_hourly.get(hour_key, 0) + 1
-            self._log(f"      ✓ {lane}/{img_type}/{fpath.name}")
-            if gt_plate:
+            buoi_key = (lane, dt.strftime("%Y-%m-%d"), buoi)
+            self._lane_buoi[buoi_key] = self._lane_buoi.get(buoi_key, 0) + 1
+            self._log(f"      ✓ {vtype_folder}/{sub_folder}/{buoi}/{fpath.name}")
+            if gt_plate and sub_folder in ("anh_xe", "anh_bsx"):
                 with open(save_dir / "gt.txt", "a", encoding="utf-8") as _f:
                     _f.write(f"{fpath.name}\t{gt_plate}\n")
+            return True
         else:
             self.stats["error"] += 1
             self._log(f"      ✗ Lỗi encode: {file_path}")
+            return False

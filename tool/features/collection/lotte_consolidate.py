@@ -1,8 +1,7 @@
 """
-Giao diện tổng hợp ảnh theo round-robin khung giờ.
-Cấu trúc nguồn: <src>/<làn>/<loại_xe>/<ngày>/<HH>/HHmmss_BSX.jpg  (mới)
-             hoặc <src>/<làn>/<loại_xe>/<ngày>/HHmmss_BSX.jpg       (cũ, vẫn hỗ trợ)
-Cấu trúc đích : <dest>/<loại_xe>/*.jpg
+Giao diện tổng hợp ảnh theo round-robin buổi.
+Cấu trúc nguồn: <src>/<loai_xe>/<anh_xe|anh_toan_canh|anh_bsx>/<ngày>/<sang|trua|chieu|toi>/<lan>/HHmmss_BSX.jpg
+Cấu trúc đích : <dest>/<loai_xe>/<anh_xe|anh_toan_canh|anh_bsx>/<lan>/*.jpg
 """
 import queue
 import shutil
@@ -15,15 +14,17 @@ from tkinter import filedialog, ttk
 from ...core.constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD, F_MONO
 from ...core.settings import _bind_cfg
 
-_EXCLUDED = {"bad", "train", "out"}
+_EXCLUDED  = {"bad", "train", "out"}
+_BUOI_ORDER = ["sang", "trua", "chieu", "toi"]
 
 
 # ── core logic ────────────────────────────────────────────────────────────────
 
 def _scan_source(src: Path) -> dict:
     """
-    Quét thư mục nguồn.
-    Trả về: {lane: {vtype: {hour(int): [Path, ...]}}}
+    Quét thư mục nguồn — hỗ trợ tất cả cấu trúc cũ/mới.
+    Trả về: {key: {sub_folder: {buoi: [Path, ...]}}}
+      key = "loai_xe/lan" (cấu trúc mới) hoặc "loai_xe" (cấu trúc cũ)
     """
     result: dict = {}
     if not src.exists():
@@ -33,51 +34,84 @@ def _scan_source(src: Path) -> dict:
             parts = img.relative_to(src).parts
             if parts[0] in _EXCLUDED:
                 continue
-            if len(parts) == 5:
-                # cấu trúc mới: lane/vtype/date/HH/fname
-                lane, vtype, _, hour_folder, fname = parts
-                h_str = hour_folder
+            if len(parts) == 6:
+                p0, p1, p2, p3, p4, _ = parts
+                if p1.startswith("anh_"):
+                    # cấu trúc mới: <loai_xe>/<sub>/<date>/<buoi>/<lan>/<file>
+                    vtype_f, sub_f, _, p3b, lane_s, _ = parts
+                    buoi = p3b if p3b in _BUOI_ORDER else None
+                    if buoi is None:
+                        continue
+                    key = f"{vtype_f}/{lane_s}"
+                else:
+                    # cấu trúc cũ: <loai_xe>/<lan>/<sub>/<date>/<buoi>/<file>
+                    vtype_f, lane_s, sub_f, _, p4b, _ = parts
+                    buoi = p4b if p4b in _BUOI_ORDER else None
+                    if buoi is None and p4b.isdigit() and 0 <= int(p4b) <= 23:
+                        h = int(p4b)
+                        buoi = ("sang" if h < 12 else "trua" if h < 14 else
+                                "chieu" if h < 18 else "toi")
+                    if buoi is None:
+                        continue
+                    key = f"{vtype_f}/{lane_s}"
+            elif len(parts) == 5:
+                # cấu trúc cũ: <loai_xe>/<sub>/<date>/<buoi|HH>/<file>
+                p0, p1, _, p3, _ = parts
+                vtype_f, sub_f = p0, p1
+                buoi = p3 if p3 in _BUOI_ORDER else None
+                if buoi is None and p3.isdigit() and 0 <= int(p3) <= 23:
+                    h = int(p3)
+                    buoi = ("sang" if h < 12 else "trua" if h < 14 else
+                            "chieu" if h < 18 else "toi")
+                if buoi is None:
+                    continue
+                key = vtype_f
             elif len(parts) == 4:
-                # cấu trúc cũ: lane/vtype/date/fname
-                lane, vtype, _, fname = parts
+                p0, p1, _, fname = parts
                 h_str = fname[:2]
+                if not h_str.isdigit():
+                    continue
+                h = int(h_str)
+                if not 0 <= h <= 23:
+                    continue
+                vtype_f, sub_f = p0, p1
+                buoi = ("sang" if h < 12 else "trua" if h < 14 else
+                        "chieu" if h < 18 else "toi")
+                key = vtype_f
             else:
                 continue
-            if not h_str.isdigit():
-                continue
-            h = int(h_str)
-            if not 0 <= h <= 23:
-                continue
             (result
-             .setdefault(lane, {})
-             .setdefault(vtype, {})
-             .setdefault(h, [])
+             .setdefault(key, {})
+             .setdefault(sub_f, {})
+             .setdefault(buoi, [])
              .append(img))
         except Exception:
             continue
     return result
 
 
-def _round_robin_select(hour_data: dict, max_count: int) -> list:
+def _round_robin_select(buoi_data: dict, max_count: int) -> list:
     """
-    Chọn ảnh theo vòng round-robin qua các khung giờ (0-23) cho 1 loại xe.
-    hour_data: {hour: [Path, ...]}
+    Chọn ảnh theo vòng round-robin qua các buổi (sang/trua/chieu/toi).
+    buoi_data: {buoi_str: [Path, ...]}
     Trả về:    [Path, ...]
-    Không thay đổi dữ liệu gốc (dùng con trỏ thay vì pop).
     """
     limit    = max_count if max_count > 0 else float("inf")
     selected = []
-    ptr      = {h: 0 for h in hour_data}
+    keys     = [b for b in _BUOI_ORDER if b in buoi_data]
+    if not keys:
+        keys = sorted(buoi_data.keys())
+    ptr  = {b: 0 for b in keys}
 
     while len(selected) < limit:
         made = False
-        for h in range(24):
+        for b in keys:
             if len(selected) >= limit:
                 break
-            lst = hour_data.get(h)
-            if lst and ptr[h] < len(lst):
-                selected.append(lst[ptr[h]])
-                ptr[h] += 1
+            lst = buoi_data.get(b, [])
+            if ptr[b] < len(lst):
+                selected.append(lst[ptr[b]])
+                ptr[b] += 1
                 made = True
         if not made:
             break
@@ -151,14 +185,14 @@ class ConsolidateWindow(Toplevel):
 
         r2 = Frame(cfg, bg=BG)
         r2.pack(fill=X, pady=4)
-        Label(r2, text="Max ảnh/loại/làn:", bg=BG, fg=TEXT, font=F_MAIN).pack(side=LEFT)
+        Label(r2, text="Max ảnh/loại:", bg=BG, fg=TEXT, font=F_MAIN).pack(side=LEFT)
         Spinbox(r2, from_=0, to=99999, textvariable=self._max_var,
                 width=8, font=F_MAIN, bg=CARD, fg=TEXT,
                 insertbackground=TEXT, buttonbackground=ACCENT2,
                 relief="flat",
                 command=self._rebuild_table).pack(side=LEFT, padx=(4, 12))
         Label(r2,
-              text="(0 = không giới hạn)   •   Mỗi loại xe / làn lấy tối đa N ảnh, trải đều qua các khung giờ",
+              text="(0 = không giới hạn)   •   Mỗi loại xe / phân loại lấy tối đa N ảnh, trải đều qua các buổi",
               bg=BG, fg=DIM, font=("Segoe UI", 8)).pack(side=LEFT)
         Button(r2, text="↻  Làm mới", command=self._scan,
                bg=CARD, fg=TEXT, font=F_MAIN,
@@ -181,15 +215,15 @@ class ConsolidateWindow(Toplevel):
                     font=("Segoe UI", 9, "bold"))
         s.map("C.Treeview", background=[("selected", "#4A3F8C")])
 
-        cols = ("lane", "vtype", "hour", "avail", "take")
+        cols = ("vtype_f", "sub_f", "buoi", "avail", "take")
         self._tree = ttk.Treeview(tbl, columns=cols, show="headings",
                                    style="C.Treeview")
         for col, hdr, w, anch in [
-            ("lane",  "Làn",       180, "w"),
-            ("vtype", "Loại xe",   110, "center"),
-            ("hour",  "Giờ",        60, "center"),
-            ("avail", "Có sẵn",     80, "center"),
-            ("take",  "Sẽ lấy",     80, "center"),
+            ("vtype_f", "Loại xe",   160, "w"),
+            ("sub_f",   "Phân loại", 130, "center"),
+            ("buoi",    "Buổi",       80, "center"),
+            ("avail",   "Có sẵn",     80, "center"),
+            ("take",    "Sẽ lấy",     80, "center"),
         ]:
             self._tree.heading(col, text=hdr)
             self._tree.column(col, width=w, minwidth=w, anchor=anch)
@@ -293,45 +327,45 @@ class ConsolidateWindow(Toplevel):
         grand_avail = 0
         grand_take  = 0
 
-        for lane in sorted(self._data):
-            vt_data = self._data[lane]
+        for vtype_f in sorted(self._data):
+            sub_data = self._data[vtype_f]
 
-            # Tính preview round-robin per loại xe (không thay đổi dữ liệu gốc)
-            take_cnt: dict = {}  # {(vtype, hour): count}
-            for vtype, hours in vt_data.items():
-                for path in _round_robin_select(hours, max_n):
-                    h_str = path.name[:2]
-                    h     = int(h_str) if h_str.isdigit() else -1
-                    k     = (vtype, h)
+            # Tính preview round-robin per sub_folder (không thay đổi dữ liệu gốc)
+            take_cnt: dict = {}  # {(sub_f, buoi): count}
+            for sub_f, buois in sub_data.items():
+                for path in _round_robin_select(buois, max_n):
+                    buoi = path.parent.name
+                    k    = (sub_f, buoi)
                     take_cnt[k] = take_cnt.get(k, 0) + 1
 
-            lane_avail = 0
-            lane_take  = 0
-            for vtype in sorted(vt_data):
-                for h in sorted(vt_data[vtype]):
-                    avail = len(vt_data[vtype][h])
-                    take  = take_cnt.get((vtype, h), 0)
+            vtype_avail = 0
+            vtype_take  = 0
+            for sub_f in sorted(sub_data):
+                buoi_order = [b for b in _BUOI_ORDER if b in sub_data[sub_f]]
+                for buoi in buoi_order:
+                    avail = len(sub_data[sub_f][buoi])
+                    take  = take_cnt.get((sub_f, buoi), 0)
                     base  = "odd" if row_idx % 2 == 0 else "even"
                     tags  = (base, "full") if (take > 0 and take >= avail) else (base,)
                     self._tree.insert("", END, tags=tags,
-                                      values=(lane, vtype, f"{h:02d}:xx", avail, take))
-                    lane_avail += avail
-                    lane_take  += take
-                    row_idx    += 1
+                                      values=(vtype_f, sub_f, buoi, avail, take))
+                    vtype_avail += avail
+                    vtype_take  += take
+                    row_idx     += 1
 
             self._tree.insert("", END, tags=("total",),
-                               values=(f"  ∑ {lane}", "", "",
-                                       lane_avail, lane_take))
-            row_idx    += 1
-            grand_avail += lane_avail
-            grand_take  += lane_take
+                               values=(f"  ∑ {vtype_f}", "", "",
+                                       vtype_avail, vtype_take))
+            row_idx     += 1
+            grand_avail += vtype_avail
+            grand_take  += vtype_take
 
         if grand_avail:
             self._tree.insert("", END, tags=("total",),
                                values=("TỔNG", "", "", grand_avail, grand_take))
 
         self._status_lbl.config(
-            text=f"{len(self._data)} làn  |  {grand_avail} ảnh có sẵn  |  Sẽ lấy: {grand_take}",
+            text=f"{len(self._data)} loại xe  |  {grand_avail} ảnh có sẵn  |  Sẽ lấy: {grand_take}",
             fg=ACCENT2)
 
     # ── Run ───────────────────────────────────────────────────────────────────
@@ -346,7 +380,7 @@ class ConsolidateWindow(Toplevel):
         self._run_btn.config(state=DISABLED)
         self._status_lbl.config(text="Đang tổng hợp...", fg=ACCENT)
         self._log_append("─" * 48)
-        self._log_append(f"Đích: {dest}  |  max {max_n}/làn")
+        self._log_append(f"Đích: {dest}  |  max {max_n}/loại")
 
         data_snap = self._data
 
@@ -372,13 +406,18 @@ class ConsolidateWindow(Toplevel):
                 gt_cache[src_dir] = mapping
                 return mapping
 
-            for lane in sorted(data_snap):
-                lane_total = 0
-                for vtype, hours in sorted(data_snap[lane].items()):
-                    selected = _round_robin_select(hours, max_n)
+            for vtype_f in sorted(data_snap):
+                vtype_total = 0
+                # key có dạng "loai_xe/lan" (mới) hoặc "loai_xe" (cũ)
+                _kparts = vtype_f.split("/", 1)
+                for sub_f, buois in sorted(data_snap[vtype_f].items()):
+                    selected = _round_robin_select(buois, max_n)
                     for img_path in selected:
                         try:
-                            d = dest / vtype
+                            if len(_kparts) == 2:
+                                d = dest / _kparts[0] / sub_f / _kparts[1]
+                            else:
+                                d = dest / vtype_f / sub_f
                             d.mkdir(parents=True, exist_ok=True)
                             dst = d / img_path.name
                             idx = 0
@@ -390,16 +429,17 @@ class ConsolidateWindow(Toplevel):
                             if plate:
                                 with open(d / "gt.txt", "a", encoding="utf-8") as _f:
                                     _f.write(f"{dst.name}\t{plate}\n")
-                            counts[vtype] = counts.get(vtype, 0) + 1
+                            key = f"{vtype_f}/{sub_f}"
+                            counts[key] = counts.get(key, 0) + 1
                             total += 1
-                            lane_total += 1
+                            vtype_total += 1
                         except Exception:
                             errors += 1
-                self._log_q.put(f"  Làn [{lane}]: {lane_total} ảnh")
+                self._log_q.put(f"  {vtype_f}: {vtype_total} ảnh")
 
             self._log_q.put(f"Hoàn thành: {total} ảnh → {dest}")
             for vt, n in sorted(counts.items()):
-                self._log_q.put(f"  {vt:12s}: {n} ảnh")
+                self._log_q.put(f"  {vt:20s}: {n} ảnh")
             if errors:
                 self._log_q.put(f"  Lỗi bỏ qua: {errors}")
             self._log_q.put("__DONE__")

@@ -66,11 +66,19 @@ def _make_scrollable_frame(parent):
         canvas.configure(scrollregion=canvas.bbox("all"))
     canvas.bind("<Configure>", _on_cv)
 
+    _entered = [False]
+
+    def _mw(ev): canvas.yview_scroll(int(-1 * (ev.delta / 120)), "units")
+
     def _enter(_):
-        canvas.bind_all("<MouseWheel>",
-                        lambda ev: canvas.yview_scroll(int(-1 * (ev.delta / 120)), "units"))
+        _entered[0] = True
+        canvas.bind_all("<MouseWheel>", _mw)
+
     def _leave(_):
-        canvas.unbind_all("<MouseWheel>")
+        _entered[0] = False
+        # delay 1 tick — tránh race condition khi Enter canvas mới fires trước Leave canvas cũ
+        canvas.after(20, lambda: canvas.unbind_all("<MouseWheel>") if not _entered[0] else None)
+
     canvas.bind("<Enter>", _enter)
     canvas.bind("<Leave>", _leave)
 

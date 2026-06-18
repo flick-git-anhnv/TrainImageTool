@@ -55,12 +55,18 @@ def _wrap_scrollable(nb_parent, TabClass, root_ref, *extra_args):
         canvas.configure(scrollregion=canvas.bbox("all"))
     canvas.bind("<Configure>", _on_canvas_resize)
 
+    _mw_entered = [False]
+
+    def _mw(ev): canvas.yview_scroll(int(-1 * (ev.delta / 120)), "units")
+
     def _on_enter(_):
-        canvas.bind_all(
-            "<MouseWheel>",
-            lambda ev: canvas.yview_scroll(int(-1 * (ev.delta / 120)), "units"))
+        _mw_entered[0] = True
+        canvas.bind_all("<MouseWheel>", _mw)
+
     def _on_leave(_):
-        canvas.unbind_all("<MouseWheel>")
+        _mw_entered[0] = False
+        canvas.after(20, lambda: canvas.unbind_all("<MouseWheel>") if not _mw_entered[0] else None)
+
     canvas.bind("<Enter>", _on_enter)
     canvas.bind("<Leave>", _on_leave)
 

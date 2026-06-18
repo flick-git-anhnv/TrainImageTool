@@ -106,8 +106,14 @@ class StatsTab(Frame):
             lambda e: canvas_scroll.configure(scrollregion=canvas_scroll.bbox("all")))
         canvas_scroll.bind("<Configure>",
             lambda e: canvas_scroll.itemconfig(self._inner_id, width=e.width))
-        canvas_scroll.bind_all("<MouseWheel>",
-            lambda e: canvas_scroll.yview_scroll(-1 * (e.delta // 120), "units"))
+        def _mw(e): canvas_scroll.yview_scroll(-1 * (e.delta // 120), "units")
+        _mw_ent = [False]
+        def _mw_enter(_): _mw_ent[0] = True; canvas_scroll.bind_all("<MouseWheel>", _mw)
+        def _mw_leave(_):
+            _mw_ent[0] = False
+            canvas_scroll.after(20, lambda: canvas_scroll.unbind_all("<MouseWheel>") if not _mw_ent[0] else None)
+        canvas_scroll.bind("<Enter>", _mw_enter)
+        canvas_scroll.bind("<Leave>", _mw_leave)
 
         inner = self._inner
 

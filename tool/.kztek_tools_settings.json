@@ -1,34 +1,40 @@
 {
-  "bbox.line_width": 1,
+  "bbox.line_width": 3,
   "ip.page_size": 100,
   "ip.max_pages": 10000,
-  "ip.max_per_lane": 0,
-  "ip.max_per_cat": 0,
-  "ip.max_per_hour": 0,
+  "ip.max_per_lane": 100,
+  "ip.max_per_cat": 50,
+  "ip.max_per_hour": 15,
   "ip.parallel": 10,
-  "yolo.interval": "0.2",
-  "yolo.line_width": 5,
+  "yolo.interval": "0.5",
+  "yolo.line_width": 8,
   "yolo.font_size": 11,
   "lpr.timeout": 10,
   "lpr.rotate": 0,
   "lpr.f_rotate": 0,
-  "lpr.workers": 1,
-  "bbox.img": "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong",
+  "lpr.workers": 8,
+  "bbox.img": "K:/Software/PhanLoaiPhuongTien/TruongDinh",
   "h.bbox.img": [
-    "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong",
+    "K:/Software/PhanLoaiPhuongTien/TruongDinh",
+    "K:/Software/PhanLoaiPhuongTien/XuanCuong-by-type-test",
+    "K:/Software/PhanLoaiPhuongTien/BaoTrong",
+    "K:\\Software\\PhanLoaiPhuongTien\\LotteParking\\XeDap",
+    "K:\\Software\\PhanLoaiPhuongTien\\LotteParking\\Car_Motor",
+    "K:\\Software\\PhanLoaiPhuongTien\\LotteParking",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/images_pgs_split",
+    "//192.168.21.52/Software/2.AI-Tranining/1.Images/1.Input/Lotte/images_pgs_split",
+    "\\\\192.168.21.52\\Software\\2.AI-Tranining\\1.Images\\1.Input\\Lotte\\BaoTrong",
+    "K:\\Software\\2.AI-Tranining\\1.Images\\1.Input\\Lotte\\BaoTrong",
+    "K:\\Software\\2.AI-Tranining\\1.Images\\2.Output\\Lotte\\XeDap",
+    "K:\\Software\\2.AI-Tranining\\1.Images\\1.Input\\Lotte\\XeDap",
     "K:/Software/2.AI-Tranining/1.Images/2.Output/DuAnKhac/INPUT1",
-    "K:/Software/2.AI-Tranining/1.Images/2.Output/TruongDinh",
-    "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte/ParkingAPI/RAMP8_RA",
     "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte/ParkingAPI",
     "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte/BaoTrong",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/TruongDinh",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte/ParkingAPI/RAMP8_RA",
     "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte-by-type-test/xe_may",
-    "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong-by-type-test",
-    "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong-by-type-test/out/toan_canh",
-    "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong-by-type-test/out/o_to",
-    "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte-by-type-test/o_to",
-    "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong-by-type-test/out",
-    "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte",
-    "K:/Software/2.AI-Tranining/1.Images/2.Output/Lotte/ParkingAPI/RAMP7-VAO"
+    "K:/Software/2.AI-Tranining/1.Images/2.Output/XuanCuong-by-type-test"
   ],
   "history.slot_cls.model_path": [
     "H:/Software/2.AI-Tranining/3.Tools/models/detect.pt",
@@ -38,26 +44,38 @@
     "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/BaoTrong/963.png",
     "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/BaoTrong/964.png"
   ],
-  "split.src": "K:/Software/2.AI-Tranining/1.Images/2.Output",
+  "split.src": "K:\\Software\\PhanLoaiPhuongTien",
   "h.split.src": [
+    "K:\\Software\\PhanLoaiPhuongTien",
+    "K:\\Software\\PhanLoaiPhuongTien\\LotteParking",
     "K:/Software/2.AI-Tranining/1.Images/2.Output"
   ],
-  "crop.img": "K:/Software/2.AI-Tranining/1.Images/2.Output",
+  "crop.img": "K:\\Software\\PhanLoaiPhuongTien\\LotteParking\\Car_Motor",
   "h.crop.img": [
+    "K:\\Software\\PhanLoaiPhuongTien\\LotteParking\\Car_Motor",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/images_pgs_split",
+    "//192.168.21.52/Software/2.AI-Tranining/1.Images/1.Input/Lotte/images_pgs_split",
     "K:/Software/2.AI-Tranining/1.Images/2.Output"
   ],
-  "crop.lbl": "K:/Software/2.AI-Tranining/1.Images/2.Output",
+  "crop.lbl": "K:\\Software\\PhanLoaiPhuongTien\\LotteParking\\Car_Motor",
   "h.crop.lbl": [
+    "K:\\Software\\PhanLoaiPhuongTien\\LotteParking\\Car_Motor",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/images_pgs_split",
+    "//192.168.21.52/Software/2.AI-Tranining/1.Images/1.Input/Lotte/images_pgs_split",
     "K:/Software/2.AI-Tranining/1.Images/2.Output"
   ],
-  "crop.out": "K:/Software/2.AI-Tranining/1.Images/2.Output-crop",
+  "crop.out": "K:\\Software\\PhanLoaiPhuongTien\\LotteParking\\Car_Motor_out",
   "h.crop.out": [
+    "K:\\Software\\PhanLoaiPhuongTien\\LotteParking\\Car_Motor_out",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/images_pgs_split_out",
+    "//192.168.21.52/Software/2.AI-Tranining/1.Images/1.Input/Lotte/images_pgs_split-out",
     "K:/Software/2.AI-Tranining/1.Images/2.Output-crop",
     "K:/Software/2.AI-Tranining/1.Images/2.Output-crop2",
     "K:/Software/2.AI-Tranining/1.Images/2.Output-crop1"
   ],
-  "lpr.folder": "K:\\Software\\CheckLotte\\bad\\RAMP4-VAO\\in_out_mismatch",
+  "lpr.folder": "K:\\Software\\CheckLotte2",
   "h.lpr.folder": [
+    "K:\\Software\\CheckLotte2",
     "K:\\Software\\CheckLotte\\bad\\RAMP4-VAO\\in_out_mismatch",
     "K:\\Software\\CheckLotte\\bad\\CONG 5-VAO-OTO\\in_out_mismatch",
     "K:\\Software\\CheckLotte\\bad\\CONG 5-VAO-XM-1",
@@ -66,8 +84,10 @@
     "K:/Software/2.AI-Tranining/1.Images/2.Output-crop1/license_plate"
   ],
   "lotte.kw_xe_may": "xe máy,motor",
-  "ip.out": "K:\\Software\\CheckLotte",
+  "ip.out": "K:\\Software\\CheckLotte3",
   "h.ip.out": [
+    "K:\\Software\\CheckLotte3",
+    "K:\\Software\\CheckLotte2",
     "K:\\Software\\CheckLotte",
     "K:\\Software\\Check",
     "K:\\Software/Check",
@@ -77,9 +97,10 @@
     "C:/Users/nguye/Desktop/Check"
   ],
   "ip.sleep": 0.01,
-  "ip.collect_bad": true,
+  "ip.collect_bad": false,
   "lpr.detect_mode": "lprdetect",
   "h.lpr.url": [
+    "http://192.168.21.202:8000/alpr",
     "http://localhost:8000/alpr"
   ],
   "lpr.review_states": {
@@ -98,39 +119,64 @@
     "97H43617",
     "37H43617"
   ],
-  "ip.to": "2026-05-31 08:00:29",
+  "ip.to": "2026-06-31 23:59:59",
   "h.yolo.model": [
+    "K:/Software/PhanLoaiPhuongTien/TrainModel/kztek_train/weights/best.pt",
+    "K:/Software/PhanLoaiPhuongTien/TrainModelOut/kztek_train/weights/best.pt",
+    "C:/Users/nguye/Downloads/best (10).pt",
+    "C:/Users/nguye/Downloads/best (8).pt",
+    "K:/Software/2.AI-Tranining/runs/kztek_train/weights/best.pt",
     "C:/Users/nguye/Downloads/best (7).pt"
   ],
-  "yolo.model_path": "C:/Users/nguye/Downloads/best (7).pt",
-  "yolo.check_folder": "K:/Software/2.AI-Tranining/1.Images/2.Output-crop2/car",
+  "yolo.model_path": "K:/Software/PhanLoaiPhuongTien/TrainModel/kztek_train/weights/best.pt",
+  "yolo.check_folder": "K:/Software/2.AI-Tranining/1.Images/1.Input/DuAnKhac/INPUT2",
   "h.yolo.path": [
-    "K:/Software/2.AI-Tranining/1.Images/2.Output-crop2/car",
-    "K:/Software/2.AI-Tranining/1.Images/1.Input/Golden",
-    "K:/Software/2.AI-Tranining/1.Images/1.Input/Golden/10028.jpg",
-    "C:/Users/nguye/Desktop/z7845189639270_1db11c28a6c1a74b37984f82b8ebaeba.jpg",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/DuAnKhac/INPUT2",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/DuAnKhac/INPUT1/part_100",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/DuAnKhac/INPUT1/part_032",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/DuAnKhac/INPUT1/part_031",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/DuAnKhac/INPUT1/part_030",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/DuAnKhac/INPUT1/part_029",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/DuAnKhac/INPUT1/part_028",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/DuAnKhac/INPUT1/part_027",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/DuAnKhac/INPUT1/part_026",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/DuAnKhac/INPUT1/part_025",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/DuAnKhac/INPUT1/part_024",
     "C:/Users/nguye/Desktop/z7853963418217_4841375c9a0046da38e866c31f1c0821.jpg",
+    "C:/Users/nguye/Desktop/z7845189639270_1db11c28a6c1a74b37984f82b8ebaeba.jpg",
+    "C:/Users/nguye/Desktop/16h46m27s_086SKB_IMG.jpg",
+    "C:/Users/nguye/Desktop/05h31m52s_BM2325_IMG.jpg",
+    "C:/Users/nguye/Desktop/16h55m40s_BEYQ6Y_IMG.jpg",
+    "C:/Users/nguye/Desktop/16h57m06s_92ZZ4K_IMG.jpg",
     "C:/Users/nguye/Desktop/16h55m22s_20MHJF_IMG.jpg",
-    "C:/Users/nguye/Desktop/z7899185154733_32004f15daccaea8faf3a30db844da9f.jpg",
-    "C:/Users/nguye/Desktop/z7917094169520_1ecbab811178ce7a96dbae31c28c1583.jpg",
-    "C:/Users/nguye/Desktop/z7928641425289_247224dd6eee8991904476a7116d13e1.jpg",
-    "K:/Software/2.AI-Tranining/1.Images/1.Input/XuanCuong-by-type-test",
-    "K:\\Software\\2.AI-Tranining\\1.Images\\1.Input\\XuanCuong-by-type-test\\Bao Lam Vao 3",
-    "K:/Software/2.AI-Tranining/1.Images/1.Input/XuanCuong-by-type-test/Bao Lam Vao 3/o_to_bsx_cut"
+    "C:/Users/nguye/Desktop/16h51m48s_ADPKUL_IMG.jpg",
+    "C:/Users/nguye/Desktop/z7917094169520_1ecbab811178ce7a96dbae31c28c1583.jpg"
   ],
   "yolo.subfolder": true,
   "yolo.review_states": {},
-  "split.out": "K:/Software/2.AI-Tranining/1.Images/A",
+  "split.out": "K:\\Software\\PhanLoaiPhuongTien\\TrainDataset",
   "h.split.out": [
+    "K:\\Software\\PhanLoaiPhuongTien\\TrainDataset",
+    "K:\\Software\\PhanLoaiPhuongTien\\TrainModel",
     "K:/Software/2.AI-Tranining/1.Images/A"
   ],
   "cls.split": 80,
-  "cls.root": "K:/Software/2.AI-Tranining/1.Images/2.Output-crop2",
+  "cls.root": "K:\\Software\\2.AI-Tranining\\1.Images\\1.Input\\Lotte\\images_pgs_split_out",
   "h.cls.root": [
+    "K:\\Software\\2.AI-Tranining\\1.Images\\1.Input\\Lotte\\images_pgs_split_out",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/images_pgs_split",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-cropresult3/dataset",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-cropresult3",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-crop",
     "K:/Software/2.AI-Tranining/1.Images/2.Output-crop2"
   ],
-  "cls.out": "K:/Software/2.AI-Tranining/1.Images/2.Output-crop2result",
+  "cls.out": "K:/Software/2.AI-Tranining/1.Images/2.pgs-out",
   "h.cls.out": [
+    "K:/Software/2.AI-Tranining/1.Images/2.pgs-out",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-cropresult5",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-cropresult4",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-cropresult3",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-cropresult",
     "K:/Software/2.AI-Tranining/1.Images/2.Output-crop2result"
   ],
   "cls.device": "0",
@@ -149,5 +195,125 @@
     "🧠 Classifier": true,
     "🔬 LPR Tester": true,
     "🅿 Slot Detect": false
-  }
+  },
+  "h.cls.model": [
+    "yolo11n-cls.pt"
+  ],
+  "cls.workers": "4",
+  "cls.model": "yolo11n-cls.pt",
+  "cls_test.top_n": 5,
+  "cls_test.interval": "1.0",
+  "cls.batch": "64",
+  "cls.imgsz": "128",
+  "cls_test.model_path": "K:/Software/2.AI-Tranining/1.Images/2.pgs-out/classifier/weights/best.pt",
+  "h.cls_test.model": [
+    "K:/Software/2.AI-Tranining/1.Images/2.pgs-out/classifier/weights/best.pt",
+    "K:/Software/2.AI-Tranining/1.Images/2.Output-cropresult5/classifier/weights/best.pt"
+  ],
+  "cls_test.check_path": "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/images_pgs_split",
+  "h.cls_test.path": [
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/images_pgs_split",
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/BaoTrong",
+    "C:/Users/nguye/Desktop/16h46m27s_086SKB_IMG.jpg",
+    "C:/Users/nguye/Desktop/z7899185154733_32004f15daccaea8faf3a30db844da9f.jpg",
+    "C:/Users/nguye/Desktop/z7853963418217_4841375c9a0046da38e866c31f1c0821.jpg",
+    "C:/Users/nguye/Desktop/z7928641425289_247224dd6eee8991904476a7116d13e1.jpg",
+    "C:/Users/nguye/Desktop/z7924220761387_764a269836bf60636289d31120351698.jpg",
+    "K:/Software/CheckLotte/bad/RAMP5-VAO",
+    "K:/Software/CheckLotte/bad",
+    "C:/Users/nguye/Desktop/16h51m48s_ADPKUL_IMG.jpg"
+  ],
+  "cls_test.subfolder": true,
+  "h.yolo.model2": [
+    "K:/Software/2.AI-Tranining/runs/kztek_train/weights/best.pt"
+  ],
+  "yolo.conf_thresh": 0.0,
+  "yolo.conf": 0.37553846153846154,
+  "yolo.iou": 0.42123076923076924,
+  "cls.optimizer": "auto",
+  "cls.epochs": "30",
+  "cls.cache": "ram",
+  "train.dir": "K:\\Software\\PhanLoaiPhuongTien\\TrainDataset\\train",
+  "h.train.dir": [
+    "K:\\Software\\PhanLoaiPhuongTien\\TrainDataset\\train",
+    "K:\\Software\\PhanLoaiPhuongTien\\TrainDatasetl\\train",
+    "K:\\Software\\PhanLoaiPhuongTien\\TrainModel\\train",
+    "K:/Software/2.AI-Tranining/1.Images/A/train"
+  ],
+  "train.val": "K:\\Software\\PhanLoaiPhuongTien\\TrainDataset\\valid",
+  "h.train.val": [
+    "K:\\Software\\PhanLoaiPhuongTien\\TrainDataset\\valid",
+    "K:\\Software\\PhanLoaiPhuongTien\\TrainDatasetl\\valid",
+    "K:\\Software\\PhanLoaiPhuongTien\\TrainModel\\valid",
+    "K:\\Software\\PhanLoaiPhuongTien\\TrainModel\\alid",
+    "K:/Software/2.AI-Tranining/1.Images/A/valid"
+  ],
+  "train.project": "K:\\Software\\PhanLoaiPhuongTien\\TrainModel",
+  "h.train.project": [
+    "K:\\Software\\PhanLoaiPhuongTien\\TrainModel",
+    "K:\\Software\\PhanLoaiPhuongTien\\TrainModelOut",
+    "K:/Software/2.AI-Tranining/1.Images/A/output"
+  ],
+  "train.lr0": "0.0001",
+  "train.lrf": "0.0001",
+  "labelnorm.img": "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/XeDap",
+  "h.labelnorm.img": [
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/XeDap"
+  ],
+  "labelnorm.lbl": "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/XeDap",
+  "h.labelnorm.lbl": [
+    "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/XeDap"
+  ],
+  "labelnorm.out": "K:\\Software\\2.AI-Tranining\\1.Images\\2.Output\\Lotte\\XeDap",
+  "h.labelnorm.out": [
+    "K:\\Software\\2.AI-Tranining\\1.Images\\2.Output\\Lotte\\XeDap"
+  ],
+  "ip.only_gt": true,
+  "ip.vtype.toan_canh_o_to": false,
+  "ip.vtype.toan_canh_xe_may": false,
+  "ip.vtype.toan_canh_xe_dap": true,
+  "ip.vtype.o_to": false,
+  "ip.vtype.xe_may": false,
+  "ip.vtype.xe_dap": true,
+  "ip.vtype.o_to_bsx_cut": false,
+  "ip.vtype.xe_may_bsx_cut": false,
+  "ip.vtype.xe_dap_bsx_cut": false,
+  "ip.vtype.toan_canh": false,
+  "ip.vtype.xe_tai": false,
+  "h.bbox.labels": [
+    "car, motorbike, bus, truck, bicycle, license_plate",
+    "unoccupied,occupied",
+    "car,motorcycle,bus,truck,bicycle,license_plate"
+  ],
+  "bbox.labels": "car, motorbike, bus, truck, bicycle, license_plate",
+  "train.labels": "car, motorbike, bus, truck, bicycle, license_plate",
+  "h.train.labels": [
+    "car, motorbike, bus, truck, bicycle, license_plate",
+    "unoccupied,occupied"
+  ],
+  "crop.classes": "car, motorbike, bus, truck, bicycle, license_plate",
+  "h.crop.classes": [
+    "car, motorbike, bus, truck, bicycle, license_plate",
+    "unoccupied,occupied",
+    "car, motorbike, bus, truck, bicycle,"
+  ],
+  "h.labelnorm.classes": [
+    "car, motorbike, bus, truck, bicycle, license_plate"
+  ],
+  "labelnorm.classes": "car, motorbike, bus, truck, bicycle, license_plate",
+  "cls.lr0": "0.0001",
+  "cls.lrf": "0.0001",
+  "cls_test.line_width": 8,
+  "lpr.sv4_line_w": 2,
+  "lpr.last_dir": "C:/Users/nguye/Desktop",
+  "ip.source": "LotteImage",
+  "ip.from": "2026-01-01 00:00:00",
+  "ip.max_per_buoi": 5,
+  "train.optimizer": "auto",
+  "train.cache": "False",
+  "h.train.name": [
+    "kztek_train"
+  ],
+  "yolo.export_dir": "K:/Software/PhanLoaiPhuongTien/LotteParking/XeDap",
+  "train.workers": "4"
 }
