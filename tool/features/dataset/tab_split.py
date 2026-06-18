@@ -1,6 +1,7 @@
 import math
 import os
 import random
+import re
 import shutil
 import threading
 from pathlib import Path
@@ -43,6 +44,7 @@ class SplitTab(Frame):
         super().__init__(master, bg=BG)
         self.root = root
         self._stop_event = threading.Event()
+        self._report_data = None
         self._build()
 
     # ------------------------------------------------------------------
@@ -175,6 +177,13 @@ class SplitTab(Frame):
                                    style="Dark.TCombobox", font=F_MAIN)
         _cls_combo.grid(row=1, column=1, sticky=EW, padx=(8, 8), columnspan=2)
         _bind_history("h.split.classes", _cls_combo)
+        self.v_rename_folder = BooleanVar(value=True)
+        _bind_cfg("split.rename_folder", self.v_rename_folder)
+        Checkbutton(self.train_extra,
+                    text="Đổi tên file theo tên folder — đảm bảo không trùng",
+                    variable=self.v_rename_folder,
+                    bg=BG, fg=TEXT, selectcolor=CARD, activebackground=BG,
+                    font=F_MAIN).grid(row=2, column=0, columnspan=4, sticky=W, pady=(4, 0))
         self.train_extra.pack_forget()   # sẽ show khi mode=train
 
         # ── Preview ───────────────────────────────────────────────────
@@ -210,6 +219,10 @@ class SplitTab(Frame):
         self.btn_stop.config(state=DISABLED)
         _action_btn(btn_row, "🗂  Mở output", self._open, ACCENT2,
                     padx=14, pady=8).pack(side=LEFT, padx=(10, 0))
+        self.btn_report = _action_btn(btn_row, "📊  Báo cáo", self._show_report, "#27ae60",
+                                      padx=14, pady=8)
+        self.btn_report.pack(side=LEFT, padx=(8, 0))
+        self.btn_report.config(state=DISABLED)
         Button(btn_row, text="🧹  Xóa log  [Ctrl+L]",
                command=lambda: (self.log.configure(state=NORMAL),
                                 self.log.delete("1.0", END),
@@ -474,13 +487,18 @@ class SplitTab(Frame):
 
         out_path = Path(out_dir) if out_dir else src_path.parent / (src_path.name + "_train")
 
+        rename_with_folder = self.v_rename_folder.get()
+        self._report_data = None
+        self.btn_report.config(state=DISABLED)
         self._start_worker(lambda: self._worker_train(
             folders, src_path, labels_dir, out_path,
-            train_ratio, do_shuffle, seed, dup_policy, move, class_list
+            train_ratio, do_shuffle, seed, dup_policy, move, class_list,
+            rename_with_folder
         ))
 
     def _worker_train(self, folders, src_path, labels_dir, out_path,
-                      train_ratio, do_shuffle, seed, dup_policy, move, class_list):
+                      train_ratio, do_shuffle, seed, dup_policy, move, class_list,
+                      rename_with_folder=False):
         """
         Chia train/valid theo từng subfolder độc lập.
         Cấu trúc output (YOLO chuẩn):
@@ -497,6 +515,9 @@ class SplitTab(Frame):
             skipped = 0
             overwritten = 0
             done = 0
+            report_train: list = []
+            report_valid: list = []
+            report_missing: list = []
 
             # Tính tổng để làm progress
             total_files = sum(len(imgs) for _, imgs in folders)
@@ -547,7 +568,15 @@ class SplitTab(Frame):
                         self.root.after(0, _set_progress,
                                         self.pb_lbl, self.pb, done, total_files, self.root)
 
-                        dest_img = img_dest / fp.name
+                        if rename_with_folder:
+                            safe_folder = re.sub(r'[^\w-]', '_', folder_name)
+                            new_stem = f"{safe_folder}_{fp.stem}"
+                            new_img_name = new_stem + fp.suffix.lower()
+                        else:
+                            new_stem = fp.stem
+                            new_img_name = fp.name
+
+                        dest_img = img_dest / new_img_name
                         if dest_img.exists():
                             if dup_policy == "skip":
                                 skipped += 1
@@ -557,12 +586,21 @@ class SplitTab(Frame):
                         (shutil.move if move else shutil.copy2)(str(fp), dest_img)
 
                         label_file = _find_label_file(fp, labels_dir, src_path)
-                        if label_file:
-                            dest_lbl = lbl_dest / (fp.stem + ".txt")
+                        has_label = label_file is not None
+                        rec = {"folder": folder_name, "orig": fp.name, "new": new_img_name}
+                        if split_name == "train":
+                            report_train.append({**rec, "label": has_label})
+                        else:
+                            report_valid.append({**rec, "label": has_label})
+
+                        if has_label:
+                            dest_lbl = lbl_dest / (new_stem + ".txt")
                             if not dest_lbl.exists() or dup_policy == "overwrite":
                                 shutil.copy2(str(label_file), dest_lbl)
                         else:
                             labels_missing += 1
+                            report_missing.append({"folder": folder_name, "orig": fp.name,
+                                                   "path": str(fp)})
 
                 total_train_count += len(train_imgs)
                 total_val_count += len(val_imgs)
@@ -594,6 +632,13 @@ class SplitTab(Frame):
                 self.root.after(0, _append_log, self.log, summary)
                 self.root.after(0, _append_log, self.log,
                                 f"📁  Output: {out_path.resolve()}")
+                self._report_data = {
+                    "train": report_train,
+                    "valid": report_valid,
+                    "missing": report_missing,
+                    "rename": rename_with_folder,
+                }
+                self.root.after(0, lambda: self.btn_report.config(state=NORMAL))
 
         except Exception as e:
             self.root.after(0, _append_log, self.log, f"[LỖI] {e}")
@@ -787,3 +832,108 @@ class SplitTab(Frame):
         if p:
             self.v_src.set(p)
             _push_history("h.split.src", p)
+
+    # ------------------------------------------------------------------
+    def _show_report(self):
+        d = self._report_data
+        if not d:
+            messagebox.showinfo("Chưa có báo cáo", "Hãy chạy Split (Train/Val) trước.")
+            return
+
+        win = Toplevel(self.root)
+        win.title("Báo cáo Split — Train / Valid / Labels thiếu")
+        win.configure(bg=BG)
+        win.resizable(True, True)
+        win.geometry("960x600")
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+
+        # ── Header tổng quan ──────────────────────────────────────────
+        hdr = Frame(win, bg=CARD, padx=16, pady=10)
+        hdr.pack(fill=X)
+        Label(hdr,
+              text=(f"Train: {len(d['train'])}   |   "
+                    f"Valid: {len(d['valid'])}   |   "
+                    f"Labels thiếu: {len(d['missing'])}"),
+              bg=CARD, fg=TEXT, font=F_BOLD).pack(side=LEFT)
+        Button(hdr, text="💾  Xuất CSV", bg=ACCENT2, fg=TEXT, font=F_MAIN,
+               relief="flat", padx=10, pady=4, cursor="hand2",
+               command=lambda: self._export_report(win, d)).pack(side=RIGHT)
+
+        # ── Notebook 3 tab ────────────────────────────────────────────
+        nb = ttk.Notebook(win, style="Dark.TNotebook")
+        nb.pack(fill=BOTH, expand=True, padx=8, pady=8)
+
+        tabs_def = [
+            ("train",   f"🟢  Train ({len(d['train'])})",          d["train"],
+             ["Folder nguồn", "Tên file output", "Label"]),
+            ("valid",   f"🔵  Valid ({len(d['valid'])})",           d["valid"],
+             ["Folder nguồn", "Tên file output", "Label"]),
+            ("missing", f"🔴  Labels thiếu ({len(d['missing'])})", d["missing"],
+             ["Folder nguồn", "Tên file gốc", "Đường dẫn đầy đủ"]),
+        ]
+
+        for key, title, rows, cols in tabs_def:
+            tab_frame = Frame(nb, bg=BG)
+            nb.add(tab_frame, text=title)
+
+            tree = ttk.Treeview(tab_frame, columns=cols, show="headings",
+                                style="Dark.Treeview")
+            for col in cols:
+                tree.heading(col, text=col, anchor=W)
+            tree.column(cols[0], width=160, minwidth=80)
+            tree.column(cols[1], width=380, minwidth=120)
+            tree.column(cols[2], width=380, minwidth=80)
+
+            vsb = ttk.Scrollbar(tab_frame, orient=VERTICAL,   command=tree.yview)
+            hsb = ttk.Scrollbar(tab_frame, orient=HORIZONTAL, command=tree.xview)
+            tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+            vsb.pack(side=RIGHT, fill=Y)
+            hsb.pack(side=BOTTOM, fill=X)
+            tree.pack(fill=BOTH, expand=True)
+
+            tree.tag_configure("miss", foreground="#e67e22")
+
+            if key in ("train", "valid"):
+                for item in rows:
+                    lbl_txt = "✓" if item["label"] else "✗ thiếu"
+                    tags = () if item["label"] else ("miss",)
+                    tree.insert("", END,
+                                values=(item["folder"], item["new"], lbl_txt),
+                                tags=tags)
+            else:
+                for item in rows:
+                    tree.insert("", END,
+                                values=(item["folder"], item["orig"], item["path"]))
+
+        win.lift()
+        win.focus_set()
+
+    def _export_report(self, parent_win, d):
+        import csv
+        from tkinter import filedialog
+        path = filedialog.asksaveasfilename(
+            parent=parent_win,
+            title="Lưu báo cáo CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialfile="split_report.csv",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.writer(f)
+                w.writerow(["Loại", "Folder nguồn", "Tên file gốc",
+                            "Tên file output", "Label"])
+                for item in d["train"]:
+                    w.writerow(["train", item["folder"], item["orig"],
+                                item["new"], "có" if item["label"] else "thiếu"])
+                for item in d["valid"]:
+                    w.writerow(["valid", item["folder"], item["orig"],
+                                item["new"], "có" if item["label"] else "thiếu"])
+                for item in d["missing"]:
+                    w.writerow(["missing_label", item["folder"],
+                                item["orig"], "", "thiếu"])
+            messagebox.showinfo("Xuất CSV", f"Đã lưu:\n{path}", parent=parent_win)
+        except Exception as e:
+            messagebox.showerror("Lỗi", str(e), parent=parent_win)

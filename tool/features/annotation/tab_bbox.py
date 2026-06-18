@@ -98,6 +98,12 @@ class BBoxEditorTab(Frame):
         self._redo_stack = []
 
         self._copy_count_var = IntVar(value=1)
+        self._annot_mode = StringVar(value="bbox")  # "bbox" or "poly4"
+
+        # Chấm 4 điểm
+        self._poly_placing       = False  # đang trong quá trình chấm điểm
+        self._poly_pts: list     = []     # [(x_img, y_img), ...] đã chấm (0-3 điểm)
+        self._poly_prev_items: list = []  # canvas item IDs của preview
 
         # Grid panel (paginated)
         self._thumb_n_var   = IntVar(value=3)
@@ -142,6 +148,11 @@ class BBoxEditorTab(Frame):
                bg=ACCENT, fg="white", activebackground="#c04010",
                activeforeground="white", font=F_BOLD,
                relief="flat", padx=14, cursor="hand2").pack(side=LEFT)
+        Button(lbl_btn_row, text="🔍 Thiếu label",
+               command=self._check_missing_labels,
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", font=F_MAIN,
+               relief="flat", padx=10, cursor="hand2").pack(side=LEFT, padx=(8, 0))
 
         main = Frame(self, bg=BG)
         main.pack(fill=BOTH, expand=True, padx=8, pady=6)
@@ -395,6 +406,18 @@ class BBoxEditorTab(Frame):
         Label(tb, text="Nét:", bg=CARD, fg=DIM, font=F_MAIN).pack(
             side=RIGHT, padx=(0, 2))
 
+        Frame(tb, bg=DIM, width=1).pack(side=RIGHT, fill=Y, padx=6)
+        Radiobutton(tb, text="4 Điểm", variable=self._annot_mode, value="poly4",
+                    bg=CARD, fg=TEXT, selectcolor="#16162a",
+                    activebackground=CARD, activeforeground=TEXT,
+                    font=F_MAIN, cursor="hand2").pack(side=RIGHT, padx=(2, 0))
+        Radiobutton(tb, text="BBox", variable=self._annot_mode, value="bbox",
+                    bg=CARD, fg=TEXT, selectcolor="#16162a",
+                    activebackground=CARD, activeforeground=TEXT,
+                    font=F_MAIN, cursor="hand2").pack(side=RIGHT, padx=(4, 2))
+        Label(tb, text="Nhãn bằng:", bg=CARD, fg=DIM, font=F_MAIN).pack(
+            side=RIGHT, padx=(8, 2))
+
         # Horizontal split: canvas left | grid right
         from tkinter import PanedWindow as _PW
         paned = _PW(center, orient=HORIZONTAL, sashwidth=5,
@@ -464,7 +487,7 @@ class BBoxEditorTab(Frame):
         self._canvas.bind("<Control-s>",       lambda e: self._save_labels())
         self._canvas.bind("<Return>",          lambda e: self._confirm_and_next())
         self._canvas.bind("<Control-a>",       lambda e: self._select_all())
-        self._canvas.bind("<Escape>",          lambda e: self._deselect_all())
+        self._canvas.bind("<Escape>",          lambda e: self._escape_action())
         self._canvas.bind("<Left>",            lambda e: self._prev_img())
         self._canvas.bind("<Right>",           lambda e: self._next_img())
         self._canvas.bind("<Control-z>",       lambda e: self._undo())
@@ -582,12 +605,21 @@ class BBoxEditorTab(Frame):
                           if lbl_dir else target_fp.parent / (target_fp.stem + ".txt"))
             try:
                 lines = []
-                for cid, x1, y1, x2, y2 in _copy.deepcopy(self._bboxes):
-                    xc = max(0.0, min(1.0, ((x1 + x2) / 2) / ciw))
-                    yc = max(0.0, min(1.0, ((y1 + y2) / 2) / cih))
-                    bw = max(1e-4, min(1.0, (x2 - x1) / ciw))
-                    bh = max(1e-4, min(1.0, (y2 - y1) / cih))
-                    lines.append(f"{int(cid)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
+                for ann in _copy.deepcopy(self._bboxes):
+                    cid = ann[0]
+                    if len(ann) == 9:
+                        _, x1, y1, x2, y2, x3, y3, x4, y4 = ann
+                        pts = [x1/ciw, y1/cih, x2/ciw, y2/cih,
+                               x3/ciw, y3/cih, x4/ciw, y4/cih]
+                        pts = [max(0.0, min(1.0, v)) for v in pts]
+                        lines.append(f"{int(cid)} " + " ".join(f"{v:.6f}" for v in pts))
+                    else:
+                        _, x1, y1, x2, y2 = ann
+                        xc = max(0.0, min(1.0, ((x1 + x2) / 2) / ciw))
+                        yc = max(0.0, min(1.0, ((y1 + y2) / 2) / cih))
+                        bw = max(1e-4, min(1.0, (x2 - x1) / ciw))
+                        bh = max(1e-4, min(1.0, (y2 - y1) / cih))
+                        lines.append(f"{int(cid)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
                 with open(target_lbl, "w", encoding="utf-8") as f:
                     f.write("\n".join(lines))
                 copied += 1
@@ -752,12 +784,20 @@ class BBoxEditorTab(Frame):
             with open(path, encoding="utf-8") as f:
                 for line in f:
                     p = line.strip().split()
-                    if len(p) < 5: continue
-                    cid = int(p[0])
-                    xc, yc, w, h = map(float, p[1:5])
-                    bboxes.append([cid,
-                                   (xc - w / 2) * iw, (yc - h / 2) * ih,
-                                   (xc + w / 2) * iw, (yc + h / 2) * ih])
+                    if len(p) == 5:
+                        cid = int(p[0])
+                        xc, yc, w, h = map(float, p[1:5])
+                        bboxes.append([cid,
+                                       (xc - w / 2) * iw, (yc - h / 2) * ih,
+                                       (xc + w / 2) * iw, (yc + h / 2) * ih])
+                    elif len(p) == 9:
+                        cid = int(p[0])
+                        pts = list(map(float, p[1:9]))
+                        bboxes.append([cid,
+                                       pts[0]*iw, pts[1]*ih,
+                                       pts[2]*iw, pts[3]*ih,
+                                       pts[4]*iw, pts[5]*ih,
+                                       pts[6]*iw, pts[7]*ih])
         except Exception:
             pass
         return bboxes
@@ -765,12 +805,20 @@ class BBoxEditorTab(Frame):
     def _write_yolo(self, path):
         iw, ih = self._pil_img.size
         lines  = []
-        for cid, x1, y1, x2, y2 in self._bboxes:
-            xc  = max(0.0, min(1.0, ((x1 + x2) / 2) / iw))
-            yc  = max(0.0, min(1.0, ((y1 + y2) / 2) / ih))
-            bw  = max(1e-4, min(1.0, (x2 - x1) / iw))
-            bh  = max(1e-4, min(1.0, (y2 - y1) / ih))
-            lines.append(f"{int(cid)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
+        for ann in self._bboxes:
+            cid = ann[0]
+            if len(ann) == 9:
+                _, x1, y1, x2, y2, x3, y3, x4, y4 = ann
+                pts = [x1/iw, y1/ih, x2/iw, y2/ih, x3/iw, y3/ih, x4/iw, y4/ih]
+                pts = [max(0.0, min(1.0, v)) for v in pts]
+                lines.append(f"{int(cid)} " + " ".join(f"{v:.6f}" for v in pts))
+            else:
+                _, x1, y1, x2, y2 = ann
+                xc  = max(0.0, min(1.0, ((x1 + x2) / 2) / iw))
+                yc  = max(0.0, min(1.0, ((y1 + y2) / 2) / ih))
+                bw  = max(1e-4, min(1.0, (x2 - x1) / iw))
+                bh  = max(1e-4, min(1.0, (y2 - y1) / ih))
+                lines.append(f"{int(cid)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
 
@@ -830,28 +878,35 @@ class BBoxEditorTab(Frame):
         df_hmax = _fv(self._filter_h_max_var)
         _dim_on = any(v is not None for v in (df_smin, df_smax, df_wmin, df_wmax, df_hmin, df_hmax))
 
-        for i, (cid, x1, y1, x2, y2) in enumerate(self._bboxes):
+        for i, ann in enumerate(self._bboxes):
+            cid = ann[0]
+            is_poly4 = (len(ann) == 9)
+
             if only_cid is not None and cid != only_cid:
                 continue
+
+            # Tính bounding rect để check filter kích thước
+            if is_poly4:
+                _, px1, py1, px2, py2, px3, py3, px4, py4 = ann
+                xs = [px1, px2, px3, px4]; ys = [py1, py2, py3, py4]
+                x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+            else:
+                _, x1, y1, x2, y2 = ann
+
             if _dim_on:
-                bw_px = x2 - x1
-                bh_px = y2 - y1
+                bw_px = x2 - x1; bh_px = y2 - y1
                 if df_smin is not None and bw_px * bh_px < df_smin: continue
                 if df_smax is not None and bw_px * bh_px > df_smax: continue
                 if df_wmin is not None and bw_px < df_wmin: continue
                 if df_wmax is not None and bw_px > df_wmax: continue
                 if df_hmin is not None and bh_px < df_hmin: continue
                 if df_hmax is not None and bh_px > df_hmax: continue
-            cx1 = int(x1 * self._scale) + self._off_x
-            cy1 = int(y1 * self._scale) + self._off_y
-            cx2 = int(x2 * self._scale) + self._off_x
-            cy2 = int(y2 * self._scale) + self._off_y
+
             color      = self._PALETTE[cid % len(self._PALETTE)]
             is_primary = (i == self._selected)
             in_set     = (i in self._selected_set)
             is_hover   = (i == self._hover_idx and not is_primary and not in_set)
 
-            # Màu sáng hơn khi hover; các bbox khác tối đi khi có hover
             if is_hover:
                 draw_color = _lighten_color(color, 0.45)
             elif any_hover and not is_primary and not in_set:
@@ -862,37 +917,64 @@ class BBoxEditorTab(Frame):
             width = lw + 2 if is_primary else (lw + 1 if (in_set or is_hover) else lw)
             dash  = () if (is_primary or in_set or is_hover) else (5, 3)
             tags  = (f"bb{i}", "bbox_item")
-
-            self._canvas.create_rectangle(cx1, cy1, cx2, cy2,
-                                          outline=draw_color,
-                                          width=width, dash=dash, tags=tags)
-            # Fill mờ khi hover
-            if is_hover:
-                self._canvas.create_rectangle(cx1 + 1, cy1 + 1, cx2 - 1, cy2 - 1,
-                                              fill=draw_color, stipple="gray12",
-                                              outline="", tags=tags)
-
-            cls_name = (self.label_list[cid]
-                        if cid < len(self.label_list) else str(cid))
+            cls_name = (self.label_list[cid] if cid < len(self.label_list) else str(cid))
             txt   = f" {cid}:{cls_name} "
             txt_w = max(len(txt) * 7, 30)
-            self._canvas.create_rectangle(cx1, cy1 - 17, cx1 + txt_w, cy1,
-                                          fill=draw_color, outline="", tags=tags)
-            self._canvas.create_text(cx1 + 3, cy1 - 8, text=txt, fill="white",
-                                     font=("Segoe UI", 8, "bold"),
-                                     anchor=W, tags=tags)
-            if is_primary:
-                hw = 7
-                mx, my = (cx1 + cx2) // 2, (cy1 + cy2) // 2
-                for hx, hy in [(cx1, cy1), (cx2, cy1), (cx1, cy2), (cx2, cy2)]:
-                    self._canvas.create_rectangle(
-                        hx - hw, hy - hw, hx + hw, hy + hw,
-                        fill=color, outline="white", width=1, tags=tags)
-                for hx, hy, fw, fh in [(mx, cy1, hw+3, hw-3), (mx, cy2, hw+3, hw-3),
-                                        (cx1, my, hw-3, hw+3), (cx2, my, hw-3, hw+3)]:
-                    self._canvas.create_rectangle(
-                        hx - fw, hy - fh, hx + fw, hy + fh,
-                        fill=color, outline="white", width=1, tags=tags)
+
+            if is_poly4:
+                cpts = [
+                    int(px1 * self._scale) + self._off_x, int(py1 * self._scale) + self._off_y,
+                    int(px2 * self._scale) + self._off_x, int(py2 * self._scale) + self._off_y,
+                    int(px3 * self._scale) + self._off_x, int(py3 * self._scale) + self._off_y,
+                    int(px4 * self._scale) + self._off_x, int(py4 * self._scale) + self._off_y,
+                ]
+                self._canvas.create_polygon(cpts, outline=draw_color, fill="",
+                                            width=width, dash=dash, tags=tags)
+                if is_hover:
+                    self._canvas.create_polygon(cpts, fill=draw_color, outline="",
+                                                stipple="gray12", tags=tags)
+                lx, ly = cpts[0], cpts[1]
+                self._canvas.create_rectangle(lx, ly - 17, lx + txt_w, ly,
+                                              fill=draw_color, outline="", tags=tags)
+                self._canvas.create_text(lx + 3, ly - 8, text=txt, fill="white",
+                                         font=("Segoe UI", 8, "bold"), anchor=W, tags=tags)
+                if is_primary:
+                    hw = 7
+                    for k in range(4):
+                        hx, hy = cpts[k * 2], cpts[k * 2 + 1]
+                        self._canvas.create_rectangle(
+                            hx - hw, hy - hw, hx + hw, hy + hw,
+                            fill=color, outline="white", width=1, tags=tags)
+            else:
+                cx1 = int(x1 * self._scale) + self._off_x
+                cy1 = int(y1 * self._scale) + self._off_y
+                cx2 = int(x2 * self._scale) + self._off_x
+                cy2 = int(y2 * self._scale) + self._off_y
+
+                self._canvas.create_rectangle(cx1, cy1, cx2, cy2,
+                                              outline=draw_color,
+                                              width=width, dash=dash, tags=tags)
+                if is_hover:
+                    self._canvas.create_rectangle(cx1 + 1, cy1 + 1, cx2 - 1, cy2 - 1,
+                                                  fill=draw_color, stipple="gray12",
+                                                  outline="", tags=tags)
+                self._canvas.create_rectangle(cx1, cy1 - 17, cx1 + txt_w, cy1,
+                                              fill=draw_color, outline="", tags=tags)
+                self._canvas.create_text(cx1 + 3, cy1 - 8, text=txt, fill="white",
+                                         font=("Segoe UI", 8, "bold"),
+                                         anchor=W, tags=tags)
+                if is_primary:
+                    hw = 7
+                    mx, my = (cx1 + cx2) // 2, (cy1 + cy2) // 2
+                    for hx, hy in [(cx1, cy1), (cx2, cy1), (cx1, cy2), (cx2, cy2)]:
+                        self._canvas.create_rectangle(
+                            hx - hw, hy - hw, hx + hw, hy + hw,
+                            fill=color, outline="white", width=1, tags=tags)
+                    for hx, hy, fw, fh in [(mx, cy1, hw+3, hw-3), (mx, cy2, hw+3, hw-3),
+                                            (cx1, my, hw-3, hw+3), (cx2, my, hw-3, hw+3)]:
+                        self._canvas.create_rectangle(
+                            hx - fw, hy - fh, hx + fw, hy + fh,
+                            fill=color, outline="white", width=1, tags=tags)
 
     def _on_canvas_cfg(self, _event):
         if self._resize_after:
@@ -905,11 +987,20 @@ class BBoxEditorTab(Frame):
 
     def _hit_test_all(self, cx, cy):
         hits = []
-        for i, (_, x1, y1, x2, y2) in enumerate(self._bboxes):
-            bx1 = int(x1 * self._scale) + self._off_x
-            by1 = int(y1 * self._scale) + self._off_y
-            bx2 = int(x2 * self._scale) + self._off_x
-            by2 = int(y2 * self._scale) + self._off_y
+        for i, ann in enumerate(self._bboxes):
+            if len(ann) == 9:
+                _, px1, py1, px2, py2, px3, py3, px4, py4 = ann
+                xs = [px1, px2, px3, px4]; ys = [py1, py2, py3, py4]
+                bx1 = int(min(xs) * self._scale) + self._off_x
+                by1 = int(min(ys) * self._scale) + self._off_y
+                bx2 = int(max(xs) * self._scale) + self._off_x
+                by2 = int(max(ys) * self._scale) + self._off_y
+            else:
+                _, x1, y1, x2, y2 = ann
+                bx1 = int(x1 * self._scale) + self._off_x
+                by1 = int(y1 * self._scale) + self._off_y
+                bx2 = int(x2 * self._scale) + self._off_x
+                by2 = int(y2 * self._scale) + self._off_y
             if bx1 <= cx <= bx2 and by1 <= cy <= by2:
                 hits.append(i)
         return hits
@@ -929,41 +1020,52 @@ class BBoxEditorTab(Frame):
     _HIT_R = 9
 
     def _handle_hit(self, cx, cy, idx):
-        _, x1, y1, x2, y2 = self._bboxes[idx]
-        bx1 = int(x1 * self._scale) + self._off_x
-        by1 = int(y1 * self._scale) + self._off_y
-        bx2 = int(x2 * self._scale) + self._off_x
-        by2 = int(y2 * self._scale) + self._off_y
-        mx, my = (bx1 + bx2) // 2, (by1 + by2) // 2
+        ann = self._bboxes[idx]
         r = self._HIT_R
-        for op, (hx, hy) in [("resize_NW", (bx1, by1)), ("resize_NE", (bx2, by1)),
-                               ("resize_SW", (bx1, by2)), ("resize_SE", (bx2, by2))]:
-            if abs(cx - hx) <= r and abs(cy - hy) <= r: return op
-        for op, (hx, hy) in [("resize_N", (mx, by1)), ("resize_S", (mx, by2)),
-                               ("resize_W", (bx1, my)), ("resize_E", (bx2, my))]:
-            if abs(cx - hx) <= r and abs(cy - hy) <= r: return op
-        return None
+        if len(ann) == 9:
+            _, px1, py1, px2, py2, px3, py3, px4, py4 = ann
+            pts = [(px1, py1), (px2, py2), (px3, py3), (px4, py4)]
+            for k, (px, py) in enumerate(pts):
+                hx = int(px * self._scale) + self._off_x
+                hy = int(py * self._scale) + self._off_y
+                if abs(cx - hx) <= r and abs(cy - hy) <= r:
+                    return f"poly_{k}"
+            return None
+        else:
+            _, x1, y1, x2, y2 = ann
+            bx1 = int(x1 * self._scale) + self._off_x
+            by1 = int(y1 * self._scale) + self._off_y
+            bx2 = int(x2 * self._scale) + self._off_x
+            by2 = int(y2 * self._scale) + self._off_y
+            mx, my = (bx1 + bx2) // 2, (by1 + by2) // 2
+            for op, (hx, hy) in [("resize_NW", (bx1, by1)), ("resize_NE", (bx2, by1)),
+                                   ("resize_SW", (bx1, by2)), ("resize_SE", (bx2, by2))]:
+                if abs(cx - hx) <= r and abs(cy - hy) <= r: return op
+            for op, (hx, hy) in [("resize_N", (mx, by1)), ("resize_S", (mx, by2)),
+                                   ("resize_W", (bx1, my)), ("resize_E", (bx2, my))]:
+                if abs(cx - hx) <= r and abs(cy - hy) <= r: return op
+            return None
+
+    def _op_cursor(self, op):
+        if op and op.startswith("poly_"):
+            return "fleur"
+        return ("size_nw_se"        if op in ("resize_NW", "resize_SE") else
+                "size_ne_sw"        if op in ("resize_NE", "resize_SW") else
+                "sb_v_double_arrow" if op in ("resize_N",  "resize_S")  else
+                "sb_h_double_arrow" if op in ("resize_W",  "resize_E")  else "crosshair")
 
     def _on_hover(self, event):
         # Show resize cursor for selected bbox handles
         if self._selected >= 0:
             op = self._handle_hit(event.x, event.y, self._selected)
             if op:
-                cursor = ("size_nw_se"        if op in ("resize_NW", "resize_SE") else
-                          "size_ne_sw"        if op in ("resize_NE", "resize_SW") else
-                          "sb_v_double_arrow" if op in ("resize_N",  "resize_S")  else
-                          "sb_h_double_arrow" if op in ("resize_W",  "resize_E")  else "crosshair")
-                self._canvas.config(cursor=cursor)
+                self._canvas.config(cursor=self._op_cursor(op))
                 return
         # Show resize cursor if hovering over any bbox handle (auto-select on click)
         for i in range(len(self._bboxes) - 1, -1, -1):
             op = self._handle_hit(event.x, event.y, i)
             if op:
-                cursor = ("size_nw_se"        if op in ("resize_NW", "resize_SE") else
-                          "size_ne_sw"        if op in ("resize_NE", "resize_SW") else
-                          "sb_v_double_arrow" if op in ("resize_N",  "resize_S")  else
-                          "sb_h_double_arrow" if op in ("resize_W",  "resize_E")  else "crosshair")
-                self._canvas.config(cursor=cursor)
+                self._canvas.config(cursor=self._op_cursor(op))
                 return
         # Show move cursor over any bbox body + highlight hovered bbox
         hits = self._hit_test_all(event.x, event.y)
@@ -1077,15 +1179,30 @@ class BBoxEditorTab(Frame):
         if op == "move" and len(self._selected_set) > 1:
             for i in self._selected_set:
                 b = self._bboxes[i]
-                w = b[3] - b[1]; h = b[4] - b[2]
-                nx1 = max(0.0, min(float(iw) - w, b[1] + dx))
-                ny1 = max(0.0, min(float(ih) - h, b[2] + dy))
-                b[1] = nx1; b[2] = ny1; b[3] = nx1 + w; b[4] = ny1 + h
+                if len(b) == 9:
+                    for k in range(4):
+                        b[1 + k*2] = max(0.0, min(float(iw), b[1 + k*2] + dx))
+                        b[2 + k*2] = max(0.0, min(float(ih), b[2 + k*2] + dy))
+                else:
+                    w = b[3] - b[1]; h = b[4] - b[2]
+                    nx1 = max(0.0, min(float(iw) - w, b[1] + dx))
+                    ny1 = max(0.0, min(float(ih) - h, b[2] + dy))
+                    b[1] = nx1; b[2] = ny1; b[3] = nx1 + w; b[4] = ny1 + h
         elif op == "move":
-            w = bb[3] - bb[1]; h = bb[4] - bb[2]
-            nx1 = max(0.0, min(float(iw) - w, bb[1] + dx))
-            ny1 = max(0.0, min(float(ih) - h, bb[2] + dy))
-            bb[1] = nx1; bb[2] = ny1; bb[3] = nx1 + w; bb[4] = ny1 + h
+            if len(bb) == 9:
+                for k in range(4):
+                    bb[1 + k*2] = max(0.0, min(float(iw), bb[1 + k*2] + dx))
+                    bb[2 + k*2] = max(0.0, min(float(ih), bb[2 + k*2] + dy))
+            else:
+                w = bb[3] - bb[1]; h = bb[4] - bb[2]
+                nx1 = max(0.0, min(float(iw) - w, bb[1] + dx))
+                ny1 = max(0.0, min(float(ih) - h, bb[2] + dy))
+                bb[1] = nx1; bb[2] = ny1; bb[3] = nx1 + w; bb[4] = ny1 + h
+        elif op and op.startswith("poly_"):
+            k = int(op[5:])
+            xi = 1 + k * 2; yi = 2 + k * 2
+            bb[xi] = max(0.0, min(float(iw), bb[xi] + dx))
+            bb[yi] = max(0.0, min(float(ih), bb[yi] + dy))
         elif op == "resize_NW":
             bb[1] = max(0.0, min(bb[3]-1.0, bb[1]+dx))
             bb[2] = max(0.0, min(bb[4]-1.0, bb[2]+dy))
@@ -1122,13 +1239,20 @@ class BBoxEditorTab(Frame):
             if not ctrl:
                 self._selected_set = set()
             if (rx2 - rx1) >= 4 and (ry2 - ry1) >= 4:
-                for i, (_, x1, y1, x2, y2) in enumerate(self._bboxes):
-                    bx1 = int(x1 * self._scale) + self._off_x
-                    by1 = int(y1 * self._scale) + self._off_y
-                    bx2 = int(x2 * self._scale) + self._off_x
-                    by2 = int(y2 * self._scale) + self._off_y
-                    cx_bb = (bx1 + bx2) / 2
-                    cy_bb = (by1 + by2) / 2
+                for i, ann in enumerate(self._bboxes):
+                    if len(ann) == 9:
+                        _, px1, py1, px2, py2, px3, py3, px4, py4 = ann
+                        xs = [px1, px2, px3, px4]; ys = [py1, py2, py3, py4]
+                        cx_bb = (sum(xs) / 4) * self._scale + self._off_x
+                        cy_bb = (sum(ys) / 4) * self._scale + self._off_y
+                    else:
+                        _, x1, y1, x2, y2 = ann
+                        bx1 = int(x1 * self._scale) + self._off_x
+                        by1 = int(y1 * self._scale) + self._off_y
+                        bx2 = int(x2 * self._scale) + self._off_x
+                        by2 = int(y2 * self._scale) + self._off_y
+                        cx_bb = (bx1 + bx2) / 2
+                        cy_bb = (by1 + by2) / 2
                     if rx1 <= cx_bb <= rx2 and ry1 <= cy_bb <= ry2:
                         self._selected_set.add(i)
             self._selected = (max(self._selected_set)
@@ -1163,14 +1287,20 @@ class BBoxEditorTab(Frame):
         if ix2 <= ix1 or iy2 <= iy1: return
         cid = self._current_class_id()
         self._push_undo()
-        self._bboxes.append([cid, ix1, iy1, ix2, iy2])
+        if self._annot_mode.get() == "poly4":
+            # TL, TR, BR, BL — 4 góc điều chỉnh độc lập
+            self._bboxes.append([cid, ix1, iy1, ix2, iy1, ix2, iy2, ix1, iy2])
+            kind = "4điểm"
+        else:
+            self._bboxes.append([cid, ix1, iy1, ix2, iy2])
+            kind = "bbox"
         self._selected = len(self._bboxes) - 1
         self._modified = True
         self._render()
         self._refresh_present_labels()
         name = (self.label_list[cid] if cid < len(self.label_list) else str(cid))
         self._status.config(
-            text=f"Đã vẽ bbox  [{cid}:{name}]  |  {len(self._bboxes)} bbox tổng")
+            text=f"Đã vẽ {kind}  [{cid}:{name}]  |  {len(self._bboxes)} nhãn tổng")
 
     def _current_class_id(self):
         val = self._cls_combo.get()
@@ -1382,8 +1512,15 @@ class BBoxEditorTab(Frame):
             return
         from collections import defaultdict
         groups: dict = defaultdict(list)
-        for cid, x1, y1, x2, y2 in self._bboxes:
-            groups[cid].append((x2 - x1, y2 - y1))
+        for ann in self._bboxes:
+            cid = ann[0]
+            if len(ann) == 9:
+                _, px1, py1, px2, py2, px3, py3, px4, py4 = ann
+                xs = [px1, px2, px3, px4]; ys = [py1, py2, py3, py4]
+                groups[cid].append((max(xs) - min(xs), max(ys) - min(ys)))
+            else:
+                _, x1, y1, x2, y2 = ann
+                groups[cid].append((x2 - x1, y2 - y1))
         for cid in sorted(groups):
             sizes = groups[cid]
             cnt   = len(sizes)
@@ -1470,6 +1607,114 @@ class BBoxEditorTab(Frame):
         self._must_have_lb.selection_clear(0, END)
         self._must_not_lb.selection_clear(0, END)
         self._apply_filters()
+
+    # ── Kiểm tra ảnh thiếu file label ────────────────────────────────────────
+
+    def _check_missing_labels(self):
+        if not self.image_files:
+            messagebox.showinfo("Thiếu label", "Chưa tải ảnh — nhấn 'Tải ảnh' trước.")
+            return
+
+        lbl_dir = self.lbl_dir_var.get().strip()
+        missing = []
+        for real_idx, fp in enumerate(self.image_files):
+            lbl_path = (Path(lbl_dir) / (fp.stem + ".txt")
+                        if lbl_dir else fp.parent / (fp.stem + ".txt"))
+            if not lbl_path.exists():
+                missing.append((real_idx, fp))
+
+        total = len(self.image_files)
+        if not missing:
+            messagebox.showinfo(
+                "Kiểm tra hoàn tất",
+                f"Tất cả {total} ảnh đều có file label.")
+            return
+
+        win = Toplevel(self.root)
+        win.title(f"Thiếu file label — {len(missing)}/{total} ảnh")
+        win.configure(bg=BG)
+        win.resizable(True, True)
+        win.geometry("540x420")
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+
+        from ...core.constants import F_BOLD as _FB, F_MONO as _FM
+        Label(win,
+              text=f"⚠  {len(missing)} / {total} ảnh chưa có file label (.txt)",
+              bg=BG, fg=ACCENT, font=_FB).pack(pady=(12, 4), padx=12, anchor=W)
+        Label(win,
+              text="Double-click để nhảy tới ảnh đó",
+              bg=BG, fg=DIM, font=F_MAIN).pack(padx=12, anchor=W)
+
+        frm = Frame(win, bg=BG)
+        frm.pack(fill=BOTH, expand=True, padx=12, pady=8)
+        lb = Listbox(frm, bg="#16162a", fg=TEXT,
+                     selectbackground=ACCENT2, selectforeground="white",
+                     font=_FM, relief="flat", bd=0, activestyle="none")
+        sb = Scrollbar(frm, command=lb.yview)
+        lb.configure(yscrollcommand=sb.set)
+        sb.pack(side=RIGHT, fill=Y)
+        lb.pack(fill=BOTH, expand=True)
+
+        img_root = Path(self.img_dir_var.get().strip())
+        for _, fp in missing:
+            try:
+                display = str(fp.relative_to(img_root))
+            except ValueError:
+                display = fp.name
+            lb.insert(END, display)
+
+        def _jump(e):
+            sel = lb.curselection()
+            if not sel: return
+            real_idx, _ = missing[sel[0]]
+            fi = next((i for i, (ri, _) in enumerate(self._filtered_files)
+                       if ri == real_idx), -1)
+            if fi >= 0:
+                self._img_lb.selection_clear(0, END)
+                self._img_lb.selection_set(fi)
+                self._img_lb.see(fi)
+            self._autosave()
+            self._load_image(real_idx)
+            win.lift()
+
+        lb.bind("<Double-Button-1>", _jump)
+
+        btn_row = Frame(win, bg=BG)
+        btn_row.pack(fill=X, padx=12, pady=(0, 10))
+
+        def _filter_missing():
+            # Lọc danh sách chính chỉ hiện các ảnh thiếu label
+            missing_ri = {ri for ri, _ in missing}
+            self._filtered_files = [(ri, fp) for ri, fp in
+                                    [(ri, self.image_files[ri]) for ri in sorted(missing_ri)]]
+            self._img_lb.delete(0, END)
+            for ri, fp in self._filtered_files:
+                try:
+                    display = str(fp.relative_to(img_root))
+                except ValueError:
+                    display = fp.name
+                self._img_lb.insert(END, f"○ {display}")
+                self._img_lb.itemconfig(END, fg="#9090b0")
+            n = len(self._filtered_files)
+            self._lbl_imgcount.config(text=f"{n} / {total}  ảnh thiếu label")
+            if self._filtered_files:
+                self._img_lb.selection_set(0)
+                self._load_image(self._filtered_files[0][0])
+            win.destroy()
+
+        Button(btn_row, text="Lọc danh sách ảnh thiếu label",
+               command=_filter_missing,
+               bg=ACCENT, fg="white", activebackground="#c04010",
+               activeforeground="white", font=F_MAIN,
+               relief="flat", padx=10, cursor="hand2").pack(side=LEFT)
+        Button(btn_row, text="Đóng",
+               command=win.destroy,
+               bg=CARD, fg=TEXT, activebackground=ACCENT2,
+               activeforeground="white", font=F_MAIN,
+               relief="flat", padx=10, cursor="hand2").pack(side=RIGHT)
+
+        win.lift()
+        win.focus_set()
 
     def _apply_filters(self):
         if not self.image_files:
@@ -1612,13 +1857,20 @@ class BBoxEditorTab(Frame):
                     with open(lbl_path, encoding="utf-8") as f:
                         for line in f:
                             parts = line.strip().split()
-                            if len(parts) < 5:
+                            if len(parts) == 5:
+                                if label_id is not None and label_id >= 0 and int(parts[0]) != label_id:
+                                    continue
+                                bw = float(parts[3]) * iw
+                                bh = float(parts[4]) * ih
+                            elif len(parts) == 9:
+                                if label_id is not None and label_id >= 0 and int(parts[0]) != label_id:
+                                    continue
+                                xs = [float(parts[k]) * iw for k in (1, 3, 5, 7)]
+                                ys = [float(parts[k]) * ih for k in (2, 4, 6, 8)]
+                                bw = max(xs) - min(xs)
+                                bh = max(ys) - min(ys)
+                            else:
                                 continue
-                            # Nếu đang filter theo nhãn cụ thể, chỉ check bbox thuộc nhãn đó
-                            if label_id is not None and label_id >= 0 and int(parts[0]) != label_id:
-                                continue
-                            bw = float(parts[3]) * iw
-                            bh = float(parts[4]) * ih
                             if size_min is not None and bw * bh < size_min:
                                 continue
                             if size_max is not None and bw * bh > size_max:

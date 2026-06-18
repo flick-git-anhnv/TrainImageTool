@@ -247,19 +247,23 @@ def _zoom_image_window(root, pil_img, title="Phóng to ảnh",
             sc = _s[0]
             for bbox in bboxes:
                 cid = int(bbox[0])
-                cx1 = int(bbox[1] * sc)
-                cy1 = int(bbox[2] * sc)
-                cx2 = int(bbox[3] * sc)
-                cy2 = int(bbox[4] * sc)
                 color = _ZOOM_PALETTE[cid % len(_ZOOM_PALETTE)]
-                cv.create_rectangle(cx1, cy1, cx2, cy2, outline=color, width=2)
                 name = (label_names[cid] if (label_names and cid < len(label_names))
                         else str(cid))
                 lbl_txt = f" {cid}:{name} "
                 lbl_w = max(len(lbl_txt) * 7, 30)
-                cv.create_rectangle(cx1, max(0, cy1 - 17), cx1 + lbl_w, cy1,
+                if len(bbox) == 9:
+                    cpts = [int(bbox[k] * sc) for k in range(1, 9)]
+                    cv.create_polygon(cpts, outline=color, fill="", width=2)
+                    lx, ly = cpts[0], cpts[1]
+                else:
+                    cx1 = int(bbox[1] * sc); cy1 = int(bbox[2] * sc)
+                    cx2 = int(bbox[3] * sc); cy2 = int(bbox[4] * sc)
+                    cv.create_rectangle(cx1, cy1, cx2, cy2, outline=color, width=2)
+                    lx, ly = cx1, cy1
+                cv.create_rectangle(lx, max(0, ly - 17), lx + lbl_w, ly,
                                     fill=color, outline="")
-                cv.create_text(cx1 + 3, max(8, cy1 - 8), text=lbl_txt, fill="white",
+                cv.create_text(lx + 3, max(8, ly - 8), text=lbl_txt, fill="white",
                                font=("Segoe UI", 8, "bold"), anchor=W)
         cv.configure(scrollregion=(0, 0, nw, nh))
 

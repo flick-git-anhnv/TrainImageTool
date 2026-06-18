@@ -1,5 +1,5 @@
 # CODE_GRAPH.md — KZTEK Image Tools
-<!-- Cập nhật: 2026-06-17 | IParkingImage: cấu trúc lưu mới (loai_xe/anh_xe|anh_toan_canh/date/sang|trua|chieu|toi), count SK thay vì ảnh -->
+<!-- Cập nhật: 2026-06-18 | SplitTab: thêm option đổi tên file theo tên folder (rename_with_folder) cho mode Train/Val YOLO -->
 
 ## Hướng dẫn sử dụng
 
