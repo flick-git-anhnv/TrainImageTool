@@ -112,10 +112,14 @@ class TrainTab(Frame):
         self._axes         = None
         self._mpl_canvas   = None
 
-        self._history_win  = None
-        self._ckpt_win     = None
-        self._aug_win      = None
-        self._miss_win     = None
+        self._history_win    = None
+        self._ckpt_win       = None
+        self._aug_win        = None
+        self._miss_win       = None
+        self._fp_win         = None
+        self._imbalance_win    = None
+        self._shape_win        = None
+        self._brightness_win   = None
 
         self._build()
 
@@ -357,8 +361,28 @@ class TrainTab(Frame):
                activebackground=ACCENT, activeforeground="white",
                font=F_BOLD, relief="flat", padx=14, cursor="hand2").pack(side=LEFT, padx=(8, 0))
 
+        Button(ctrl, text="⚠  FP Analysis",
+               command=self._open_fp_analysis,
+               bg=ACCENT2, fg="white",
+               activebackground=ACCENT, activeforeground="white",
+               font=F_BOLD, relief="flat", padx=14, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+
         self._status_lbl = Label(ctrl, text="", bg=BG, fg=DIM, font=F_MAIN)
         self._status_lbl.pack(side=LEFT, padx=16)
+
+        ctrl2 = Frame(self, bg=BG, padx=12, pady=2)
+        ctrl2.pack(fill=X)
+        Label(ctrl2, text="Dataset Analysis:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        for _txt, _cmd in [
+            ("📊  Imbalance",    self._open_imbalance_analysis),
+            ("📐  Size & Shape", self._open_shape_analysis),
+            ("☀  Brightness",   self._open_brightness_analysis),
+            ("📋  HTML Report",  self._generate_html_report),
+        ]:
+            Button(ctrl2, text=_txt, command=_cmd,
+                   bg=ACCENT2, fg="white",
+                   activebackground=ACCENT, activeforeground="white",
+                   font=F_MAIN, relief="flat", padx=12, cursor="hand2").pack(side=LEFT, padx=(8, 0))
 
         self._build_train_glossary()
 
@@ -2306,5 +2330,1699 @@ class TrainTab(Frame):
                 fg=SUCCESS)
             run_btn.config(state=NORMAL)
             open_btn.config(state=NORMAL)
+            # Write summary JSON for HTML report
+            try:
+                summary_fn = _os.path.join(out_dir, "summary.json")
+                _summary = {"classes": []}
+                for cid in sorted(target_ids, key=lambda c: names[c]):
+                    s = stats[cid]; szs = s["sizes"]; tot = s["total"]; miss = s["missed"]
+                    _summary["classes"].append({
+                        "name": s["name"], "total": tot, "missed": miss,
+                        "miss_pct": round(miss/tot*100, 1) if tot else 0,
+                        "tiny_pct": round(sum(1 for x in szs if x<2)/len(szs)*100,1) if szs else 0,
+                    })
+                with open(summary_fn, "w", encoding="utf-8") as _jf:
+                    import json as _json; _json.dump(_summary, _jf, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
 
         _ui(_refresh_tree)
+
+    # ── False Positive Analysis ───────────────────────────────────────────────
+
+    def _open_fp_analysis(self):
+        """Cửa sổ phân tích False Positive (nhận nhầm) theo class."""
+        if self._fp_win and self._fp_win.winfo_exists():
+            self._fp_win.lift()
+            return
+
+        win = Toplevel(self.root)
+        win.title("KZTEK – False Positive Analysis")
+        win.geometry("900x720")
+        win.configure(bg=BG)
+        win.resizable(True, True)
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+        self._fp_win = win
+
+        # ── Config ────────────────────────────────────────────────────
+        cfg = Frame(win, bg=CARD, padx=12, pady=10)
+        cfg.pack(fill=X, padx=8, pady=(8, 4))
+        cfg.columnconfigure(1, weight=1)
+
+        Label(cfg, text="Phân tích nhận nhầm (False Positive) — model dự đoán nhầm class nào",
+              bg=CARD, fg=TEXT, font=F_BOLD).grid(
+                  row=0, column=0, columnspan=3, sticky=W, pady=(0, 8))
+
+        fp_model_var = StringVar()
+        best_pt = os.path.join(self._output_dir, "weights", "best.pt") if self._output_dir else ""
+        if best_pt and os.path.isfile(best_pt):
+            fp_model_var.set(best_pt)
+
+        fp_img_var = StringVar()
+        fp_lbl_var = StringVar()
+
+        def _pick_model():
+            p = filedialog.askopenfilename(
+                title="Chọn model .pt",
+                filetypes=[("PyTorch model", "*.pt"), ("All", "*.*")],
+                initialdir=str(Path(fp_model_var.get()).parent)
+                           if fp_model_var.get() and os.path.isfile(fp_model_var.get()) else ".")
+            if p:
+                fp_model_var.set(p)
+
+        def _pick_imgs():
+            p = filedialog.askdirectory(title="Chọn thư mục val/images",
+                                        initialdir=fp_img_var.get() or ".")
+            if p:
+                fp_img_var.set(p)
+                cand = str(Path(p).parent / "labels")
+                if os.path.isdir(cand):
+                    fp_lbl_var.set(cand)
+
+        def _pick_lbls():
+            p = filedialog.askdirectory(title="Chọn thư mục val/labels",
+                                        initialdir=fp_lbl_var.get() or fp_img_var.get() or ".")
+            if p:
+                fp_lbl_var.set(p)
+
+        for row, (lbl_txt, var, cmd) in enumerate([
+            ("Model (.pt):", fp_model_var, _pick_model),
+            ("Val images:",  fp_img_var,   _pick_imgs),
+            ("Val labels:",  fp_lbl_var,   _pick_lbls),
+        ], start=1):
+            Label(cfg, text=lbl_txt, bg=CARD, fg=DIM, font=F_MAIN,
+                  width=14, anchor=W).grid(row=row, column=0, sticky=W, pady=3)
+            Entry(cfg, textvariable=var, bg="#16162a", fg=TEXT,
+                  insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).grid(
+                      row=row, column=1, sticky=EW, padx=(8, 4))
+            Button(cfg, text="…", command=cmd,
+                   bg=ACCENT2, fg="white", font=F_MAIN, relief="flat",
+                   padx=8, cursor="hand2").grid(row=row, column=2)
+
+        pr = Frame(cfg, bg=CARD)
+        pr.grid(row=4, column=0, columnspan=3, sticky=W, pady=(8, 0))
+        fp_conf_var    = StringVar(value="0.25")
+        fp_iou_var     = StringVar(value="0.3")
+        fp_bg_iou_var  = StringVar(value="0.1")
+        fp_max_var     = StringVar(value="60")
+        fp_cls_var     = StringVar(value=self._labels_var.get())
+
+        for lbl_t, var, w, tip in [
+            ("Conf:",        fp_conf_var,   5, "ngưỡng predict"),
+            ("IoU match:",   fp_iou_var,    5, "≥ = TP"),
+            ("IoU overlap:", fp_bg_iou_var, 5, "< = background FP"),
+            ("Max save:",    fp_max_var,    5, "ảnh/class"),
+        ]:
+            Label(pr, text=lbl_t, bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+            Entry(pr, textvariable=var, bg="#16162a", fg=TEXT,
+                  insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4,
+                  width=w).pack(side=LEFT, padx=(4, 2))
+            Label(pr, text=tip, bg=CARD, fg=DIM,
+                  font=("Segoe UI", 7, "italic")).pack(side=LEFT, padx=(0, 10))
+
+        pr2 = Frame(cfg, bg=CARD)
+        pr2.grid(row=5, column=0, columnspan=3, sticky=W, pady=(4, 0))
+        Label(pr2, text="Classes:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Entry(pr2, textvariable=fp_cls_var, bg="#16162a", fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4,
+              width=40).pack(side=LEFT, padx=(4, 0))
+        Label(pr2, text="  (để trống = tất cả)", bg=CARD, fg=DIM,
+              font=("Segoe UI", 7, "italic")).pack(side=LEFT)
+
+        # ── Controls ──────────────────────────────────────────────────
+        ctrl_row = Frame(win, bg=BG, padx=8, pady=4)
+        ctrl_row.pack(fill=X)
+        fp_run_btn = Button(ctrl_row, text="▶  Chạy phân tích",
+                            bg="#2e7d32", fg="white",
+                            activebackground="#1b5e20", activeforeground="white",
+                            font=F_BOLD, relief="flat", padx=16, cursor="hand2")
+        fp_run_btn.pack(side=LEFT)
+        fp_open_btn = Button(ctrl_row, text="📂  Mở thư mục",
+                             bg=ACCENT2, fg="white",
+                             activebackground=ACCENT, activeforeground="white",
+                             font=F_MAIN, relief="flat", padx=12, cursor="hand2",
+                             state=DISABLED)
+        fp_open_btn.pack(side=LEFT, padx=(8, 0))
+        fp_hn_btn = Button(ctrl_row, text="➕  Hard Negative",
+                           bg="#5a3000", fg="white",
+                           activebackground=ACCENT, activeforeground="white",
+                           font=F_MAIN, relief="flat", padx=12, cursor="hand2",
+                           state=DISABLED)
+        fp_hn_btn.pack(side=LEFT, padx=(8, 0))
+        fp_status = Label(ctrl_row, text="", bg=BG, fg=DIM, font=F_MAIN)
+        fp_status.pack(side=LEFT, padx=12)
+
+        pb_f = Frame(win, bg=BG, padx=8)
+        pb_f.pack(fill=X)
+        fp_pb = ttk.Progressbar(pb_f, maximum=100)
+        fp_pb.pack(fill=X, pady=(2, 4))
+
+        # ── Results: 2 bảng ──────────────────────────────────────────
+        Label(win, text="Nhận nhầm theo class dự đoán",
+              bg=BG, fg=TEXT, font=F_BOLD, padx=8, anchor=W).pack(fill=X)
+
+        tbl1_f = Frame(win, bg=BG, padx=8)
+        tbl1_f.pack(fill=BOTH, expand=True)
+        cols1 = ("cls_pred", "total_pred", "fp_cnt", "fp_pct", "top_confusion")
+        fp_tree1 = ttk.Treeview(tbl1_f, columns=cols1, show="headings",
+                                 style="Dark.Treeview", height=6)
+        for col, hdr, w, anc in [
+            ("cls_pred",    "Class dự đoán",    140, W),
+            ("total_pred",  "Tổng predict",       90, CENTER),
+            ("fp_cnt",      "FP",                 60, CENTER),
+            ("fp_pct",      "FP%",                70, CENTER),
+            ("top_confusion","Nhầm từ GT class",  320, W),
+        ]:
+            fp_tree1.heading(col, text=hdr)
+            fp_tree1.column(col, width=w, anchor=anc, stretch=(col == "top_confusion"))
+        vsb1 = ttk.Scrollbar(tbl1_f, orient=VERTICAL,   command=fp_tree1.yview)
+        hsb1 = ttk.Scrollbar(tbl1_f, orient=HORIZONTAL, command=fp_tree1.xview)
+        fp_tree1.configure(yscrollcommand=vsb1.set, xscrollcommand=hsb1.set)
+        vsb1.pack(side=RIGHT, fill=Y)
+        hsb1.pack(side=BOTTOM, fill=X)
+        fp_tree1.pack(fill=BOTH, expand=True)
+        fp_tree1.tag_configure("ok",   foreground=SUCCESS)
+        fp_tree1.tag_configure("warn", foreground="#f0c040")
+        fp_tree1.tag_configure("bad",  foreground="#f05050")
+
+        Label(win, text="Chi tiết nhầm: GT class nào bị dự đoán thành class khác",
+              bg=BG, fg=TEXT, font=F_BOLD, padx=8, anchor=W).pack(fill=X, pady=(6, 0))
+
+        tbl2_f = Frame(win, bg=BG, padx=8)
+        tbl2_f.pack(fill=BOTH, expand=True)
+        cols2 = ("gt_cls", "pred_cls", "count", "note")
+        fp_tree2 = ttk.Treeview(tbl2_f, columns=cols2, show="headings",
+                                  style="Dark.Treeview", height=5)
+        for col, hdr, w, anc in [
+            ("gt_cls",  "GT thực tế",      140, W),
+            ("pred_cls","Dự đoán nhầm",    140, W),
+            ("count",   "Số lần",           70, CENTER),
+            ("note",    "Ghi chú",         260, W),
+        ]:
+            fp_tree2.heading(col, text=hdr)
+            fp_tree2.column(col, width=w, anchor=anc, stretch=(col == "note"))
+        vsb2 = ttk.Scrollbar(tbl2_f, orient=VERTICAL,   command=fp_tree2.yview)
+        hsb2 = ttk.Scrollbar(tbl2_f, orient=HORIZONTAL, command=fp_tree2.xview)
+        fp_tree2.configure(yscrollcommand=vsb2.set, xscrollcommand=hsb2.set)
+        vsb2.pack(side=RIGHT, fill=Y)
+        hsb2.pack(side=BOTTOM, fill=X)
+        fp_tree2.pack(fill=BOTH, expand=True)
+        fp_tree2.tag_configure("high", foreground="#f05050")
+        fp_tree2.tag_configure("med",  foreground="#f0c040")
+
+        sum_lbl = Label(win, text="", bg=BG, fg=DIM,
+                        font=("Consolas", 9), anchor=W, padx=8)
+        sum_lbl.pack(fill=X, pady=(2, 6))
+
+        fp_out_dir   = [None]
+        fp_cases_ref = [[]]   # list of original image paths that had FP
+
+        def _do_run():
+            model_path = fp_model_var.get().strip()
+            img_dir    = fp_img_var.get().strip()
+            lbl_dir    = fp_lbl_var.get().strip()
+            if not model_path or not os.path.isfile(model_path):
+                messagebox.showwarning("Thiếu model", "Chọn file model .pt hợp lệ.", parent=win)
+                return
+            if not img_dir or not os.path.isdir(img_dir):
+                messagebox.showwarning("Thiếu val images", "Chọn thư mục val/images.", parent=win)
+                return
+            if not lbl_dir:
+                lbl_dir = str(Path(img_dir).parent / "labels")
+            if not os.path.isdir(lbl_dir):
+                messagebox.showwarning("Thiếu labels",
+                                       f"Không tìm thấy thư mục labels:\n{lbl_dir}", parent=win)
+                return
+            try:
+                conf_v    = float(fp_conf_var.get())
+                iou_v     = float(fp_iou_var.get())
+                bg_iou_v  = float(fp_bg_iou_var.get())
+                max_save  = int(fp_max_var.get())
+            except ValueError:
+                conf_v, iou_v, bg_iou_v, max_save = 0.25, 0.3, 0.1, 60
+            cls_filter = [c.strip() for c in
+                          fp_cls_var.get().replace(",", " ").split() if c.strip()]
+            out_dir = os.path.normpath(
+                os.path.join(self._output_dir if self._output_dir else img_dir,
+                             "fp_analysis"))
+            fp_out_dir[0] = out_dir
+            fp_run_btn.config(state=DISABLED)
+            fp_open_btn.config(state=DISABLED)
+            fp_hn_btn.config(state=DISABLED)
+            fp_cases_ref[0] = []
+            fp_pb["value"] = 0
+            fp_status.config(text="Đang chạy…", fg=ACCENT)
+            for t in (fp_tree1, fp_tree2):
+                for iid in t.get_children():
+                    t.delete(iid)
+            sum_lbl.config(text="")
+            threading.Thread(
+                target=self._run_fp_analysis,
+                args=(model_path, img_dir, lbl_dir, out_dir, conf_v, iou_v,
+                      bg_iou_v, max_save, cls_filter, fp_pb, fp_status,
+                      fp_tree1, fp_tree2, sum_lbl, fp_run_btn, fp_open_btn,
+                      fp_cases_ref, fp_hn_btn),
+                daemon=True).start()
+
+        def _open_out():
+            d = fp_out_dir[0]
+            if d and os.path.isdir(d):
+                subprocess.Popen(["explorer", os.path.normpath(d)])
+            else:
+                messagebox.showinfo("Chưa có kết quả", "Chạy phân tích trước.", parent=win)
+
+        def _do_add_hn():
+            paths = fp_cases_ref[0]
+            if not paths:
+                messagebox.showinfo("Chưa có dữ liệu", "Chạy FP Analysis trước.", parent=win)
+                return
+            dest = filedialog.askdirectory(
+                title="Chọn thư mục train để thêm Hard Negative",
+                initialdir=self.train_dir.get().strip() or ".")
+            if not dest:
+                return
+            img_out = Path(dest) / "images"
+            lbl_out = Path(dest) / "labels"
+            img_out.mkdir(parents=True, exist_ok=True)
+            lbl_out.mkdir(parents=True, exist_ok=True)
+            copied = skipped = 0
+            for src in paths:
+                src_p = Path(src)
+                dst_img = img_out / src_p.name
+                dst_lbl = lbl_out / (src_p.stem + ".txt")
+                if dst_img.exists():
+                    skipped += 1
+                    continue
+                try:
+                    shutil.copy2(src_p, dst_img)
+                    dst_lbl.write_text("")   # file rỗng → background
+                    copied += 1
+                except Exception:
+                    skipped += 1
+            messagebox.showinfo(
+                "Hoàn tất",
+                f"Đã thêm {copied} ảnh Hard Negative vào:\n{dest}\n\n"
+                f"(bỏ qua {skipped} ảnh đã tồn tại)\n\n"
+                f"Retrain để model học không nhận nhầm các vật thể này.",
+                parent=win)
+
+        fp_run_btn.config(command=_do_run)
+        fp_open_btn.config(command=_open_out)
+        fp_hn_btn.config(command=_do_add_hn)
+        win.lift()
+        win.focus_set()
+
+    def _run_fp_analysis(self, model_path, img_dir, lbl_dir, out_dir,
+                         conf, iou_thresh, bg_iou_thresh, max_save, cls_filter,
+                         pb, status_lbl, tree1, tree2, sum_lbl, run_btn, open_btn,
+                         fp_cases_ref=None, fp_hn_btn=None):
+        """Thread: batch predict → phân tích FP per class → confusion matrix → lưu ảnh."""
+        def _ui(fn):
+            self.root.after(0, fn)
+
+        try:
+            import cv2 as _cv2
+            from ultralytics import YOLO as _YOLO
+        except ImportError as exc:
+            _ui(lambda e=str(exc): status_lbl.config(text=f"Lỗi import: {e}", fg="#f05050"))
+            _ui(lambda: run_btn.config(state=NORMAL))
+            return
+
+        _ui(lambda: status_lbl.config(text="Đang load model…", fg=ACCENT))
+        _ui(lambda: pb.config(value=5))
+
+        try:
+            model = _YOLO(model_path)
+        except Exception as exc:
+            _ui(lambda e=str(exc): status_lbl.config(text=f"Lỗi load model: {e}", fg="#f05050"))
+            _ui(lambda: run_btn.config(state=NORMAL))
+            return
+
+        names = model.names  # {0: 'car', ...}
+        all_ids = list(names.keys())
+        target_ids = ([cid for cid, nm in names.items() if nm in cls_filter]
+                      if cls_filter else all_ids)
+        if not target_ids:
+            target_ids = all_ids
+
+        _EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+        img_paths = sorted(p for p in Path(img_dir).iterdir()
+                           if p.is_file() and p.suffix.lower() in _EXTS)
+
+        total_imgs = len(img_paths)
+        if not total_imgs:
+            _ui(lambda: status_lbl.config(text="Không tìm thấy ảnh!", fg="#f0c040"))
+            _ui(lambda: run_btn.config(state=NORMAL))
+            return
+
+        _ui(lambda n=total_imgs: status_lbl.config(
+            text=f"Tìm thấy {n} ảnh…", fg=DIM))
+
+        # fp_stats[pred_cid] = {"total": int, "fp": int, "confusion": {gt_cid: count}, "cases": [...]}
+        fp_stats = {cid: {"name": names[cid], "total": 0, "fp": 0,
+                          "confusion": {}, "cases": []}
+                    for cid in target_ids}
+
+        def _iou(b1, b2):
+            ix1 = max(b1[0], b2[0]); iy1 = max(b1[1], b2[1])
+            ix2 = min(b1[2], b2[2]); iy2 = min(b1[3], b2[3])
+            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+            a1 = (b1[2]-b1[0])*(b1[3]-b1[1])
+            a2 = (b2[2]-b2[0])*(b2[3]-b2[1])
+            return inter / (a1 + a2 - inter + 1e-9)
+
+        def _to_xyxy(cx, cy, w, h, W, H):
+            return [int((cx-w/2)*W), int((cy-h/2)*H),
+                    int((cx+w/2)*W), int((cy+h/2)*H)]
+
+        import time as _time
+        def _fmt_sec(s):
+            s = int(s)
+            return f"{s//3600}h{(s%3600)//60:02d}m" if s >= 3600 else f"{s//60}m{s%60:02d}s"
+
+        t_start = _time.monotonic()
+        BATCH = 32
+        for i in range(0, total_imgs, BATCH):
+            batch = img_paths[i:i+BATCH]
+            try:
+                results = model(batch, conf=conf, verbose=False)
+            except Exception as exc:
+                _ui(lambda e=str(exc): status_lbl.config(text=f"Lỗi inference: {e}", fg="#f05050"))
+                break
+
+            for img_path, result in zip(batch, results):
+                lp = Path(lbl_dir) / (img_path.stem + ".txt")
+                img_tmp = _cv2.imread(str(img_path))
+                if img_tmp is None:
+                    continue
+                H_img, W_img = img_tmp.shape[:2]
+
+                # Load all GT boxes per class
+                gt_all = {cid: [] for cid in all_ids}
+                if lp.exists():
+                    try:
+                        with open(lp) as f:
+                            for line in f:
+                                parts = line.strip().split()
+                                if len(parts) < 5:
+                                    continue
+                                cid = int(parts[0])
+                                if cid in gt_all:
+                                    gt_all[cid].append(
+                                        _to_xyxy(*map(float, parts[1:5]), W_img, H_img))
+                    except Exception:
+                        pass
+
+                # Evaluate each prediction
+                for box in result.boxes:
+                    pred_cid = int(box.cls)
+                    if pred_cid not in target_ids:
+                        continue
+                    fp_stats[pred_cid]["total"] += 1
+                    pb_box = box.xyxy[0].tolist()
+
+                    # Check if this prediction matches any GT of the same class
+                    matched = any(_iou(pb_box, g) >= iou_thresh
+                                  for g in gt_all.get(pred_cid, []))
+                    if matched:
+                        continue
+
+                    # It's a False Positive — find what GT class it overlaps with
+                    fp_stats[pred_cid]["fp"] += 1
+                    best_gt_cid = None
+                    best_iou_val = bg_iou_thresh
+                    for gt_cid, gt_boxes in gt_all.items():
+                        if gt_cid == pred_cid:
+                            continue
+                        for g in gt_boxes:
+                            ov = _iou(pb_box, g)
+                            if ov > best_iou_val:
+                                best_iou_val = ov
+                                best_gt_cid  = gt_cid
+
+                    if best_gt_cid is not None:
+                        conf_dict = fp_stats[pred_cid]["confusion"]
+                        conf_dict[best_gt_cid] = conf_dict.get(best_gt_cid, 0) + 1
+
+                    if len(fp_stats[pred_cid]["cases"]) < max_save:
+                        fp_stats[pred_cid]["cases"].append(
+                            (str(img_path), pb_box, best_gt_cid,
+                             {c: list(gt_all[c]) for c in gt_all}))
+
+            pct  = min(100, int((i + BATCH) / total_imgs * 100))
+            done = min(i + BATCH, total_imgs)
+            elapsed = _time.monotonic() - t_start
+            eta     = (elapsed / done * (total_imgs - done)) if done > 0 else 0
+            _ui(lambda v=pct: pb.config(value=v))
+            _ui(lambda d=done, el=elapsed, et=eta: status_lbl.config(
+                text=f"Inference {d}/{total_imgs} ({d*100//total_imgs}%)"
+                     f"  ⏱ {_fmt_sec(el)} / ETA {_fmt_sec(et)}",
+                fg=DIM))
+
+        # Save annotated FP images
+        _ui(lambda: status_lbl.config(text="Đang lưu ảnh FP…", fg=DIM))
+        import os as _os
+        _os.makedirs(out_dir, exist_ok=True)
+        for pred_cid in target_ids:
+            s = fp_stats[pred_cid]
+            if not s["cases"]:
+                continue
+            cls_out = _os.path.join(out_dir, f"{s['name']}_fp")
+            _os.makedirs(cls_out, exist_ok=True)
+            for img_path, fp_box, gt_cid, gt_all_saved in s["cases"]:
+                img = _cv2.imread(img_path)
+                if img is None:
+                    continue
+                # Draw FP box in red
+                x1, y1, x2, y2 = [int(v) for v in fp_box]
+                _cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                label = f"FP:{s['name']}"
+                if gt_cid is not None:
+                    label += f" (GT:{names.get(gt_cid, str(gt_cid))})"
+                _cv2.putText(img, label, (x1, max(y1-8, 16)),
+                             _cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                # Draw GT boxes in green
+                if gt_cid is not None:
+                    for g in gt_all_saved.get(gt_cid, []):
+                        gx1, gy1, gx2, gy2 = [int(v) for v in g]
+                        _cv2.rectangle(img, (gx1, gy1), (gx2, gy2), (0, 255, 0), 2)
+                        _cv2.putText(img, f"GT:{names.get(gt_cid, str(gt_cid))}",
+                                     (gx1, max(gy1-6, 14)),
+                                     _cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                out_name = _os.path.join(cls_out, Path(img_path).stem + "_fp.jpg")
+                _cv2.imwrite(out_name, img)
+
+        # Build confusion matrix pairs
+        confusion_pairs = []
+        for pred_cid, s in fp_stats.items():
+            for gt_cid, cnt in s["confusion"].items():
+                confusion_pairs.append((names.get(gt_cid, str(gt_cid)),
+                                        s["name"], cnt))
+        confusion_pairs.sort(key=lambda x: -x[2])
+
+        def _refresh_tables():
+            for t in (tree1, tree2):
+                for iid in t.get_children():
+                    t.delete(iid)
+
+            summary_parts = []
+            for pred_cid in sorted(target_ids, key=lambda c: names[c]):
+                s    = fp_stats[pred_cid]
+                tot  = s["total"]
+                fp_c = s["fp"]
+                rate = (fp_c / tot * 100) if tot else 0.0
+                if not s["confusion"]:
+                    top_str = "background (không có GT overlap)"
+                else:
+                    top_items = sorted(s["confusion"].items(), key=lambda x: -x[1])[:3]
+                    top_str   = "  |  ".join(
+                        f"{names.get(gc,'?')}→{s['name']} × {cnt}"
+                        for gc, cnt in top_items)
+                tag = "ok" if rate < 10 else ("warn" if rate < 30 else "bad")
+                tree1.insert("", END,
+                             values=(s["name"], tot, fp_c, f"{rate:.1f}%", top_str),
+                             tags=(tag,))
+                if fp_c > 0:
+                    summary_parts.append(f"{s['name']}: {fp_c} FP ({rate:.1f}%)")
+
+            for gt_nm, pred_nm, cnt in confusion_pairs:
+                tag = "high" if cnt >= 5 else "med"
+                note = f"GT '{gt_nm}' bị nhận nhầm thành '{pred_nm}' {cnt} lần"
+                tree2.insert("", END,
+                             values=(gt_nm, pred_nm, cnt, note),
+                             tags=(tag,))
+
+            # Collect unique original image paths for hard negative export
+            unique_fp_paths = list({
+                case[0]
+                for s in fp_stats.values()
+                for case in s["cases"]
+            })
+            if fp_cases_ref is not None:
+                fp_cases_ref[0] = unique_fp_paths
+
+            elapsed_total = _time.monotonic() - t_start
+            sum_lbl.config(
+                text="  " + "   |   ".join(summary_parts) if summary_parts
+                else "  Không có FP nào!", fg=DIM)
+            pb.config(value=100)
+            status_lbl.config(
+                text=f"✔  Hoàn tất trong {_fmt_sec(elapsed_total)} — ảnh lưu tại: {out_dir}",
+                fg=SUCCESS)
+            run_btn.config(state=NORMAL)
+            open_btn.config(state=NORMAL)
+            if fp_hn_btn is not None and unique_fp_paths:
+                fp_hn_btn.config(state=NORMAL)
+            # Write summary JSON for HTML report
+            try:
+                import json as _json; import os as _os2
+                _os2.makedirs(out_dir, exist_ok=True)
+                _fp_summary = {
+                    "classes": [
+                        {"name": fp_stats[c]["name"],
+                         "total": fp_stats[c]["total"],
+                         "fp": fp_stats[c]["fp"],
+                         "fp_pct": round(fp_stats[c]["fp"]/fp_stats[c]["total"]*100, 1)
+                                   if fp_stats[c]["total"] else 0,
+                         "confusion": [
+                             {"gt": names.get(gc,"?"), "count": cnt}
+                             for gc, cnt in sorted(fp_stats[c]["confusion"].items(),
+                                                   key=lambda x: -x[1])[:5]
+                         ]}
+                        for c in target_ids
+                    ],
+                    "confusion_pairs": [
+                        {"gt": gt_nm, "pred": pred_nm, "count": cnt}
+                        for gt_nm, pred_nm, cnt in confusion_pairs[:20]
+                    ],
+                }
+                with open(_os2.path.join(out_dir, "summary.json"), "w", encoding="utf-8") as _jf:
+                    _json.dump(_fp_summary, _jf, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
+        _ui(_refresh_tables)
+
+    # ── Class Imbalance Analysis ──────────────────────────────────────────────
+
+    def _open_imbalance_analysis(self):
+        if self._imbalance_win and self._imbalance_win.winfo_exists():
+            self._imbalance_win.lift(); return
+        win = Toplevel(self.root)
+        win.title("KZTEK – Class Imbalance Analysis")
+        win.geometry("720x560")
+        win.configure(bg=BG)
+        win.resizable(True, True)
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+        self._imbalance_win = win
+
+        cfg = Frame(win, bg=CARD, padx=12, pady=10)
+        cfg.pack(fill=X, padx=8, pady=(8, 4))
+        cfg.columnconfigure(1, weight=1)
+        Label(cfg, text="Phân tích mất cân bằng số lượng mẫu giữa các class",
+              bg=CARD, fg=TEXT, font=F_BOLD).grid(row=0, column=0, columnspan=3, sticky=W, pady=(0,8))
+
+        imb_dir_var = StringVar(value=self.train_dir.get().strip())
+        Label(cfg, text="Thư mục labels:", bg=CARD, fg=DIM, font=F_MAIN,
+              width=16, anchor=W).grid(row=1, column=0, sticky=W, pady=3)
+        Entry(cfg, textvariable=imb_dir_var, bg="#16162a", fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).grid(
+                  row=1, column=1, sticky=EW, padx=(8,4))
+        def _pick():
+            p = filedialog.askdirectory(initialdir=imb_dir_var.get() or ".")
+            if p: imb_dir_var.set(p)
+        Button(cfg, text="…", command=_pick,
+               bg=ACCENT2, fg="white", font=F_MAIN, relief="flat",
+               padx=8, cursor="hand2").grid(row=1, column=2)
+
+        imb_cls_var = StringVar(value=self._labels_var.get())
+        Label(cfg, text="Classes:", bg=CARD, fg=DIM, font=F_MAIN,
+              width=16, anchor=W).grid(row=2, column=0, sticky=W, pady=3)
+        Entry(cfg, textvariable=imb_cls_var, bg="#16162a", fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).grid(
+                  row=2, column=1, columnspan=2, sticky=EW, padx=(8,0))
+        Label(cfg, text="(thứ tự khớp class_id: 0,1,2...)",
+              bg=CARD, fg=DIM, font=("Segoe UI",7,"italic")).grid(row=3, column=1, sticky=W, padx=(8,0))
+
+        ctrl_r = Frame(win, bg=BG, padx=8, pady=4)
+        ctrl_r.pack(fill=X)
+        imb_run_btn = Button(ctrl_r, text="▶  Quét", bg="#2e7d32", fg="white",
+                              activebackground="#1b5e20", activeforeground="white",
+                              font=F_BOLD, relief="flat", padx=16, cursor="hand2")
+        imb_run_btn.pack(side=LEFT)
+        imb_status = Label(ctrl_r, text="", bg=BG, fg=DIM, font=F_MAIN)
+        imb_status.pack(side=LEFT, padx=12)
+        imb_pb = ttk.Progressbar(win, maximum=100)
+        imb_pb.pack(fill=X, padx=8, pady=(0,4))
+
+        tbl_f = Frame(win, bg=BG, padx=8)
+        tbl_f.pack(fill=BOTH, expand=True)
+        cols = ("cls","count","pct","bar","status")
+        imb_tree = ttk.Treeview(tbl_f, columns=cols, show="headings",
+                                  style="Dark.Treeview", height=14)
+        for col, hdr, w, anc in [
+            ("cls",    "Class",         140, W),
+            ("count",  "Số instance",    90, CENTER),
+            ("pct",    "%",              70, CENTER),
+            ("bar",    "Biểu đồ",       260, W),
+            ("status", "Đánh giá",      120, CENTER),
+        ]:
+            imb_tree.heading(col, text=hdr)
+            imb_tree.column(col, width=w, anchor=anc, stretch=(col=="bar"))
+        vsb = ttk.Scrollbar(tbl_f, orient=VERTICAL, command=imb_tree.yview)
+        vsb.pack(side=RIGHT, fill=Y)
+        imb_tree.pack(fill=BOTH, expand=True)
+        imb_tree.configure(yscrollcommand=vsb.set)
+        imb_tree.tag_configure("ok",   foreground=SUCCESS)
+        imb_tree.tag_configure("warn", foreground="#f0c040")
+        imb_tree.tag_configure("bad",  foreground="#f05050")
+        sum_lbl = Label(win, text="", bg=BG, fg=DIM, font=("Consolas",9), anchor=W, padx=8)
+        sum_lbl.pack(fill=X, pady=(2,6))
+
+        def _do_run():
+            lbl_dir = imb_dir_var.get().strip()
+            if not lbl_dir or not os.path.isdir(lbl_dir):
+                messagebox.showwarning("Thiếu thư mục", "Chọn thư mục chứa file .txt labels.", parent=win)
+                return
+            cls_names = [c.strip() for c in imb_cls_var.get().replace(","," ").split() if c.strip()]
+            imb_run_btn.config(state=DISABLED)
+            imb_pb["value"] = 0
+            imb_status.config(text="Đang quét…", fg=ACCENT)
+            for iid in imb_tree.get_children(): imb_tree.delete(iid)
+            sum_lbl.config(text="")
+            threading.Thread(target=self._run_imbalance_analysis,
+                             args=(lbl_dir, cls_names, imb_pb, imb_status,
+                                   imb_tree, sum_lbl, imb_run_btn),
+                             daemon=True).start()
+        imb_run_btn.config(command=_do_run)
+        win.lift(); win.focus_set()
+
+    def _run_imbalance_analysis(self, lbl_dir, cls_names, pb, status_lbl, tree, sum_lbl, run_btn):
+        def _ui(fn): self.root.after(0, fn)
+        _ui(lambda: pb.config(value=5))
+
+        txt_files = [p for p in Path(lbl_dir).rglob("*.txt")]
+        total = len(txt_files)
+        if not total:
+            _ui(lambda: status_lbl.config(text="Không tìm thấy file .txt!", fg="#f0c040"))
+            _ui(lambda: run_btn.config(state=NORMAL))
+            return
+
+        counts = {}
+        for i, fp in enumerate(txt_files):
+            try:
+                with open(fp) as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if parts:
+                            cid = int(parts[0])
+                            counts[cid] = counts.get(cid, 0) + 1
+            except Exception:
+                pass
+            if i % 200 == 0:
+                pct = int(i / total * 90)
+                _ui(lambda v=pct: pb.config(value=v))
+
+        grand_total = sum(counts.values()) or 1
+        max_count   = max(counts.values()) if counts else 1
+        sorted_ids  = sorted(counts.keys())
+
+        summary = {"lbl_dir": lbl_dir, "cls_names": cls_names, "counts": {}}
+
+        def _refresh():
+            for iid in tree.get_children(): tree.delete(iid)
+            for cid in sorted_ids:
+                cnt   = counts[cid]
+                name  = cls_names[cid] if cid < len(cls_names) else f"class_{cid}"
+                pct   = cnt / grand_total * 100
+                ratio = cnt / max_count
+                bar   = "█" * int(ratio * 30)
+                if ratio >= 0.5:  tag, st = "ok",   "Cân bằng"
+                elif ratio >= 0.2: tag, st = "warn", "Thiếu mẫu"
+                else:              tag, st = "bad",  "⚠ Rất ít"
+                tree.insert("", END, values=(name, cnt, f"{pct:.1f}%", bar, st), tags=(tag,))
+                summary["counts"][name] = cnt
+            pb.config(value=100)
+            status_lbl.config(text=f"✔  Quét xong {total} file — {len(sorted_ids)} class", fg=SUCCESS)
+            run_btn.config(state=NORMAL)
+            parts = [f"{cls_names[c] if c<len(cls_names) else f'class_{c}'}: {counts[c]}"
+                     for c in sorted_ids]
+            sum_lbl.config(text="  " + "  |  ".join(parts), fg=DIM)
+            # Write summary JSON for HTML report
+            try:
+                out = Path(lbl_dir).parent / "imbalance_summary.json"
+                with open(out, "w", encoding="utf-8") as jf:
+                    json.dump(summary, jf, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+        _ui(_refresh)
+
+    # ── Size & Shape Analysis ─────────────────────────────────────────────────
+
+    def _open_shape_analysis(self):
+        if self._shape_win and self._shape_win.winfo_exists():
+            self._shape_win.lift(); return
+        win = Toplevel(self.root)
+        win.title("KZTEK – Size & Shape Analysis")
+        win.geometry("780x600")
+        win.configure(bg=BG)
+        win.resizable(True, True)
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+        self._shape_win = win
+
+        cfg = Frame(win, bg=CARD, padx=12, pady=10)
+        cfg.pack(fill=X, padx=8, pady=(8,4))
+        cfg.columnconfigure(1, weight=1)
+        Label(cfg, text="Phân tích kích thước & tỉ lệ bbox — phát hiện object nhỏ, tỉ lệ bất thường",
+              bg=CARD, fg=TEXT, font=F_BOLD).grid(row=0, column=0, columnspan=3, sticky=W, pady=(0,8))
+
+        sh_dir_var = StringVar(value=self.train_dir.get().strip())
+        Label(cfg, text="Thư mục labels:", bg=CARD, fg=DIM, font=F_MAIN,
+              width=16, anchor=W).grid(row=1, column=0, sticky=W, pady=3)
+        Entry(cfg, textvariable=sh_dir_var, bg="#16162a", fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).grid(
+                  row=1, column=1, sticky=EW, padx=(8,4))
+        def _pick():
+            p = filedialog.askdirectory(initialdir=sh_dir_var.get() or ".")
+            if p: sh_dir_var.set(p)
+        Button(cfg, text="…", command=_pick,
+               bg=ACCENT2, fg="white", font=F_MAIN, relief="flat",
+               padx=8, cursor="hand2").grid(row=1, column=2)
+
+        sh_cls_var = StringVar(value=self._labels_var.get())
+        Label(cfg, text="Classes:", bg=CARD, fg=DIM, font=F_MAIN,
+              width=16, anchor=W).grid(row=2, column=0, sticky=W, pady=3)
+        Entry(cfg, textvariable=sh_cls_var, bg="#16162a", fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).grid(
+                  row=2, column=1, columnspan=2, sticky=EW, padx=(8,0))
+
+        ctrl_r = Frame(win, bg=BG, padx=8, pady=4)
+        ctrl_r.pack(fill=X)
+        sh_run_btn = Button(ctrl_r, text="▶  Quét", bg="#2e7d32", fg="white",
+                             activebackground="#1b5e20", activeforeground="white",
+                             font=F_BOLD, relief="flat", padx=16, cursor="hand2")
+        sh_run_btn.pack(side=LEFT)
+        sh_status = Label(ctrl_r, text="", bg=BG, fg=DIM, font=F_MAIN)
+        sh_status.pack(side=LEFT, padx=12)
+        sh_pb = ttk.Progressbar(win, maximum=100)
+        sh_pb.pack(fill=X, padx=8, pady=(0,4))
+
+        Label(win, text="Phân bố kích thước & tỉ lệ per class",
+              bg=BG, fg=TEXT, font=F_BOLD, padx=8, anchor=W).pack(fill=X)
+        tbl_f = Frame(win, bg=BG, padx=8)
+        tbl_f.pack(fill=BOTH, expand=True)
+        cols = ("cls","total","tiny","small","med","large","wide","tall","sq","warn")
+        sh_tree = ttk.Treeview(tbl_f, columns=cols, show="headings",
+                                style="Dark.Treeview", height=12)
+        for col, hdr, w, anc in [
+            ("cls",   "Class",      120, W),
+            ("total", "Tổng",        55, CENTER),
+            ("tiny",  "Tiny<2%",     65, CENTER),
+            ("small", "Sm 2-5%",     65, CENTER),
+            ("med",   "Med 5-15%",   65, CENTER),
+            ("large", "Lg>15%",      65, CENTER),
+            ("wide",  "Rộng>2:1",    70, CENTER),
+            ("tall",  "Cao>2:1",     70, CENTER),
+            ("sq",    "Vuông",       65, CENTER),
+            ("warn",  "Cảnh báo",   160, W),
+        ]:
+            sh_tree.heading(col, text=hdr)
+            sh_tree.column(col, width=w, anchor=anc, stretch=(col=="warn"))
+        vsb = ttk.Scrollbar(tbl_f, orient=VERTICAL, command=sh_tree.yview)
+        hsb = ttk.Scrollbar(tbl_f, orient=HORIZONTAL, command=sh_tree.xview)
+        sh_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        vsb.pack(side=RIGHT, fill=Y)
+        hsb.pack(side=BOTTOM, fill=X)
+        sh_tree.pack(fill=BOTH, expand=True)
+        sh_tree.tag_configure("ok",   foreground=SUCCESS)
+        sh_tree.tag_configure("warn", foreground="#f0c040")
+        sh_tree.tag_configure("bad",  foreground="#f05050")
+        sum_lbl = Label(win, text="", bg=BG, fg=DIM, font=("Consolas",9), anchor=W, padx=8)
+        sum_lbl.pack(fill=X, pady=(2,6))
+
+        def _do_run():
+            lbl_dir = sh_dir_var.get().strip()
+            if not lbl_dir or not os.path.isdir(lbl_dir):
+                messagebox.showwarning("Thiếu thư mục", "Chọn thư mục labels.", parent=win)
+                return
+            cls_names = [c.strip() for c in sh_cls_var.get().replace(","," ").split() if c.strip()]
+            sh_run_btn.config(state=DISABLED)
+            sh_pb["value"] = 0
+            sh_status.config(text="Đang quét…", fg=ACCENT)
+            for iid in sh_tree.get_children(): sh_tree.delete(iid)
+            sum_lbl.config(text="")
+            threading.Thread(target=self._run_shape_analysis,
+                             args=(lbl_dir, cls_names, sh_pb, sh_status,
+                                   sh_tree, sum_lbl, sh_run_btn),
+                             daemon=True).start()
+        sh_run_btn.config(command=_do_run)
+        win.lift(); win.focus_set()
+
+    def _run_shape_analysis(self, lbl_dir, cls_names, pb, status_lbl, tree, sum_lbl, run_btn):
+        def _ui(fn): self.root.after(0, fn)
+        txt_files = [p for p in Path(lbl_dir).rglob("*.txt")]
+        total = len(txt_files)
+        if not total:
+            _ui(lambda: status_lbl.config(text="Không tìm thấy file .txt!", fg="#f0c040"))
+            _ui(lambda: run_btn.config(state=NORMAL))
+            return
+
+        # per_class[cid] = {"areas":[], "ratios":[]}
+        per_class = {}
+        for i, fp in enumerate(txt_files):
+            try:
+                with open(fp) as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) < 5: continue
+                        cid = int(parts[0])
+                        w, h = float(parts[3]), float(parts[4])
+                        area = w * h * 100  # percent of image
+                        ratio = w / h if h > 0 else 1.0
+                        if cid not in per_class:
+                            per_class[cid] = {"areas": [], "ratios": []}
+                        per_class[cid]["areas"].append(area)
+                        per_class[cid]["ratios"].append(ratio)
+            except Exception:
+                pass
+            if i % 200 == 0:
+                _ui(lambda v=int(i/total*90): pb.config(value=v))
+
+        summary = {"lbl_dir": lbl_dir, "cls_names": cls_names, "shape": {}}
+
+        def _refresh():
+            for iid in tree.get_children(): tree.delete(iid)
+            warnings_list = []
+            for cid in sorted(per_class.keys()):
+                name   = cls_names[cid] if cid < len(cls_names) else f"class_{cid}"
+                areas  = per_class[cid]["areas"]
+                ratios = per_class[cid]["ratios"]
+                n      = len(areas)
+                tiny   = sum(1 for a in areas if a < 2)
+                small  = sum(1 for a in areas if 2 <= a < 5)
+                med    = sum(1 for a in areas if 5 <= a < 15)
+                large  = sum(1 for a in areas if a >= 15)
+                wide   = sum(1 for r in ratios if r > 2.0)
+                tall   = sum(1 for r in ratios if r < 0.5)
+                sq     = n - wide - tall
+                warns  = []
+                if tiny / n > 0.4:  warns.append(f"⚠ {tiny/n*100:.0f}% tiny → tăng imgsz")
+                if wide / n > 0.5:  warns.append(f"⚠ bbox rất rộng ({wide/n*100:.0f}%)")
+                if tall / n > 0.5:  warns.append(f"⚠ bbox rất cao ({tall/n*100:.0f}%)")
+                tag = "bad" if warns else ("warn" if tiny/n > 0.2 else "ok")
+                warn_str = "  ".join(warns) if warns else "OK"
+                tree.insert("", END,
+                            values=(name, n,
+                                    f"{tiny/n*100:.0f}%", f"{small/n*100:.0f}%",
+                                    f"{med/n*100:.0f}%",  f"{large/n*100:.0f}%",
+                                    f"{wide/n*100:.0f}%", f"{tall/n*100:.0f}%",
+                                    f"{sq/n*100:.0f}%",   warn_str),
+                            tags=(tag,))
+                if warns: warnings_list.append(f"{name}: {', '.join(warns)}")
+                summary["shape"][name] = {
+                    "total": n, "tiny_pct": round(tiny/n*100,1),
+                    "wide_pct": round(wide/n*100,1), "tall_pct": round(tall/n*100,1),
+                }
+            pb.config(value=100)
+            status_lbl.config(text=f"✔  Quét xong {total} file", fg=SUCCESS)
+            run_btn.config(state=NORMAL)
+            sum_lbl.config(
+                text="  " + "  |  ".join(warnings_list) if warnings_list else "  Không có cảnh báo đặc biệt",
+                fg="#f0c040" if warnings_list else SUCCESS)
+            try:
+                out = Path(lbl_dir).parent / "shape_summary.json"
+                with open(out, "w", encoding="utf-8") as jf:
+                    json.dump(summary, jf, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+        _ui(_refresh)
+
+    # ── Brightness Analysis ───────────────────────────────────────────────────
+
+    def _open_brightness_analysis(self):
+        if self._brightness_win and self._brightness_win.winfo_exists():
+            self._brightness_win.lift(); return
+        win = Toplevel(self.root)
+        win.title("KZTEK – Brightness Analysis")
+        win.geometry("820x620")
+        win.configure(bg=BG)
+        win.resizable(True, True)
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+        self._brightness_win = win
+
+        cfg = Frame(win, bg=CARD, padx=12, pady=10)
+        cfg.pack(fill=X, padx=8, pady=(8, 4))
+        cfg.columnconfigure(1, weight=1)
+        Label(cfg,
+              text="Phân tích độ sáng ảnh — phát hiện thiếu data tối/sáng/ngược sáng",
+              bg=CARD, fg=TEXT, font=F_BOLD).grid(
+                  row=0, column=0, columnspan=3, sticky=W, pady=(0, 8))
+
+        br_img_var = StringVar(value=self.train_dir.get().strip())
+        br_lbl_var = StringVar()
+        br_cls_var = StringVar(value=self._labels_var.get())
+
+        for row, (lbl_txt, var, title) in enumerate([
+            ("Thư mục images:", br_img_var, "Chọn thư mục images"),
+            ("Thư mục labels:", br_lbl_var, "Chọn thư mục labels (tuỳ chọn)"),
+        ], start=1):
+            Label(cfg, text=lbl_txt, bg=CARD, fg=DIM, font=F_MAIN,
+                  width=18, anchor=W).grid(row=row, column=0, sticky=W, pady=3)
+            Entry(cfg, textvariable=var, bg="#16162a", fg=TEXT,
+                  insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).grid(
+                      row=row, column=1, sticky=EW, padx=(8, 4))
+            def _pick(v=var, t=title):
+                p = filedialog.askdirectory(title=t, initialdir=v.get() or ".")
+                if p: v.set(p)
+            Button(cfg, text="…", command=_pick,
+                   bg=ACCENT2, fg="white", font=F_MAIN, relief="flat",
+                   padx=8, cursor="hand2").grid(row=row, column=2)
+
+        Label(cfg, text="Classes:", bg=CARD, fg=DIM, font=F_MAIN,
+              width=18, anchor=W).grid(row=3, column=0, sticky=W, pady=3)
+        Entry(cfg, textvariable=br_cls_var, bg="#16162a", fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4).grid(
+                  row=3, column=1, columnspan=2, sticky=EW, padx=(8, 0))
+        Label(cfg, text="(để trống nếu không cần phân tích theo class)",
+              bg=CARD, fg=DIM, font=("Segoe UI", 7, "italic")).grid(
+                  row=4, column=1, sticky=W, padx=(8, 0))
+
+        ctrl_r = Frame(win, bg=BG, padx=8, pady=4)
+        ctrl_r.pack(fill=X)
+        br_run_btn = Button(ctrl_r, text="▶  Quét", bg="#2e7d32", fg="white",
+                             activebackground="#1b5e20", activeforeground="white",
+                             font=F_BOLD, relief="flat", padx=16, cursor="hand2")
+        br_run_btn.pack(side=LEFT)
+        br_status = Label(ctrl_r, text="", bg=BG, fg=DIM, font=F_MAIN)
+        br_status.pack(side=LEFT, padx=12)
+        br_pb = ttk.Progressbar(win, maximum=100)
+        br_pb.pack(fill=X, padx=8, pady=(0, 4))
+
+        # ── Bảng 1: Phân bố toàn bộ dataset ──────────────────────────
+        Label(win, text="Phân bố độ sáng toàn dataset",
+              bg=BG, fg=TEXT, font=F_BOLD, padx=8, anchor=W).pack(fill=X)
+        tbl1_f = Frame(win, bg=BG, padx=8)
+        tbl1_f.pack(fill=X)
+        cols1 = ("bucket", "count", "pct", "bar", "status")
+        br_tree1 = ttk.Treeview(tbl1_f, columns=cols1, show="headings",
+                                  style="Dark.Treeview", height=5)
+        for col, hdr, w, anc in [
+            ("bucket", "Mức sáng",     160, W),
+            ("count",  "Số ảnh",        80, CENTER),
+            ("pct",    "%",             60, CENTER),
+            ("bar",    "Biểu đồ",      220, W),
+            ("status", "Đánh giá",     130, CENTER),
+        ]:
+            br_tree1.heading(col, text=hdr)
+            br_tree1.column(col, width=w, anchor=anc, stretch=(col == "bar"))
+        vsb1 = ttk.Scrollbar(tbl1_f, orient=VERTICAL, command=br_tree1.yview)
+        vsb1.pack(side=RIGHT, fill=Y)
+        br_tree1.pack(fill=X)
+        br_tree1.configure(yscrollcommand=vsb1.set)
+        br_tree1.tag_configure("ok",   foreground=SUCCESS)
+        br_tree1.tag_configure("warn", foreground="#f0c040")
+        br_tree1.tag_configure("bad",  foreground="#f05050")
+
+        # ── Bảng 2: Phân bố theo class ───────────────────────────────
+        Label(win, text="Phân bố độ sáng theo class (% ảnh tối / bình thường / sáng)",
+              bg=BG, fg=TEXT, font=F_BOLD, padx=8, anchor=W).pack(fill=X, pady=(8, 0))
+        tbl2_f = Frame(win, bg=BG, padx=8)
+        tbl2_f.pack(fill=BOTH, expand=True)
+        cols2 = ("cls", "total", "v_dark", "dark", "normal", "bright", "v_bright",
+                 "glare", "std", "warn")
+        br_tree2 = ttk.Treeview(tbl2_f, columns=cols2, show="headings",
+                                  style="Dark.Treeview", height=7)
+        for col, hdr, w, anc in [
+            ("cls",     "Class",         130, W),
+            ("total",   "Ảnh",            55, CENTER),
+            ("v_dark",  "Rất tối",        65, CENTER),
+            ("dark",    "Tối",            65, CENTER),
+            ("normal",  "Bình thường",    90, CENTER),
+            ("bright",  "Sáng",           65, CENTER),
+            ("v_bright","Rất sáng",       70, CENTER),
+            ("glare",   "Chói% px>240",   90, CENTER),
+            ("std",     "Std (tương phản)",90, CENTER),
+            ("warn",    "Cảnh báo",      200, W),
+        ]:
+            br_tree2.heading(col, text=hdr)
+            br_tree2.column(col, width=w, anchor=anc, stretch=(col == "warn"))
+        vsb2 = ttk.Scrollbar(tbl2_f, orient=VERTICAL, command=br_tree2.yview)
+        hsb2 = ttk.Scrollbar(tbl2_f, orient=HORIZONTAL, command=br_tree2.xview)
+        br_tree2.configure(yscrollcommand=vsb2.set, xscrollcommand=hsb2.set)
+        vsb2.pack(side=RIGHT, fill=Y)
+        hsb2.pack(side=BOTTOM, fill=X)
+        br_tree2.pack(fill=BOTH, expand=True)
+        br_tree2.tag_configure("ok",   foreground=SUCCESS)
+        br_tree2.tag_configure("warn", foreground="#f0c040")
+        br_tree2.tag_configure("bad",  foreground="#f05050")
+
+        sum_lbl = Label(win, text="", bg=BG, fg=DIM,
+                        font=("Consolas", 9), anchor=W, padx=8)
+        sum_lbl.pack(fill=X, pady=(2, 6))
+
+        def _do_run():
+            img_dir = br_img_var.get().strip()
+            if not img_dir or not os.path.isdir(img_dir):
+                messagebox.showwarning("Thiếu thư mục", "Chọn thư mục images.", parent=win)
+                return
+            lbl_dir   = br_lbl_var.get().strip() or None
+            cls_names = [c.strip() for c in br_cls_var.get().replace(",", " ").split() if c.strip()]
+            br_run_btn.config(state=DISABLED)
+            br_pb["value"] = 0
+            br_status.config(text="Đang quét…", fg=ACCENT)
+            for t in (br_tree1, br_tree2):
+                for iid in t.get_children(): t.delete(iid)
+            sum_lbl.config(text="")
+            threading.Thread(
+                target=self._run_brightness_analysis,
+                args=(img_dir, lbl_dir, cls_names, br_pb, br_status,
+                      br_tree1, br_tree2, sum_lbl, br_run_btn),
+                daemon=True).start()
+
+        br_run_btn.config(command=_do_run)
+        win.lift(); win.focus_set()
+
+    def _run_brightness_analysis(self, img_dir, lbl_dir, cls_names,
+                                  pb, status_lbl, tree1, tree2, sum_lbl, run_btn):
+        def _ui(fn): self.root.after(0, fn)
+
+        try:
+            from PIL import Image as _PILImg
+        except ImportError:
+            _ui(lambda: status_lbl.config(text="Cần cài Pillow: pip install Pillow", fg="#f05050"))
+            _ui(lambda: run_btn.config(state=NORMAL))
+            return
+
+        _EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+        img_paths = sorted(p for p in Path(img_dir).rglob("*")
+                           if p.is_file() and p.suffix.lower() in _EXTS)
+        total = len(img_paths)
+        if not total:
+            _ui(lambda: status_lbl.config(text="Không tìm thấy ảnh!", fg="#f0c040"))
+            _ui(lambda: run_btn.config(state=NORMAL))
+            return
+
+        # Buckets: (label, min, max)
+        BUCKETS = [
+            ("Rất tối  (0–30)",    0,   30),
+            ("Tối      (30–70)",   30,  70),
+            ("Bình thường (70–170)", 70, 170),
+            ("Sáng     (170–210)", 170, 210),
+            ("Rất sáng (210–255)", 210, 256),
+        ]
+        bucket_counts = [0] * 5
+        # per_class[cid] = [(bucket_idx, glare_pct, std), ...]
+        per_class = {}
+
+        for i, ip in enumerate(img_paths):
+            mean = glare_pct = std = -1.0
+            try:
+                img      = _PILImg.open(ip).convert("L")  # grayscale
+                pixels   = list(img.getdata())
+                n_px     = len(pixels)
+                mean     = sum(pixels) / n_px
+                # std deviation (tương phản)
+                variance = sum((p - mean) ** 2 for p in pixels) / n_px
+                std      = variance ** 0.5
+                # chói lóa: % pixel > 240
+                glare_pct = sum(1 for p in pixels if p > 240) / n_px * 100
+            except Exception:
+                pass
+
+            if mean >= 0:
+                for bi, (_, lo, hi) in enumerate(BUCKETS):
+                    if lo <= mean < hi:
+                        bucket_counts[bi] += 1
+                        break
+
+            # Map to classes via label file
+            if lbl_dir:
+                lp = Path(lbl_dir) / (ip.stem + ".txt")
+                if lp.exists():
+                    try:
+                        with open(lp) as f:
+                            cids = {int(l.split()[0]) for l in f if l.strip()}
+                        for cid in cids:
+                            if cid not in per_class:
+                                per_class[cid] = []
+                            if mean >= 0:
+                                for bi, (_, lo, hi) in enumerate(BUCKETS):
+                                    if lo <= mean < hi:
+                                        per_class[cid].append((bi, glare_pct, std))
+                                        break
+                    except Exception:
+                        pass
+
+            if i % 100 == 0:
+                _ui(lambda v=int(i / total * 90): pb.config(value=v))
+
+        valid_total = sum(bucket_counts)
+        summary = {
+            "img_dir": img_dir,
+            "total": total,
+            "buckets": {},
+            "per_class": {},
+        }
+
+        def _refresh():
+            for t in (tree1, tree2):
+                for iid in t.get_children(): t.delete(iid)
+
+            MAX_BAR = 200
+            warnings = []
+            for bi, (label, _, _) in enumerate(BUCKETS):
+                cnt = bucket_counts[bi]
+                pct = cnt / valid_total * 100 if valid_total else 0
+                bar_w = int(pct / 100 * MAX_BAR)
+                bar = "█" * (bar_w // 6)
+                if bi in (0, 1):   # dark
+                    col  = "#4fc3f7"
+                    tag  = "warn" if pct > 40 else "ok"
+                    st   = "⚠ Quá nhiều tối" if pct > 40 else "OK"
+                elif bi == 2:      # normal
+                    col  = "#4caf50"
+                    tag  = "ok"
+                    st   = "Tốt"
+                else:              # bright
+                    col  = "#f0c040"
+                    tag  = "warn" if pct > 30 else "ok"
+                    st   = "⚠ Quá sáng" if pct > 30 else "OK"
+                if "⚠" in st:
+                    warnings.append(f"{label.strip()}: {pct:.0f}%")
+                tree1.insert("", END, values=(label, cnt, f"{pct:.1f}%", bar, st), tags=(tag,))
+                summary["buckets"][label.strip()] = {"count": cnt, "pct": round(pct, 1)}
+
+            # Per-class table
+            for cid in sorted(per_class.keys()):
+                name    = cls_names[cid] if cid < len(cls_names) else f"class_{cid}"
+                entries = per_class[cid]   # list of (bucket_idx, glare_pct, std)
+                n       = len(entries) or 1
+                cnts    = [sum(1 for e in entries if e[0] == bi) for bi in range(5)]
+                pcts    = [c / n * 100 for c in cnts]
+                # glare & std averages (skip -1 sentinel)
+                glare_vals = [e[1] for e in entries if e[1] >= 0]
+                std_vals   = [e[2] for e in entries if e[2] >= 0]
+                avg_glare  = sum(glare_vals) / len(glare_vals) if glare_vals else 0.0
+                avg_std    = sum(std_vals)   / len(std_vals)   if std_vals   else 0.0
+                dark_pct   = (cnts[0] + cnts[1]) / n
+                bright_pct = (cnts[3] + cnts[4]) / n
+                warns = []
+                if dark_pct > 0.5:
+                    warns.append(f"⚠ {dark_pct*100:.0f}% tối → thêm ảnh ban ngày")
+                if bright_pct > 0.4:
+                    warns.append(f"⚠ {bright_pct*100:.0f}% sáng → thêm ảnh ban đêm")
+                if avg_glare > 5:
+                    warns.append(f"⚠ Chói lóa {avg_glare:.1f}% px cháy trắng")
+                if avg_std > 80:
+                    warns.append(f"⚠ Tương phản cao std={avg_std:.0f}")
+                if cnts[2] / n < 0.3:
+                    warns.append("Thiếu ảnh điều kiện bình thường")
+                tag = "bad" if len(warns) >= 2 else ("warn" if warns else "ok")
+                tree2.insert("", END,
+                             values=(name, n,
+                                     f"{pcts[0]:.0f}%", f"{pcts[1]:.0f}%",
+                                     f"{pcts[2]:.0f}%", f"{pcts[3]:.0f}%",
+                                     f"{pcts[4]:.0f}%",
+                                     f"{avg_glare:.1f}%",
+                                     f"{avg_std:.0f}",
+                                     "  ".join(warns) if warns else "OK"),
+                             tags=(tag,))
+                summary["per_class"][name] = {
+                    "total":           n,
+                    "very_dark_pct":   round(pcts[0], 1),
+                    "dark_pct":        round(pcts[1], 1),
+                    "normal_pct":      round(pcts[2], 1),
+                    "bright_pct":      round(pcts[3], 1),
+                    "very_bright_pct": round(pcts[4], 1),
+                    "glare_pct":       round(avg_glare, 1),
+                    "contrast_std":    round(avg_std, 1),
+                }
+
+            pb.config(value=100)
+            status_lbl.config(text=f"✔  Quét xong {total} ảnh", fg=SUCCESS)
+            run_btn.config(state=NORMAL)
+            sum_lbl.config(
+                text="  ⚠ " + "  |  ".join(warnings) if warnings
+                else "  Phân bố độ sáng bình thường",
+                fg="#f0c040" if warnings else SUCCESS)
+
+            # Write summary JSON for HTML report
+            try:
+                out = Path(img_dir).parent / "brightness_summary.json"
+                with open(out, "w", encoding="utf-8") as jf:
+                    json.dump(summary, jf, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
+        _ui(_refresh)
+
+    # ── HTML Report ───────────────────────────────────────────────────────────
+
+    def _generate_html_report(self):
+        """Tổng hợp tất cả phân tích → file HTML → mở browser."""
+        import tempfile as _tmp
+        import webbrowser as _wb
+
+        base = Path(self._output_dir) if self._output_dir and os.path.isdir(self._output_dir) \
+               else Path(self.train_dir.get().strip()) if self.train_dir.get().strip() \
+               else Path(".")
+        train_dir = self.train_dir.get().strip()
+
+        # ── Collect data ──────────────────────────────────────────────
+        # 1. Training metrics from results.csv
+        metrics = {}
+        csv_path = base / "results.csv"
+        if csv_path.exists():
+            try:
+                with open(csv_path, newline="", encoding="utf-8") as f:
+                    rows = [{k.strip(): v.strip() for k, v in r.items()}
+                            for r in __import__("csv").DictReader(f)]
+                if rows:
+                    def _gf(row, *keys):
+                        for k in keys:
+                            try:
+                                v = float(row.get(k, ""))
+                                if v == v: return v
+                            except Exception: pass
+                        return float("nan")
+                    best = max(rows, key=lambda r: (
+                        lambda m, m9: 0.1*m+0.9*m9 if m==m and m9==m9 else -1
+                    )(_gf(r,"metrics/mAP50(B)"), _gf(r,"metrics/mAP50-95(B)")))
+                    last10 = rows[-10:]
+                    v_losses = [_gf(r,"val/box_loss") for r in last10]
+                    t_losses = [_gf(r,"train/box_loss") for r in last10]
+                    v_ok = [v for v in v_losses if v==v]
+                    t_ok = [v for v in t_losses if v==v]
+                    overfit = (len(v_ok)>=5 and v_ok[-1]-v_ok[0]>0.01
+                               and (t_ok[-1]-t_ok[0]<-0.005 if t_ok else False))
+                    metrics = {
+                        "epochs": len(rows),
+                        "map50":  round(_gf(best,"metrics/mAP50(B)"), 4),
+                        "map95":  round(_gf(best,"metrics/mAP50-95(B)"), 4),
+                        "prec":   round(_gf(best,"metrics/precision(B)"), 4),
+                        "rec":    round(_gf(best,"metrics/recall(B)"), 4),
+                        "overfit": overfit,
+                    }
+            except Exception:
+                pass
+
+        # 2. FP analysis summary
+        fp_data = {}
+        for fp_dir in [base / "fp_analysis", base / "weights" / "fp_analysis"]:
+            sj = fp_dir / "summary.json"
+            if sj.exists():
+                try:
+                    with open(sj, encoding="utf-8") as f:
+                        fp_data = json.load(f)
+                    break
+                except Exception:
+                    pass
+
+        # 3. Miss analysis summary
+        miss_data = {}
+        for md in [base / "missed_analysis", base / "weights" / "missed_analysis"]:
+            sj = md / "summary.json"
+            if sj.exists():
+                try:
+                    with open(sj, encoding="utf-8") as f:
+                        miss_data = json.load(f)
+                    break
+                except Exception:
+                    pass
+
+        # 4. Imbalance summary
+        imb_data = {}
+        for ib in [Path(train_dir).parent / "imbalance_summary.json",
+                   base / "imbalance_summary.json"]:
+            if ib.exists():
+                try:
+                    with open(ib, encoding="utf-8") as f:
+                        imb_data = json.load(f)
+                    break
+                except Exception:
+                    pass
+
+        # 5. Shape summary
+        shape_data = {}
+        for sd in [Path(train_dir).parent / "shape_summary.json",
+                   base / "shape_summary.json"]:
+            if sd.exists():
+                try:
+                    with open(sd, encoding="utf-8") as f:
+                        shape_data = json.load(f)
+                    break
+                except Exception:
+                    pass
+
+        # 6. Brightness summary
+        brightness_data = {}
+        for bd in [Path(train_dir).parent / "brightness_summary.json",
+                   base / "brightness_summary.json"]:
+            if bd.exists():
+                try:
+                    with open(bd, encoding="utf-8") as f:
+                        brightness_data = json.load(f)
+                    break
+                except Exception:
+                    pass
+
+        # ── Build HTML ────────────────────────────────────────────────
+        def _nan_str(v, digits=4):
+            if isinstance(v, float) and v != v: return "—"
+            if isinstance(v, float): return f"{v:.{digits}f}"
+            return str(v)
+
+        def _pct_bar(pct, color="#F05922", width=120):
+            w = max(0, min(int(pct / 100 * width), width))
+            return (f'<div style="display:inline-block;vertical-align:middle;'
+                    f'background:#2a2a3e;width:{width}px;height:10px;border-radius:3px">'
+                    f'<div style="background:{color};width:{w}px;height:10px;border-radius:3px"></div>'
+                    f'</div> {pct:.1f}%')
+
+        def _status_badge(text, color):
+            return (f'<span style="background:{color};color:#fff;padding:2px 8px;'
+                    f'border-radius:4px;font-size:12px">{text}</span>')
+
+        issues = []  # list of (issue, severity, status, action)
+
+        # Overfitting
+        if metrics:
+            sev = "⚠ Cảnh báo" if metrics.get("overfit") else "✅ Bình thường"
+            col = "#f0c040" if metrics.get("overfit") else "#4caf50"
+            action = ("Tăng Weight Decay, dùng Early Stopping, bổ sung augmentation"
+                      if metrics.get("overfit") else "Không cần xử lý")
+            issues.append(("Overfitting", sev, col, action,
+                           f"Val loss tăng khi train loss giảm" if metrics.get("overfit") else "Không phát hiện"))
+
+        # Low precision / FP
+        if metrics.get("prec") and metrics["prec"] == metrics["prec"]:
+            if metrics["prec"] < 0.85:
+                issues.append(("False Positive (Nhận nhầm)", "⚠ Cần xử lý", "#f0c040",
+                               "Đã chạy FP Analysis + thêm Hard Negative → Retrain" if fp_data else
+                               "Chạy FP Analysis → thêm Hard Negative → Retrain",
+                               f"Precision = {_nan_str(metrics['prec'])} (< 0.85)"))
+            else:
+                issues.append(("False Positive (Nhận nhầm)", "✅ Tốt", "#4caf50",
+                               "Không cần xử lý", f"Precision = {_nan_str(metrics['prec'])}"))
+
+        # Low recall / FN
+        if metrics.get("rec") and metrics["rec"] == metrics["rec"]:
+            if metrics["rec"] < 0.80:
+                issues.append(("False Negative (Bỏ sót)", "⚠ Cần xử lý", "#f0c040",
+                               "Đã chạy Miss Analysis" if miss_data else
+                               "Chạy Miss Analysis → thu thập thêm data góc/ánh sáng đó",
+                               f"Recall = {_nan_str(metrics['rec'])} (< 0.80)"))
+            else:
+                issues.append(("False Negative (Bỏ sót)", "✅ Tốt", "#4caf50",
+                               "Không cần xử lý", f"Recall = {_nan_str(metrics['rec'])}"))
+
+        # Class imbalance
+        if imb_data.get("counts"):
+            cnt_vals = list(imb_data["counts"].values())
+            if cnt_vals:
+                ratio = min(cnt_vals) / max(cnt_vals) if max(cnt_vals) else 1
+                if ratio < 0.2:
+                    issues.append(("Class Imbalance", "❌ Nghiêm trọng", "#f05050",
+                                   "Oversampling class ít / Undersampling class nhiều / Augment thêm",
+                                   f"Tỉ lệ min/max = {ratio:.2f}"))
+                elif ratio < 0.5:
+                    issues.append(("Class Imbalance", "⚠ Cảnh báo", "#f0c040",
+                                   "Cân nhắc thu thập thêm ảnh cho class ít mẫu",
+                                   f"Tỉ lệ min/max = {ratio:.2f}"))
+                else:
+                    issues.append(("Class Imbalance", "✅ Cân bằng", "#4caf50",
+                                   "Không cần xử lý", f"Tỉ lệ min/max = {ratio:.2f}"))
+
+        # Small objects
+        if shape_data.get("shape"):
+            for cls_nm, sh in shape_data["shape"].items():
+                if sh.get("tiny_pct", 0) > 40:
+                    issues.append(("Object nhỏ (Tiny bbox)", "⚠ Cảnh báo", "#f0c040",
+                                   f"Tăng imgsz (640→1280) để detect object nhỏ tốt hơn",
+                                   f"Class '{cls_nm}': {sh['tiny_pct']}% bbox < 2% ảnh"))
+                    break
+
+        # Aspect ratio
+        if shape_data.get("shape"):
+            for cls_nm, sh in shape_data["shape"].items():
+                if sh.get("wide_pct", 0) > 60 or sh.get("tall_pct", 0) > 60:
+                    issues.append(("Tỉ lệ bbox bất thường", "⚠ Cảnh báo", "#f0c040",
+                                   "Kiểm tra lại augmentation flip/rotate có phù hợp không",
+                                   f"Class '{cls_nm}': wide={sh.get('wide_pct',0)}% tall={sh.get('tall_pct',0)}%"))
+                    break
+
+        # Brightness
+        if brightness_data.get("buckets"):
+            bkts = brightness_data["buckets"]
+            dark_pct   = bkts.get("Rất tối  (0–30)",    {}).get("pct", 0) \
+                       + bkts.get("Tối      (30–70)",   {}).get("pct", 0)
+            bright_pct = bkts.get("Sáng     (170–210)", {}).get("pct", 0) \
+                       + bkts.get("Rất sáng (210–255)", {}).get("pct", 0)
+            if dark_pct > 50:
+                issues.append(("Thiếu data ban ngày / sáng", "⚠ Cảnh báo", "#f0c040",
+                               "Thu thập thêm ảnh điều kiện ánh sáng tốt",
+                               f"{dark_pct:.0f}% ảnh trong dataset thuộc nhóm tối"))
+            elif bright_pct > 40:
+                issues.append(("Thiếu data ban đêm / tối", "⚠ Cảnh báo", "#f0c040",
+                               "Thu thập thêm ảnh ban đêm / thiếu sáng",
+                               f"{bright_pct:.0f}% ảnh trong dataset thuộc nhóm sáng"))
+            else:
+                issues.append(("Phân bố độ sáng", "✅ Cân bằng", "#4caf50",
+                               "Không cần xử lý",
+                               f"Tối {dark_pct:.0f}% / Sáng {bright_pct:.0f}%"))
+
+        # ── HTML template ─────────────────────────────────────────────
+        now_str = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        run_name = self._name_var.get().strip() or "kztek_train"
+        model_name = Path(self._model_var.get()).name if self._model_var.get() else "—"
+
+        # Issue summary rows
+        issue_rows = ""
+        for issue, sev, col, action, detail in issues:
+            issue_rows += f"""
+            <tr>
+              <td>{issue}</td>
+              <td><span style="color:{col};font-weight:bold">{sev}</span></td>
+              <td style="color:#9090b0;font-size:13px">{detail}</td>
+              <td style="color:#e0e0f0">{action}</td>
+            </tr>"""
+
+        # FP confusion table
+        fp_rows = ""
+        if fp_data.get("confusion_pairs"):
+            for pair in fp_data["confusion_pairs"][:15]:
+                cnt = pair["count"]
+                col = "#f05050" if cnt >= 5 else "#f0c040"
+                fp_rows += f"""<tr>
+                  <td>{pair['gt']}</td>
+                  <td style="color:#F05922">→ {pair['pred']}</td>
+                  <td style="color:{col}">{cnt}</td>
+                </tr>"""
+
+        # Miss table
+        miss_rows = ""
+        if miss_data.get("classes"):
+            for cls in miss_data["classes"]:
+                mp = cls.get("miss_pct", 0)
+                col = "#f05050" if mp >= 20 else ("#f0c040" if mp >= 5 else "#4caf50")
+                miss_rows += f"""<tr>
+                  <td>{cls['name']}</td>
+                  <td>{cls.get('total',0)}</td>
+                  <td>{cls.get('missed',0)}</td>
+                  <td style="color:{col}">{mp}%</td>
+                  <td style="color:#9090b0;font-size:12px">
+                    Tiny: {cls.get('tiny_pct',0)}%
+                  </td>
+                </tr>"""
+
+        # Imbalance table
+        imb_rows = ""
+        if imb_data.get("counts"):
+            cnt_vals = list(imb_data["counts"].values())
+            max_c = max(cnt_vals) if cnt_vals else 1
+            for name, cnt in sorted(imb_data["counts"].items(), key=lambda x: -x[1]):
+                pct = cnt / sum(cnt_vals) * 100 if cnt_vals else 0
+                ratio = cnt / max_c
+                col = "#4caf50" if ratio >= 0.5 else ("#f0c040" if ratio >= 0.2 else "#f05050")
+                bar_w = int(ratio * 160)
+                imb_rows += f"""<tr>
+                  <td>{name}</td>
+                  <td style="text-align:right">{cnt}</td>
+                  <td>{pct:.1f}%</td>
+                  <td><div style="display:inline-block;background:#2a2a3e;width:160px;height:10px;border-radius:3px;vertical-align:middle">
+                    <div style="background:{col};width:{bar_w}px;height:10px;border-radius:3px"></div>
+                  </div></td>
+                  <td style="color:{col}">{'Cân bằng' if ratio>=0.5 else ('Thiếu mẫu' if ratio>=0.2 else '⚠ Rất ít')}</td>
+                </tr>"""
+
+        # Shape table
+        shape_rows = ""
+        if shape_data.get("shape"):
+            for name, sh in shape_data["shape"].items():
+                tiny = sh.get("tiny_pct",0)
+                col  = "#f05050" if tiny>40 else ("#f0c040" if tiny>20 else "#4caf50")
+                shape_rows += (
+                    "<tr><td>" + name + "</td>"
+                    "<td>" + str(sh.get("total",0)) + "</td>"
+                    '<td style="color:' + col + '">' + str(tiny) + "%</td>"
+                    "<td>" + str(sh.get("wide_pct",0)) + "%</td>"
+                    "<td>" + str(sh.get("tall_pct",0)) + "%</td></tr>"
+                )
+
+        # Brightness rows
+        BUCKET_KEYS = [
+            "Rất tối  (0–30)", "Tối      (30–70)",
+            "Bình thường (70–170)", "Sáng     (170–210)", "Rất sáng (210–255)"
+        ]
+        BUCKET_COLORS = ["#4fc3f7", "#4fc3f7", "#4caf50", "#f0c040", "#f05050"]
+        brightness_rows = ""
+        if brightness_data.get("buckets"):
+            for key, col in zip(BUCKET_KEYS, BUCKET_COLORS):
+                bk = brightness_data["buckets"].get(key, {})
+                cnt = bk.get("count", 0)
+                pct = bk.get("pct", 0.0)
+                bar_w = int(pct / 100 * 160)
+                brightness_rows += (
+                    "<tr><td>" + key.strip() + "</td>"
+                    "<td>" + str(cnt) + "</td>"
+                    "<td>" + str(pct) + "%</td>"
+                    '<td><div style="display:inline-block;background:#1e1e2e;'
+                    'width:160px;height:10px;border-radius:3px;vertical-align:middle">'
+                    '<div style="background:' + col + ';width:' + str(bar_w) + 'px;'
+                    'height:10px;border-radius:3px"></div></div></td></tr>'
+                )
+        brightness_cls_rows = ""
+        if brightness_data.get("per_class"):
+            for nm, bd in brightness_data["per_class"].items():
+                dark  = bd.get("very_dark_pct", 0) + bd.get("dark_pct", 0)
+                norm  = bd.get("normal_pct", 0)
+                bri   = bd.get("bright_pct", 0) + bd.get("very_bright_pct", 0)
+                glare = bd.get("glare_pct", 0)
+                std   = bd.get("contrast_std", 0)
+                dc    = "#f05050" if dark  > 50 else ("#f0c040" if dark  > 30 else "#4caf50")
+                nc    = "#4caf50" if norm  > 40 else "#f0c040"
+                bc    = "#f05050" if bri   > 40 else ("#f0c040" if bri   > 20 else "#4caf50")
+                gc    = "#f05050" if glare > 5  else ("#f0c040" if glare > 2  else "#4caf50")
+                sc    = "#f05050" if std   > 80 else ("#f0c040" if std   > 60 else "#4caf50")
+                brightness_cls_rows += (
+                    "<tr><td>" + nm + "</td>"
+                    "<td>" + str(bd.get("total", 0)) + "</td>"
+                    '<td style="color:' + dc + '">' + str(round(dark,  1)) + "%</td>"
+                    '<td style="color:' + nc + '">' + str(norm)            + "%</td>"
+                    '<td style="color:' + bc + '">' + str(round(bri,  1)) + "%</td>"
+                    '<td style="color:' + gc + '">' + str(glare)           + "%</td>"
+                    '<td style="color:' + sc + '">' + str(std)             + "</td></tr>"
+                )
+
+        # Metrics section
+        map50_v = metrics.get("map50", float("nan"))
+        map95_v = metrics.get("map95", float("nan"))
+        prec_v  = metrics.get("prec",  float("nan"))
+        rec_v   = metrics.get("rec",   float("nan"))
+        def _mc(v, hi, lo):
+            if v != v: return "#9090b0"
+            return "#4caf50" if v >= hi else ("#f0c040" if v >= lo else "#f05050")
+
+        metrics_html = ""
+        if metrics:
+            _metric_boxes = "".join(
+                '<div class="metric-box">'
+                '<div class="metric-label">' + lbl + '</div>'
+                '<div class="metric-val" style="color:' + _mc(val, hi, lo) + '">'
+                + _nan_str(val) + '</div></div>'
+                for lbl, val, hi, lo in [
+                    ("mAP50",    map50_v, 0.85, 0.65),
+                    ("mAP50-95", map95_v, 0.70, 0.50),
+                    ("Precision", prec_v, 0.95, 0.85),
+                    ("Recall",    rec_v,  0.85, 0.70),
+                ]
+            )
+            _overfit_banner = (
+                '<div class="alert-warn">⚠ OVERFIT phát hiện: val loss tăng trong khi '
+                'train loss giảm → tăng Weight Decay hoặc dùng Early Stopping</div>'
+                if metrics.get("overfit") else ""
+            )
+            metrics_html = (
+                '<div class="section">'
+                '<h2>📊 Kết quả Training</h2>'
+                '<p style="color:#9090b0">Model: <b style="color:#e0e0f0">' + model_name + '</b>'
+                ' &nbsp;|&nbsp; Run: <b style="color:#e0e0f0">' + run_name + '</b>'
+                ' &nbsp;|&nbsp; Epochs: <b style="color:#e0e0f0">'
+                + str(metrics.get("epochs", "—")) + '</b></p>'
+                '<div style="display:flex;gap:24px;flex-wrap:wrap;margin:12px 0">'
+                + _metric_boxes +
+                '</div>' + _overfit_banner + '</div>'
+            )
+
+        html = f"""<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>KZTEK Training Issues Report — {run_name}</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: 'Segoe UI', sans-serif; background: #1e1e2e; color: #e0e0f0;
+         font-size: 14px; padding: 24px; }}
+  h1 {{ color: #F05922; font-size: 22px; margin-bottom: 4px; }}
+  h2 {{ color: #B8B3D6; font-size: 16px; margin: 0 0 12px 0;
+        padding-bottom: 6px; border-bottom: 1px solid #2a2a3e; }}
+  .section {{ background: #2a2a3e; border-radius: 8px; padding: 18px 20px;
+              margin-bottom: 18px; }}
+  .subtitle {{ color: #9090b0; font-size: 12px; margin-bottom: 16px; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+  th {{ background: #251C53; color: #B8B3D6; text-align: left;
+        padding: 8px 10px; font-weight: 600; }}
+  td {{ padding: 7px 10px; border-bottom: 1px solid #1e1e2e; color: #e0e0f0; }}
+  tr:last-child td {{ border-bottom: none; }}
+  tr:hover td {{ background: #32324a; }}
+  .metric-box {{ background: #1e1e2e; border-radius: 6px; padding: 12px 18px;
+                 min-width: 120px; text-align: center; }}
+  .metric-label {{ color: #9090b0; font-size: 12px; margin-bottom: 4px; }}
+  .metric-val {{ font-size: 22px; font-weight: 700; }}
+  .alert-warn {{ background: #3a2a00; border-left: 3px solid #f0c040;
+                 color: #f0c040; padding: 8px 12px; border-radius: 4px;
+                 margin-top: 10px; font-size: 13px; }}
+  .no-data {{ color: #9090b0; font-style: italic; font-size: 13px;
+              padding: 8px 0; }}
+  .tag-ok   {{ color: #4caf50; font-weight: bold; }}
+  .tag-warn {{ color: #f0c040; font-weight: bold; }}
+  .tag-bad  {{ color: #f05050; font-weight: bold; }}
+</style>
+</head>
+<body>
+<h1>KZTEK — Training Issues Report</h1>
+<p class="subtitle">Run: <b style="color:#e0e0f0">{run_name}</b> &nbsp;|&nbsp;
+   Model: <b style="color:#e0e0f0">{model_name}</b> &nbsp;|&nbsp;
+   Tạo lúc: {now_str}</p>
+
+<div class="section">
+  <h2>🗂 Tổng quan các vấn đề</h2>
+  {'<table><thead><tr><th>Vấn đề</th><th>Mức độ</th><th>Chi tiết</th><th>Cách xử lý</th></tr></thead><tbody>' + issue_rows + '</tbody></table>' if issues else '<p class="no-data">Chưa có dữ liệu — hãy chạy các phân tích trước.</p>'}
+</div>
+
+{metrics_html}
+
+<div class="section">
+  <h2>⚠ False Positive — Nhận nhầm</h2>
+  {'<table><thead><tr><th>GT thực tế</th><th>Dự đoán nhầm</th><th>Số lần</th></tr></thead><tbody>' + fp_rows + '</tbody></table>' if fp_rows else '<p class="no-data">Chưa chạy FP Analysis hoặc không có FP nào.</p>'}
+</div>
+
+<div class="section">
+  <h2>🔍 Miss Detection — Bỏ sót</h2>
+  {'<table><thead><tr><th>Class</th><th>GT tổng</th><th>Bỏ sót</th><th>Miss%</th><th>Ghi chú</th></tr></thead><tbody>' + miss_rows + '</tbody></table>' if miss_rows else '<p class="no-data">Chưa chạy Miss Analysis.</p>'}
+</div>
+
+<div class="section">
+  <h2>📊 Class Imbalance</h2>
+  {'<table><thead><tr><th>Class</th><th>Số instance</th><th>%</th><th>Biểu đồ</th><th>Đánh giá</th></tr></thead><tbody>' + imb_rows + '</tbody></table>' if imb_rows else '<p class="no-data">Chưa chạy Imbalance Analysis.</p>'}
+</div>
+
+<div class="section">
+  <h2>📐 Size & Shape</h2>
+  {'<table><thead><tr><th>Class</th><th>Tổng</th><th>Tiny&lt;2%</th><th>Wide&gt;2:1</th><th>Tall&gt;2:1</th></tr></thead><tbody>' + shape_rows + '</tbody></table>' if shape_rows else '<p class="no-data">Chưa chạy Size & Shape Analysis.</p>'}
+</div>
+
+<div class="section">
+  <h2>☀ Brightness — Phân bố độ sáng</h2>
+  {'<table><thead><tr><th>Mức sáng</th><th>Số ảnh</th><th>%</th><th>Biểu đồ</th></tr></thead><tbody>' + brightness_rows + '</tbody></table>' if brightness_rows else '<p class="no-data">Chưa chạy Brightness Analysis.</p>'}
+  {('<h3 style="color:#B8B3D6;font-size:14px;margin:14px 0 8px">Theo class (Tối% / Bình thường% / Sáng% / Chói% / Std)</h3><table><thead><tr><th>Class</th><th>Ảnh</th><th>Tối</th><th>Bình thường</th><th>Sáng</th><th>Chói% (px&gt;240)</th><th>Std (tương phản)</th></tr></thead><tbody>' + brightness_cls_rows + '</tbody></table>') if brightness_cls_rows else ''}
+</div>
+
+<div class="section">
+  <h2>💡 Gợi ý tổng hợp</h2>
+  <ul style="padding-left:20px;line-height:2">
+    {''.join(f'<li style="color:#f0c040">{action} <span style="color:#9090b0">({detail})</span></li>' for issue, sev, col, action, detail in issues if "✅" not in sev)}
+    {'<li style="color:#4caf50">Không có vấn đề nghiêm trọng nào cần xử lý.</li>' if all("✅" in sev for _, sev, _, _, _ in issues) and issues else ''}
+  </ul>
+</div>
+</body>
+</html>"""
+
+        try:
+            tmp = _tmp.NamedTemporaryFile(delete=False, suffix=".html",
+                                          prefix="kztek_report_", mode="w", encoding="utf-8")
+            tmp.write(html)
+            tmp.close()
+            _wb.open(f"file:///{tmp.name.replace(os.sep, '/')}")
+        except Exception as exc:
+            messagebox.showerror("Lỗi", f"Không thể tạo báo cáo HTML:\n{exc}")

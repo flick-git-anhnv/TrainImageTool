@@ -1,6 +1,8 @@
 # tab_yolo.py — YOLO Detection tab
 import os
+import queue as _q
 import threading
+import time
 from tkinter import *
 from tkinter import filedialog, messagebox, ttk
 
@@ -67,12 +69,17 @@ class YoloTab(Frame):
         self.v_interval      = StringVar(value="2.0")
         self.v_line_width    = IntVar(value=2)
         self.v_font_size     = IntVar(value=11)
+        self.v_export_draw   = BooleanVar(value=True)
+        self.v_export_rename = BooleanVar(value=False)
         self._v_search       = StringVar()
         self._pil1_full = None
         self._pil1_orig = None
         self._pil2_full = None
         self._last_results1 = None
         self._zoom_factor = 0.0
+        self._img_pos     = [0, 0]   # vị trí ảnh trên canvas (top-left)
+        self._pan_start   = None     # điểm bắt đầu kéo chuột
+        self._pan_origin  = [0, 0]   # _img_pos tại lúc bắt đầu kéo
         self._search_after = None
         self._autoplay_id = None
         self._last_n_det = -1
@@ -84,10 +91,14 @@ class YoloTab(Frame):
         self._review_state = dict(_CFG.get("yolo.review_states", {}))
 
         # Detect All cache & filters
-        # box tuple: (cid, cx_n, cy_n, w_n, h_n, w_px, h_px)  ← indices 0-6
+        # box tuple: (cid, cx_n, cy_n, w_n, h_n, w_px, h_px, conf_score)  ← indices 0-7
         self._det_cache = {}
+        self._det_cache_lock = threading.Lock()
         self._det_stop_flag = False
         self._det_running = False
+        self._detecting   = False   # True khi single-image detect đang chạy
+        self._det_pending = False   # re-detect queued sau khi detect xong
+        self._plot_after  = None    # debounce id cho _on_plot_param_change
         self._flt_class_var = StringVar(value="Tất cả")
         self._flt_ndet_min_var = StringVar(value="")
         self._flt_ndet_max_var = StringVar(value="")
@@ -102,12 +113,14 @@ class YoloTab(Frame):
         # Grid panel (filmstrip)
         self._grid_page = 0
         self._grid_cols_var = IntVar(value=4)
-        self._grid_thumb_w = 160
-        self._grid_thumb_h = 100
+        self._grid_rows_var = IntVar(value=4)
+        self._grid_thumb_w = 0
+        self._grid_thumb_h = 0
         self._grid_rendered_cache = {}
         self._grid_cells = []
         self._grid_render_idx = 0
         self._grid_rebuild_after = None
+        self._grid_reflow_after  = None
 
         _bind_cfg("yolo.model_path",    self.v_model_path)
         _bind_cfg("yolo.check_folder",  self.v_check_folder)
@@ -117,8 +130,12 @@ class YoloTab(Frame):
         _bind_cfg("yolo.interval",      self.v_interval)
         _bind_cfg("yolo.subfolder",     self.v_subfolder)
         _bind_cfg("yolo.show_original", self.v_show_original)
-        _bind_cfg("yolo.line_width",    self.v_line_width)
-        _bind_cfg("yolo.font_size",     self.v_font_size)
+        _bind_cfg("yolo.line_width",     self.v_line_width)
+        _bind_cfg("yolo.font_size",      self.v_font_size)
+        _bind_cfg("yolo.export_draw",   self.v_export_draw)
+        _bind_cfg("yolo.export_rename", self.v_export_rename)
+        _bind_cfg("yolo.grid_cols",     self._grid_cols_var)
+        _bind_cfg("yolo.grid_rows",     self._grid_rows_var)
 
         self._build()
         self.after(200, self._auto_load_model)
@@ -332,6 +349,20 @@ class YoloTab(Frame):
         Button(r3, text="Export tất cả", command=self._batch_export,
                bg="#4a3f00", fg="#ffcc00", font=F_MAIN, relief="flat",
                padx=8, cursor="hand2").pack(side=LEFT)
+        Checkbutton(r3, text="Vẽ lên hình", variable=self.v_export_draw,
+                    bg=CARD, fg=TEXT, activebackground=CARD,
+                    activeforeground=TEXT, selectcolor="#16162a",
+                    font=F_MAIN, cursor="hand2").pack(side=LEFT, padx=(4, 0))
+        Checkbutton(r3, text="Đổi tên", variable=self.v_export_rename,
+                    bg=CARD, fg=TEXT, activebackground=CARD,
+                    activeforeground=TEXT, selectcolor="#16162a",
+                    font=F_MAIN, cursor="hand2").pack(side=LEFT, padx=(2, 0))
+
+        Button(r3, text="📹 Video", command=self._open_video_detect,
+               bg="#1a3a5a", fg="#7ab8e8", font=F_MAIN, relief="flat",
+               padx=8, cursor="hand2",
+               activebackground="#2a5a8a", activeforeground="white",
+               ).pack(side=LEFT, padx=(4, 0))
 
         self.btn_detect_all = Button(r3, text="⚡ Detect All",
                                      command=self._detect_all,
@@ -339,6 +370,12 @@ class YoloTab(Frame):
                                      relief="flat", padx=8, cursor="hand2",
                                      activebackground="#1a5030", activeforeground="#4caf50")
         self.btn_detect_all.pack(side=LEFT, padx=(4, 0))
+        self.btn_detect_page = Button(r3, text="⚡ Detect trang",
+                                      command=self._detect_page,
+                                      bg="#102030", fg="#4caf50", font=F_MAIN,
+                                      relief="flat", padx=8, cursor="hand2",
+                                      activebackground="#1a3050", activeforeground="#4caf50")
+        self.btn_detect_page.pack(side=LEFT, padx=(4, 0))
         self.lbl_cache_info = Label(r3, text="", font=F_MONO, bg=CARD, fg=DIM)
         self.lbl_cache_info.pack(side=LEFT, padx=(4, 0))
 
@@ -354,7 +391,7 @@ class YoloTab(Frame):
         lw_spn.pack(side=LEFT, padx=(2, 8))
 
         Label(r3, text="Font:", font=F_BOLD, bg=CARD, fg=TEXT).pack(side=LEFT)
-        fs_spn = Spinbox(r3, from_=6, to=24, textvariable=self.v_font_size,
+        fs_spn = Spinbox(r3, from_=6, to=48, textvariable=self.v_font_size,
                          width=3, bg="#16162a", fg=TEXT, insertbackground=TEXT,
                          buttonbackground=ACCENT2, relief="flat", font=F_MAIN,
                          command=self._on_plot_param_change)
@@ -576,6 +613,10 @@ class YoloTab(Frame):
                command=lambda: self._mark_review(""),
                bg=CARD, fg=DIM, font=F_MAIN, relief="flat",
                padx=6, cursor="hand2").pack(side=LEFT)
+        Button(mark_row, text="✓✓ Đúng trang",
+               command=self._mark_page_correct,
+               bg="#0d2a1a", fg="#4caf50", font=F_MAIN, relief="flat",
+               padx=6, cursor="hand2").pack(side=LEFT, padx=(8, 0))
         self.lbl_mark_state = Label(mark_row, text="", font=F_MONO,
                                      bg=BG, fg=DIM)
         self.lbl_mark_state.pack(side=LEFT, padx=(12, 0))
@@ -587,10 +628,10 @@ class YoloTab(Frame):
         self._view_paned.pack(fill=BOTH, expand=True)
 
         self.panels_frame = Frame(self._view_paned, bg=BG)
-        self._view_paned.add(self.panels_frame, minsize=200, stretch="always")
+        self._view_paned.add(self.panels_frame, minsize=300, stretch="always")
 
         self._grid_outer = Frame(self._view_paned, bg="#0d0d1e")
-        self._view_paned.add(self._grid_outer, minsize=220, stretch="always")
+        self._view_paned.add(self._grid_outer, minsize=160, stretch="never")
         self._build_grid_panel()
 
         # Panel 1
@@ -602,33 +643,32 @@ class YoloTab(Frame):
                                        anchor=CENTER, pady=3)
         self.lbl_panel1_title.pack(fill=X)
 
-        self.canvas = Label(self.panel1_frame,
-                             text="Chọn ảnh để nhận diện",
-                             bg="#0d0d1a", fg=DIM,
-                             font=("Segoe UI", 14),
-                             compound="center",
-                             relief="flat")
+        self.canvas = Canvas(self.panel1_frame, bg="#0d0d1a",
+                             highlightthickness=0, cursor="fleur")
         self.canvas.pack(fill=BOTH, expand=True, padx=0, pady=2)
+        self._canvas_hint = self.canvas.create_text(
+            400, 200, text="Chọn ảnh để nhận diện",
+            fill=DIM, font=("Segoe UI", 14), anchor=CENTER, tags="hint")
 
         # Panel 2 (hidden by default)
         self.panel2_frame = Frame(self.panels_frame, bg=BG)
 
         self.lbl_panel2_title = Label(self.panel2_frame, text="",
-                                       font=F_BOLD, bg=CARD, fg="#4a8a4a",
+                                       font=F_BOLD, bg=CARD, fg=ACCENT2,
                                        anchor=CENTER, pady=3)
         self.lbl_panel2_title.pack(fill=X)
 
-        self.canvas2 = Label(self.panel2_frame,
-                              text="",
-                              bg="#0d0d1a", fg=DIM,
-                              font=("Segoe UI", 14),
-                              compound="center",
-                              relief="flat")
+        self.canvas2 = Canvas(self.panel2_frame, bg="#0d0d1a",
+                              highlightthickness=0, cursor="fleur")
         self.canvas2.pack(fill=BOTH, expand=True, padx=0, pady=2)
 
+        self.canvas.bind("<Configure>",          self._on_canvas_configure)
+        self.canvas.bind("<MouseWheel>",         self._on_canvas_scroll)
         self.canvas.bind("<Control-MouseWheel>", self._on_canvas_scroll)
-        self.canvas.bind("<Double-Button-1>",   self._on_canvas1_zoom)
-        self.canvas2.bind("<Double-Button-1>",  self._on_canvas2_zoom)
+        self.canvas.bind("<ButtonPress-1>",      self._on_pan_press)
+        self.canvas.bind("<B1-Motion>",          self._on_pan_drag)
+        self.canvas.bind("<Double-Button-1>",    self._on_canvas1_zoom)
+        self.canvas2.bind("<Double-Button-1>",   self._on_canvas2_zoom)
 
         if _DND_OK:
             try:
@@ -711,16 +751,29 @@ class YoloTab(Frame):
             messagebox.showerror("Thiếu thư viện",
                                   "pip install ultralytics", parent=self.root)
             return
-        try:
-            self.model = YOLO(path)
-            self.v_model_path.set(path)
-            self.lbl_model.config(
-                text=f"  {os.path.basename(path)}", fg=SUCCESS)
-            self._update_class_list()
-            if self.current_image_path:
-                self._detect_and_display()
-        except Exception as e:
-            messagebox.showerror("Lỗi load model", str(e), parent=self.root)
+        self.lbl_model.config(text=f"  ⏳ Đang load {os.path.basename(path)}…", fg=DIM)
+        self.root.update_idletasks()
+
+        def _do_load():
+            try:
+                mdl = YOLO(path)
+                self.root.after(0, lambda: self._on_model_loaded(path, mdl, None))
+            except Exception as e:
+                self.root.after(0, lambda err=str(e): self._on_model_loaded(path, None, err))
+
+        threading.Thread(target=_do_load, daemon=True).start()
+
+    def _on_model_loaded(self, path: str, mdl, err: str | None):
+        if err:
+            messagebox.showerror("Lỗi load model", err, parent=self.root)
+            self.lbl_model.config(text="  ✗ Lỗi load model", fg=ACCENT)
+            return
+        self.model = mdl
+        self.v_model_path.set(path)
+        self.lbl_model.config(text=f"  {os.path.basename(path)}", fg=SUCCESS)
+        self._update_class_list()
+        if self.current_image_path:
+            self._detect_and_display()
 
     def _auto_load_model(self):
         saved = self.v_model_path.get()
@@ -950,14 +1003,21 @@ class YoloTab(Frame):
         if not hasattr(self, "_filter_btns"):
             return
         base = self._base_folder
-        n_todo = len(self._all_images)
-        n_ok   = len(self._scan_images(os.path.join(base, "true")))  if base else 0
-        n_bad  = len(self._scan_images(os.path.join(base, "false"))) if base else 0
-        n_all  = n_todo + n_ok + n_bad
+        # Đếm từ _review_state (in-memory marks) + filesystem (moved files)
+        n_mem_ok  = sum(1 for p in self._all_images
+                        if self._review_state.get(p) == "correct")
+        n_mem_bad = sum(1 for p in self._all_images
+                        if self._review_state.get(p) == "incorrect")
+        n_unmarked = len(self._all_images) - n_mem_ok - n_mem_bad
+        n_fs_ok  = len(self._scan_images(os.path.join(base, "true")))  if base else 0
+        n_fs_bad = len(self._scan_images(os.path.join(base, "false"))) if base else 0
+        n_ok  = n_mem_ok  + n_fs_ok
+        n_bad = n_mem_bad + n_fs_bad
+        n_all = len(self._all_images) + n_fs_ok + n_fs_bad
         for code, label in [("all",        f"All({n_all})"),
                              ("correct",    f"✓({n_ok})"),
                              ("incorrect",  f"✗({n_bad})"),
-                             ("unreviewed", f"?({n_todo})")]:
+                             ("unreviewed", f"?({n_unmarked})")]:
             self._filter_btns[code].config(text=label)
 
     def _save_image_and_label(self, path: str, state: str) -> bool:
@@ -995,6 +1055,95 @@ class YoloTab(Frame):
         except Exception as e:
             self.v_status.set(f"Lỗi di chuyển: {e}")
             return False
+
+    def _save_page_image(self, path: str) -> bool:
+        """Move 1 ảnh vào true/ + ghi label từ _det_cache (không dùng _last_results1)."""
+        if not os.path.isfile(path):
+            return False
+        parent_name = os.path.basename(os.path.dirname(path))
+        if parent_name in ("true", "false"):
+            root = os.path.dirname(os.path.dirname(path))
+        else:
+            root = self._base_folder or os.path.dirname(path)
+        dest_dir = os.path.join(root, "true")
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+            shutil.move(path, os.path.join(dest_dir, os.path.basename(path)))
+            base = os.path.splitext(os.path.basename(path))[0]
+            with self._det_cache_lock:
+                det = self._det_cache.get(path)
+            with open(os.path.join(dest_dir, f"{base}.txt"), "w", encoding="utf-8") as f:
+                if det and det.get("boxes"):
+                    for box_t in det["boxes"]:
+                        cid, cx, cy, bw, bh = box_t[0], box_t[1], box_t[2], box_t[3], box_t[4]
+                        f.write(f"{cid} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+            return True
+        except Exception:
+            return False
+
+    def _mark_page_correct(self):
+        """Batch-đánh dấu đúng toàn trang — move file + ghi label, không navigate."""
+        if not self._grid_cells:
+            return
+        paths = [c["path"] for c in self._grid_cells if c.get("path")]
+        if not paths:
+            return
+
+        do_move  = bool(self._base_folder)
+        moved    = []
+        marked   = []
+        icon     = _REVIEW_ICON.get("correct", "✓")
+
+        # Unbind TreeviewSelect để tránh trigger navigation khi update tree items
+        self.tree_images.unbind("<<TreeviewSelect>>")
+        try:
+            for p in paths:
+                if do_move:
+                    ok = self._save_page_image(p)
+                    if ok:
+                        moved.append(p)
+                    else:
+                        # Move thất bại → chỉ mark in-memory
+                        self._review_state[p] = "correct"
+                        marked.append(p)
+                else:
+                    self._review_state[p] = "correct"
+                    marked.append(p)
+
+                # Cập nhật tree icon (ảnh đã move sẽ biến mất sau _apply_filter)
+                iid = self._path_to_iid.get(p)
+                if iid:
+                    try:
+                        if self.tree_images.exists(iid):
+                            old  = self.tree_images.item(iid, "text")
+                            bare = old[2:] if len(old) > 2 else old
+                            self.tree_images.item(iid,
+                                                  text=f"{icon} {bare}",
+                                                  tags=("correct",))
+                    except Exception:
+                        pass
+        finally:
+            self.tree_images.bind("<<TreeviewSelect>>", self._on_image_select)
+
+        # Cập nhật tracking structures cho ảnh đã move
+        for p in moved:
+            self._review_state.pop(p, None)
+            if p in self._all_images:
+                self._all_images.remove(p)
+            if p in self._det_cache:
+                with self._det_cache_lock:
+                    self._det_cache.pop(p, None)
+
+        changed = len(moved) + len(marked)
+        if changed:
+            _CFG["yolo.review_states"] = self._review_state
+            _cfg_save()
+            # Refresh list + counts một lần duy nhất
+            self._apply_filter(self._active_filter)
+            self._update_filter_counts()
+
+        self.lbl_mark_state.config(text=f"✓ {changed} ảnh", fg=SUCCESS)
+        self.after(2500, lambda: self.lbl_mark_state.config(text=""))
 
     def _mark_review(self, state: str):
         path = self.current_image_path
@@ -1062,6 +1211,9 @@ class YoloTab(Frame):
             pos = 0
         label = f"{pos}/{n}  " if n else ""
         self.v_status.set(f"{label}{os.path.basename(path)}")
+        self._zoom_factor = 0.0
+        self._img_pos   = [0, 0]
+        self._pan_start = None
         self._update_filmstrip()
         self._detect_and_display()
 
@@ -1091,9 +1243,10 @@ class YoloTab(Frame):
                     return "break"
             return _inner
 
-        self.root.bind("<Return>", _guard(lambda: self._mark_review("correct")), "+")
-        self.root.bind("<Delete>", _guard(lambda: self._mark_review("incorrect")), "+")
-        self.root.bind("<space>",  _guard(lambda: self._toggle_autoplay()), "+")
+        self.root.bind("<Return>",    _guard(lambda: self._mark_review("correct")), "+")
+        self.root.bind("<Delete>",    _guard(lambda: self._mark_review("incorrect")), "+")
+        self.root.bind("<space>",     _guard(lambda: self._toggle_autoplay()), "+")
+        self.root.bind("<Control-c>", _guard(lambda: self._copy_path()), "+")
 
     # ── Aliases cho app.py global routing ────────────────────────────────
     def _prev_image(self): self._nav_image(-1)
@@ -1117,6 +1270,28 @@ class YoloTab(Frame):
         """Return routing từ app.py — mark ảnh hiện tại là correct."""
         if self._is_active():
             self._mark_review("correct")
+
+    def _copy_path(self):
+        """Copy đường dẫn ảnh hiện tại vào clipboard (Ctrl+C)."""
+        if not self.current_image_path:
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self.current_image_path)
+            self.lbl_result.config(text=f"📋 Đã copy: {os.path.basename(self.current_image_path)}",
+                                    fg=DIM)
+            self.after(2000, self._restore_result_label)
+        except Exception:
+            pass
+
+    def _restore_result_label(self):
+        if self._last_n_det < 0:
+            return
+        if self._last_n_det > 0:
+            self.lbl_result.config(
+                text=f"Phát hiện {self._last_n_det} đối tượng", fg=SUCCESS)
+        else:
+            self.lbl_result.config(text="Không phát hiện đối tượng nào", fg=DIM)
 
     def _on_canvas1_zoom(self, _event=None):
         pil = self._pil1_full or self._pil1_orig
@@ -1155,7 +1330,7 @@ class YoloTab(Frame):
     # ======================================================== ZOOM / RENDER ==
 
     def _render_display(self):
-        """Re-render canvas from stored PIL with current zoom & original settings."""
+        """Re-render Canvas từ PIL với zoom & pan hiện tại."""
         if not _PIL_OK:
             return
         pil = (self._pil1_orig
@@ -1163,34 +1338,70 @@ class YoloTab(Frame):
                else self._pil1_full)
         if pil is None:
             return
-        self.root.update_idletasks()
-        w = max(self.canvas.winfo_width(), 800)
-        h = max(self.canvas.winfo_height(), 400)
+        self.canvas.update_idletasks()
+        cw = max(self.canvas.winfo_width(),  400)
+        ch = max(self.canvas.winfo_height(), 300)
         if self._zoom_factor == 0.0:
-            img = self._resize_pil(pil, w, h)
+            scale = min(cw / pil.width, ch / pil.height)  # fit inside, giữ tỉ lệ
+            nw = max(1, int(pil.width  * scale))
+            nh = max(1, int(pil.height * scale))
+            img = pil.resize((nw, nh), Image.Resampling.LANCZOS)
+            self._img_pos = [(cw - nw) // 2, (ch - nh) // 2]
             self.lbl_zoom.config(text="Fit")
         else:
-            nw = max(1, int(pil.width * self._zoom_factor))
+            nw = max(1, int(pil.width  * self._zoom_factor))
             nh = max(1, int(pil.height * self._zoom_factor))
             img = pil.resize((nw, nh), Image.Resampling.LANCZOS)
             self.lbl_zoom.config(text=f"{int(self._zoom_factor * 100)}%")
         self._photo_ref = ImageTk.PhotoImage(image=img)
-        self.canvas.config(image=self._photo_ref, text="")
+        self.canvas.delete("all")
+        self.canvas.create_image(self._img_pos[0], self._img_pos[1],
+                                  anchor=NW, image=self._photo_ref, tags="img")
+
+    def _on_canvas_configure(self, _event=None):
+        """Auto-refit khi canvas thay đổi kích thước."""
+        if self._zoom_factor == 0.0:
+            self._render_display()
+
+    def _on_pan_press(self, event):
+        if self._zoom_factor == 0.0:
+            return
+        self._pan_start  = (event.x, event.y)
+        self._pan_origin = list(self._img_pos)
+
+    def _on_pan_drag(self, event):
+        if self._pan_start is None or self._zoom_factor == 0.0:
+            return
+        dx = event.x - self._pan_start[0]
+        dy = event.y - self._pan_start[1]
+        self._img_pos = [self._pan_origin[0] + dx, self._pan_origin[1] + dy]
+        # Di chuyển item trực tiếp — không render lại
+        items = self.canvas.find_withtag("img")
+        if items:
+            self.canvas.coords(items[0], self._img_pos[0], self._img_pos[1])
 
     def _zoom_step(self, delta: float):
         """delta=0.0 resets to fit; otherwise shifts zoom factor."""
         if delta == 0.0:
             self._zoom_factor = 0.0
+            self._img_pos = [0, 0]
         else:
+            pil = self._pil1_full
+            cw  = max(self.canvas.winfo_width(),  400)
+            ch  = max(self.canvas.winfo_height(), 300)
             if self._zoom_factor == 0.0:
-                pil = self._pil1_full
-                if pil and self.canvas.winfo_width() > 1:
-                    fw = max(self.canvas.winfo_width(), 800) - 10
-                    fh = max(self.canvas.winfo_height(), 400) - 10
-                    self._zoom_factor = min(fw / pil.width, fh / pil.height)
+                if pil:
+                    self._zoom_factor = min(cw / pil.width, ch / pil.height)
                 else:
                     self._zoom_factor = 1.0
+            old = self._zoom_factor
             self._zoom_factor = max(0.05, min(8.0, self._zoom_factor + delta))
+            # Zoom về tâm canvas
+            if pil and old > 0:
+                ratio = self._zoom_factor / old
+                cx, cy = cw / 2, ch / 2
+                self._img_pos[0] = int(cx - (cx - self._img_pos[0]) * ratio)
+                self._img_pos[1] = int(cy - (cy - self._img_pos[1]) * ratio)
         self._render_display()
 
     def _on_canvas_scroll(self, event):
@@ -1247,15 +1458,16 @@ class YoloTab(Frame):
         _CFG["yolo.export_dir"] = out_dir
         _cfg_save()
 
-        save_labels = messagebox.askyesno(
-            "Lưu nhãn YOLO",
-            "Lưu kèm file nhãn .txt (YOLO format) không?",
-            parent=self.root)
+        draw_on_image = self.v_export_draw.get()
+        rename_file   = self.v_export_rename.get()
+
+        _alive = [True]
 
         popup = Toplevel(self.root)
         popup.title("Export kết quả — Batch Detection")
         popup.configure(bg=BG)
         popup.geometry("560x320")
+        popup.protocol("WM_DELETE_WINDOW", lambda: [_alive.__setitem__(0, False), popup.destroy()])
 
         Label(popup, text=f"Đang xử lý {len(self.image_list)} ảnh ...",
               font=F_BOLD, bg=BG, fg=TEXT).pack(pady=(12, 4))
@@ -1278,54 +1490,114 @@ class YoloTab(Frame):
         log_text.pack(fill=BOTH, expand=True)
         sb_log.config(command=log_text.yview)
 
+        def _safe(fn):
+            def _inner(*a, **kw):
+                if not _alive[0]:
+                    return
+                try:
+                    fn(*a, **kw)
+                except Exception:
+                    pass
+            return _inner
+
         def append(line):
             log_text.config(state=NORMAL)
             log_text.insert(END, line + "\n")
             log_text.see(END)
             log_text.config(state=DISABLED)
 
+        # Capture tất cả params trên main thread (Tkinter không thread-safe)
+        sel_cls  = self._get_sel_classes()
+        conf_val = max(self.v_conf_thresh.get(), self.v_conf.get())
+        iou_val  = self.v_iou.get()
+        line_w   = max(1, self.v_line_width.get())
+        font_sz  = max(6, self.v_font_size.get())
+
         def run():
-            sel_cls = self._get_sel_classes()
-            conf_val = max(self.v_conf_thresh.get(), self.slider_conf.get())
-            iou_val = self.slider_iou.get()
-            ok = 0
-            for i, img_path in enumerate(self.image_list):
-                self.root.after(0, lambda v=i: pb.config(value=v))
-                self.root.after(0, lambda v=i + 1, t=len(self.image_list):
-                                v_prog.set(f"{v} / {t}"))
+            import time
+            from concurrent.futures import ThreadPoolExecutor
+
+
+            images = list(self.image_list)
+            total  = len(images)
+            ok     = 0
+            BATCH  = 8  # số ảnh predict cùng lúc
+
+            log_buf  = []
+            last_ui  = [time.monotonic()]
+            pending  = []
+
+            def _save_io(img_bgr, boxes_data, out_stem):
                 try:
-                    res = self.model.predict(
-                        source=img_path, classes=sel_cls,
+                    cv2.imwrite(os.path.join(out_dir, f"{out_stem}.jpg"), img_bgr)
+                    with open(os.path.join(out_dir, f"{out_stem}.txt"),
+                              "w", encoding="utf-8") as f:
+                        for cid, cx, cy, bw, bh in boxes_data:
+                            f.write(f"{cid} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+                except Exception:
+                    pass
+
+            def _ui_flush(done, chunk):
+                try:
+                    pb.config(value=done)
+                    v_prog.set(f"{done} / {total}")
+                    if chunk:
+                        append(chunk)
+                except Exception:
+                    pass
+
+            io_pool = ThreadPoolExecutor(max_workers=4)
+
+            for batch_start in range(0, total, BATCH):
+                if not _alive[0]:
+                    break
+                batch_paths = images[batch_start:batch_start + BATCH]
+                try:
+                    results = self.model.predict(
+                        source=batch_paths, classes=sel_cls,
                         conf=conf_val, iou=iou_val,
                         imgsz=640, agnostic_nms=True, verbose=False)
-                    annotated = res[0].plot(
-                        line_width=max(1, self.v_line_width.get()),
-                        font_size=max(6, self.v_font_size.get()),
-                    )
-                    base = os.path.splitext(os.path.basename(img_path))[0]
-                    cv2.imwrite(os.path.join(out_dir, f"{base}_det.jpg"), annotated)
-                    if save_labels:
-                        boxes = res[0].boxes
-                        with open(os.path.join(out_dir, f"{base}_det.txt"),
-                                  "w", encoding="utf-8") as f:
-                            if boxes is not None and len(boxes):
-                                for box in boxes:
-                                    cid = int(box.cls[0])
-                                    cx, cy, bw, bh = box.xywhn[0].tolist()
-                                    f.write(f"{cid} {cx:.6f} {cy:.6f}"
-                                            f" {bw:.6f} {bh:.6f}\n")
-                    n = len(res[0].boxes) if res[0].boxes else 0
-                    self.root.after(0, lambda nm=os.path.basename(img_path),
-                                    nd=n: append(f"  OK  {nm}  ({nd} obj)"))
-                    ok += 1
+                    for img_path, res in zip(batch_paths, results):
+                        base     = os.path.splitext(os.path.basename(img_path))[0]
+                        out_stem = f"{base}_det" if rename_file else base
+                        img_bgr  = (res.plot(line_width=line_w, font_size=font_sz)
+                                    if draw_on_image else cv2.imread(img_path))
+                        # Extract box data thành list thuần Python trước khi pass sang thread
+                        boxes_data = []
+                        if res.boxes is not None and len(res.boxes):
+                            for box in res.boxes:
+                                cid = int(box.cls[0])
+                                cx, cy, bw, bh = box.xywhn[0].tolist()
+                                boxes_data.append((cid, cx, cy, bw, bh))
+                        if img_bgr is not None:
+                            pending.append(
+                                io_pool.submit(_save_io, img_bgr, boxes_data, out_stem))
+                        n = len(boxes_data)
+                        log_buf.append(f"  OK  {os.path.basename(img_path)}  ({n} obj)")
+                        ok += 1
                 except Exception as ex:
-                    self.root.after(0, lambda m=str(ex),
-                                    nm=os.path.basename(img_path):
-                                    append(f"  ERR {nm}: {m}"))
-            self.root.after(0, lambda: pb.config(value=len(self.image_list)))
-            self.root.after(0, lambda:
-                            append(f"\nHoan tat: {ok}/{len(self.image_list)}"
-                                   f" anh  ->  {out_dir}"))
+                    for p in batch_paths:
+                        log_buf.append(f"  ERR {os.path.basename(p)}: {ex}")
+
+                done = min(batch_start + BATCH, total)
+                now  = time.monotonic()
+                # Update UI tối đa mỗi 0.4s để không flood event queue
+                if now - last_ui[0] >= 0.4 or done >= total:
+                    last_ui[0] = now
+                    chunk = "\n".join(log_buf); log_buf.clear()
+                    self.root.after(0, _safe(lambda d=done, c=chunk: _ui_flush(d, c)))
+
+            # Chờ tất cả I/O ghi xong
+            for fut in pending:
+                try:
+                    fut.result(timeout=60)
+                except Exception:
+                    pass
+            io_pool.shutdown(wait=False)
+
+            self.root.after(0, _safe(lambda: pb.config(value=total)))
+            self.root.after(0, _safe(lambda:
+                append(f"\nHoàn tất: {ok}/{total} ảnh  →  {out_dir}")))
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1353,50 +1625,133 @@ class YoloTab(Frame):
         self.btn_detect_all.config(text="■ Dừng", bg=ACCENT, fg="white")
         all_images = list(self._all_images)
         total = len(all_images)
+        sel_cls = self._get_sel_classes()
+        conf    = max(self.v_conf_thresh.get(), self.v_conf.get())
+        iou     = self.v_iou.get()
 
         def run():
-            sel_cls = self._get_sel_classes()
-            conf = max(self.v_conf_thresh.get(), self.v_conf.get())
-            iou = self.v_iou.get()
-            for i, img_path in enumerate(all_images):
+            import time
+            BATCH   = 8
+            last_ui = time.monotonic()
+
+            for batch_start in range(0, total, BATCH):
                 if self._det_stop_flag:
                     break
+                batch_paths = all_images[batch_start:batch_start + BATCH]
                 try:
                     results = self.model.predict(
-                        source=img_path, classes=sel_cls,
+                        source=batch_paths, classes=sel_cls,
                         conf=conf, iou=iou, imgsz=640,
                         agnostic_nms=True, verbose=False)
-                    boxes = results[0].boxes
-                    n_det = len(boxes) if boxes is not None else 0
-                    classes_count = {}
-                    box_list = []
-                    if boxes is not None and len(boxes):
-                        for box in boxes:
-                            cid = int(box.cls[0])
-                            classes_count[cid] = classes_count.get(cid, 0) + 1
-                            cx_n, cy_n, w_n, h_n = box.xywhn[0].tolist()
-                            w_px = float(box.xywh[0][2])
-                            h_px = float(box.xywh[0][3])
-                            box_list.append((cid, cx_n, cy_n, w_n, h_n, w_px, h_px))
-                    self._det_cache[img_path] = {
-                        "n": n_det,
-                        "classes": classes_count,
-                        "boxes": box_list,
-                    }
+                    for img_path, res in zip(batch_paths, results):
+                        boxes = res.boxes
+                        n_det = len(boxes) if boxes is not None else 0
+                        classes_count = {}
+                        box_list = []
+                        if boxes is not None and len(boxes):
+                            for box in boxes:
+                                cid        = int(box.cls[0])
+                                conf_score = float(box.conf[0])
+                                classes_count[cid] = classes_count.get(cid, 0) + 1
+                                cx_n, cy_n, w_n, h_n = box.xywhn[0].tolist()
+                                w_px = float(box.xywh[0][2])
+                                h_px = float(box.xywh[0][3])
+                                box_list.append((cid, cx_n, cy_n, w_n, h_n, w_px, h_px, conf_score))
+                        with self._det_cache_lock:
+                            self._det_cache[img_path] = {
+                                "n": n_det,
+                                "classes": classes_count,
+                                "boxes": box_list,
+                            }
                 except Exception:
                     pass
-                if (i + 1) % 10 == 0 or (i + 1) == total:
-                    done = i + 1
+
+                done = min(batch_start + BATCH, total)
+                now  = time.monotonic()
+                # Chỉ update label text — KHÔNG rebuild tree trong khi đang chạy
+                if now - last_ui >= 0.5 or done >= total:
+                    last_ui = now
                     self.root.after(0, lambda d=done, t=total:
-                                    self._on_detect_all_progress(d, t))
+                        self.lbl_cache_info.config(text=f"{d}/{t}"))
+
             self.root.after(0, self._on_detect_all_done)
 
         threading.Thread(target=run, daemon=True).start()
 
+    def _detect_page(self):
+        """Detect chỉ các ảnh trên trang grid hiện tại."""
+        if not self.model:
+            messagebox.showwarning("Chưa có model",
+                                   "Vui lòng chọn model trước.", parent=self.root)
+            return
+        if not self._grid_cells:
+            return
+        if self._det_running:
+            messagebox.showwarning("Đang chạy",
+                                   "Detect All đang chạy, vui lòng đợi.", parent=self.root)
+            return
+        if not _CV2_OK or not _YOLO_OK:
+            return
+
+        page_paths = [c["path"] for c in self._grid_cells if c.get("path")]
+        if not page_paths:
+            return
+
+        total = len(page_paths)
+        self.btn_detect_page.config(text="■ …", bg=ACCENT, fg="white")
+        self.lbl_cache_info.config(text=f"0/{total}")
+        sel_cls = self._get_sel_classes()
+        conf    = max(self.v_conf_thresh.get(), self.v_conf.get())
+        iou     = self.v_iou.get()
+
+        def run():
+            import time
+            BATCH   = 8
+            for batch_start in range(0, total, BATCH):
+                batch = page_paths[batch_start:batch_start + BATCH]
+                try:
+                    results = self.model.predict(
+                        source=batch, classes=sel_cls,
+                        conf=conf, iou=iou, imgsz=640,
+                        agnostic_nms=True, verbose=False)
+                    for img_path, res in zip(batch, results):
+                        boxes = res.boxes
+                        n_det = len(boxes) if boxes is not None else 0
+                        classes_count = {}
+                        box_list = []
+                        if boxes is not None and len(boxes):
+                            for box in boxes:
+                                cid        = int(box.cls[0])
+                                conf_score = float(box.conf[0])
+                                classes_count[cid] = classes_count.get(cid, 0) + 1
+                                cx_n, cy_n, w_n, h_n = box.xywhn[0].tolist()
+                                w_px = float(box.xywh[0][2])
+                                h_px = float(box.xywh[0][3])
+                                box_list.append((cid, cx_n, cy_n, w_n, h_n, w_px, h_px, conf_score))
+                        with self._det_cache_lock:
+                            self._det_cache[img_path] = {
+                                "n": n_det, "classes": classes_count, "boxes": box_list,
+                            }
+                except Exception:
+                    pass
+                done = min(batch_start + BATCH, total)
+                self.root.after(0, lambda d=done, t=total:
+                    self.lbl_cache_info.config(text=f"{d}/{t}"))
+
+            self.root.after(0, self._on_detect_page_done)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_detect_page_done(self):
+        self.btn_detect_page.config(text="⚡ Detect trang", bg="#102030", fg="#4caf50")
+        n = len(self._det_cache)
+        total = len(self._all_images)
+        self.lbl_cache_info.config(text=f"✓{n}/{total}")
+        self._grid_rendered_cache.clear()
+        self._rebuild_grid()
+
     def _on_detect_all_progress(self, done: int, total: int):
         self.lbl_cache_info.config(text=f"{done}/{total}")
-        self._update_class_filter_combo()
-        self._apply_filter(self._active_filter)
 
     def _on_detect_all_done(self):
         self._det_running = False
@@ -1415,7 +1770,9 @@ class YoloTab(Frame):
         if not hasattr(self, "_flt_class_combo"):
             return
         all_classes = {}
-        for data in self._det_cache.values():
+        with self._det_cache_lock:
+            snapshot = list(self._det_cache.values())
+        for data in snapshot:
             for cid in data["classes"]:
                 name = (self.model.names.get(cid, str(cid))
                         if self.model and hasattr(self.model, "names") else str(cid))
@@ -1476,7 +1833,9 @@ class YoloTab(Frame):
         if self.model and hasattr(self.model, "names"):
             all_classes = dict(self.model.names)
         elif self._det_cache:
-            for data in self._det_cache.values():
+            with self._det_cache_lock:
+                snapshot = list(self._det_cache.values())
+            for data in snapshot:
                 for cid in data["classes"]:
                     all_classes.setdefault(cid, str(cid))
         mh_sel = set(self._must_have_lb.curselection())
@@ -1600,103 +1959,108 @@ class YoloTab(Frame):
     # ============================================================= GRID PANEL ==
 
     def _build_grid_panel(self):
-        """Xây dựng filmstrip grid panel (bên phải, luôn hiển thị)."""
+        """Filmstrip grid: pagination n_rows×n_cols, fill toàn bộ panel."""
         parent = self._grid_outer
 
-        # ── Nav bar (bottom) ───────────────────────────────────────────────
-        nav = Frame(parent, bg=CARD, pady=4)
+        # ── Nav bar ────────────────────────────────────────────────────────
+        nav = Frame(parent, bg=CARD, pady=3)
         nav.pack(side=BOTTOM, fill=X)
 
-        Button(nav, text="◀  Trước", width=8,
+        Button(nav, text="◀", width=3,
                command=lambda: self._go_grid_page(-1),
-               bg=ACCENT2, fg="white", activebackground=ACCENT,
-               activeforeground="white", relief=FLAT, font=F_MAIN
-               ).pack(side=LEFT, padx=(6, 4))
+               bg=ACCENT2, fg="white", relief=FLAT, font=F_BOLD,
+               activebackground=ACCENT, activeforeground="white",
+               cursor="hand2").pack(side=LEFT, padx=(4, 2))
 
-        self._grid_nav_lbl = Label(nav, text="—", bg=CARD, fg=TEXT, font=F_BOLD)
-        self._grid_nav_lbl.pack(side=LEFT, expand=True)
+        self._grid_nav_lbl = Label(nav, text="—", bg=CARD, fg=TEXT,
+                                   font=F_MAIN, anchor=CENTER)
+        self._grid_nav_lbl.pack(side=LEFT, expand=True, fill=X)
 
-        Button(nav, text="Sau  ▶", width=8,
-               command=lambda: self._go_grid_page(1),
-               bg=ACCENT2, fg="white", activebackground=ACCENT,
-               activeforeground="white", relief=FLAT, font=F_MAIN
-               ).pack(side=RIGHT, padx=(4, 6))
+        Button(nav, text="▶", width=3,
+               command=lambda: self._go_grid_page(+1),
+               bg=ACCENT2, fg="white", relief=FLAT, font=F_BOLD,
+               activebackground=ACCENT, activeforeground="white",
+               cursor="hand2").pack(side=RIGHT, padx=(2, 4))
 
-        # ── Toolbar (cols + size) ──────────────────────────────────────────
-        gtb = Frame(parent, bg=CARD, padx=6, pady=3)
+        # ── Toolbar: Cột + Hàng ────────────────────────────────────────────
+        gtb = Frame(parent, bg=CARD, padx=6, pady=2)
         gtb.pack(side=BOTTOM, fill=X)
 
-        Label(gtb, text="Cột:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
-        spn = Spinbox(gtb, from_=1, to=8, textvariable=self._grid_cols_var,
-                      width=2, bg="#16162a", fg=TEXT, insertbackground=TEXT,
-                      buttonbackground=ACCENT2, relief="flat", font=F_MAIN,
-                      command=self._schedule_grid_rebuild)
-        spn.bind("<Return>",   lambda e: self._schedule_grid_rebuild())
-        spn.bind("<FocusOut>", lambda e: self._schedule_grid_rebuild())
-        spn.pack(side=LEFT, padx=(2, 10))
+        for label, var, lo, hi in [
+            ("Cột:", self._grid_cols_var, 1, 10),
+            ("Hàng:", self._grid_rows_var, 1, 10),
+        ]:
+            Label(gtb, text=label, bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+            spn = Spinbox(gtb, from_=lo, to=hi, textvariable=var,
+                          width=2, bg="#16162a", fg=TEXT, insertbackground=TEXT,
+                          buttonbackground=ACCENT2, relief="flat", font=F_MAIN,
+                          command=self._on_grid_size_change)
+            spn.bind("<Return>",   lambda e: self._on_grid_size_change())
+            spn.bind("<FocusOut>", lambda e: self._on_grid_size_change())
+            spn.pack(side=LEFT, padx=(2, 10))
 
-        Label(gtb, text="W:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
-        self._grid_w_spn = Spinbox(gtb, from_=80, to=400, increment=20,
-                                   width=4, bg="#16162a", fg=TEXT,
-                                   insertbackground=TEXT,
-                                   buttonbackground=ACCENT2, relief="flat",
-                                   font=F_MAIN,
-                                   command=self._on_grid_size_change)
-        self._grid_w_spn.delete(0, END)
-        self._grid_w_spn.insert(0, str(self._grid_thumb_w))
-        self._grid_w_spn.bind("<Return>",   lambda e: self._on_grid_size_change())
-        self._grid_w_spn.bind("<FocusOut>", lambda e: self._on_grid_size_change())
-        self._grid_w_spn.pack(side=LEFT, padx=(2, 0))
+        # ── Grid area (không scrollbar — pagination fill panel) ────────────
+        self._grid_frame = Frame(parent, bg="#0d0d1e")
+        self._grid_frame.pack(fill=BOTH, expand=True)
+        self._grid_frame.bind("<Configure>", self._on_grid_frame_configure)
 
-        # ── Scrollable grid area ───────────────────────────────────────────
-        grid_area = Frame(parent, bg="#0d0d1e")
-        grid_area.pack(fill=BOTH, expand=True)
+        self._grid_inner = Frame(self._grid_frame, bg="#0d0d1e")
+        self._grid_inner.pack(fill=BOTH, expand=True)
 
-        self._grid_canvas = Canvas(grid_area, bg="#0d0d1e", highlightthickness=0)
-        gsb = Scrollbar(grid_area, orient=VERTICAL, command=self._grid_canvas.yview)
-        gsb.pack(side=RIGHT, fill=Y)
-        self._grid_canvas.config(yscrollcommand=gsb.set)
-        self._grid_canvas.pack(side=LEFT, fill=BOTH, expand=True)
+    # ── Resize handler: reflow thumbnail size, KHÔNG tạo lại widget ────────
+    def _on_grid_frame_configure(self, event):
+        if self._grid_reflow_after:
+            self.after_cancel(self._grid_reflow_after)
+        self._grid_reflow_after = self.after(
+            350, lambda: self._reflow_grid(event.width, event.height))
 
-        self._grid_inner = Frame(self._grid_canvas, bg="#0d0d1e")
-        self._grid_canvas_win = self._grid_canvas.create_window(
-            (0, 0), window=self._grid_inner, anchor="nw")
+    def _reflow_grid(self, canvas_w: int, canvas_h: int):
+        """Tính lại tw/th từ kích thước panel, re-render thumbnail không rebuild widget."""
+        n_cols = max(1, self._grid_cols_var.get())
+        n_rows = max(1, self._grid_rows_var.get())
+        tw, th = self._calc_thumb_size(canvas_w, canvas_h, n_cols, n_rows)
+        if tw == self._grid_thumb_w and th == self._grid_thumb_h:
+            return
+        self._grid_thumb_w, self._grid_thumb_h = tw, th
+        self._grid_rendered_cache.clear()
+        blank = self._make_blank_thumb(tw, th)
+        for cell in self._grid_cells:
+            cell["rendered"] = False
+            try:
+                if blank:
+                    cell["img_lbl"].config(image=blank)
+                    cell["img_lbl"]._blank_ref = blank
+            except Exception:
+                pass
+        self._grid_render_idx = 0
+        self._schedule_film_render()
 
-        self._grid_inner.bind("<Configure>", lambda e:
-            self._grid_canvas.configure(
-                scrollregion=self._grid_canvas.bbox("all")))
-        self._grid_canvas.bind("<Configure>", lambda e:
-            self._grid_canvas.itemconfig(self._grid_canvas_win, width=e.width))
-
-        def _scroll(e):
-            self._grid_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-        self._grid_canvas.bind("<MouseWheel>", _scroll)
-        self._grid_inner.bind("<MouseWheel>", _scroll)
+    @staticmethod
+    def _calc_thumb_size(cw: int, ch: int, n_cols: int, n_rows: int):
+        tw = max(40, (cw - 4 * (n_cols + 1)) // n_cols)
+        th = max(30, (ch - 4 * (n_rows + 1)) // n_rows)
+        return tw, th
 
     def _on_grid_size_change(self):
-        try:
-            w = int(self._grid_w_spn.get())
-            self._grid_thumb_w = max(80, min(400, w))
-            self._grid_thumb_h = int(self._grid_thumb_w * 0.625)
-        except (ValueError, AttributeError):
-            pass
+        """Cols/rows thay đổi → rebuild trang hiện tại."""
         self._grid_rendered_cache.clear()
         self._schedule_grid_rebuild()
+
+    def _schedule_grid_rebuild(self):
+        if self._grid_rebuild_after:
+            self.after_cancel(self._grid_rebuild_after)
+        self._grid_rebuild_after = self.after(150, self._rebuild_grid)
 
     def _go_grid_page(self, delta: int):
         if not self.image_list:
             return
         n_cols   = max(1, self._grid_cols_var.get())
-        per_page = n_cols * 4
+        n_rows   = max(1, self._grid_rows_var.get())
+        per_page = n_cols * n_rows
         total    = len(self.image_list)
         max_page = max(0, (total - 1) // per_page)
         self._grid_page = max(0, min(max_page, self._grid_page + delta))
         self._rebuild_grid()
-
-    def _schedule_grid_rebuild(self):
-        if self._grid_rebuild_after:
-            self.after_cancel(self._grid_rebuild_after)
-        self._grid_rebuild_after = self.after(200, self._rebuild_grid)
 
     def _rebuild_grid(self):
         if not hasattr(self, "_grid_inner"):
@@ -1708,7 +2072,8 @@ class YoloTab(Frame):
 
         files    = self.image_list
         n_cols   = max(1, self._grid_cols_var.get())
-        per_page = n_cols * 4
+        n_rows   = max(1, self._grid_rows_var.get())
+        per_page = n_cols * n_rows
         total    = len(files)
 
         if not total:
@@ -1720,62 +2085,53 @@ class YoloTab(Frame):
 
         max_page = max(0, (total - 1) // per_page)
         self._grid_page = max(0, min(max_page, self._grid_page))
-
-        start      = self._grid_page * per_page
-        end        = min(start + per_page, total)
-        page_files = files[start:end]
-
+        start = self._grid_page * per_page
+        end   = min(start + per_page, total)
         self._grid_nav_lbl.config(
-            text=f"Trang {self._grid_page + 1}/{max_page + 1}  ({total} ảnh)")
+            text=f"{self._grid_page + 1}/{max_page + 1}  ({total})")
 
-        # Auto-calculate thumb width from panel width
-        canvas_w = self._grid_canvas.winfo_width() or 500
-        pad = 4
-        tw = max(100, (canvas_w - pad * (n_cols + 1) - 14) // n_cols)
-        th = max(64,  int(tw * 0.625))
+        # Tính tw/th từ kích thước thực của frame
+        fw = max(self._grid_frame.winfo_width(),  200)
+        fh = max(self._grid_frame.winfo_height(), 200)
+        tw, th = self._calc_thumb_size(fw, fh, n_cols, n_rows)
         if self._grid_thumb_w != tw or self._grid_thumb_h != th:
             self._grid_rendered_cache.clear()
         self._grid_thumb_w, self._grid_thumb_h = tw, th
 
         blank_img = self._make_blank_thumb(tw, th)
 
-        for fi_off, fpath in enumerate(page_files):
+        for fi_off, fpath in enumerate(files[start:end]):
             row, col = divmod(fi_off, n_cols)
             is_cur   = (fpath == self.current_image_path)
             border   = ACCENT if is_cur else "#2a2a3e"
 
-            cell = Frame(self._grid_inner, bg=border, padx=2, pady=2,
+            cell = Frame(self._grid_inner, bg=border, padx=1, pady=1,
                          cursor="hand2")
-            cell.grid(row=row, column=col, padx=3, pady=3, sticky="nw")
+            cell.grid(row=row, column=col, padx=2, pady=2, sticky="nsew")
 
-            img_lbl = Label(cell, image=blank_img, bg="#1a1a2e", bd=0)
-            img_lbl.pack()
+            img_lbl = Label(cell, image=blank_img, bg="#1a1a2e", bd=0,
+                            width=tw, height=th)
+            img_lbl.pack(fill=BOTH, expand=True)
 
             det_data = self._det_cache.get(fpath)
             fname    = os.path.basename(fpath)
             n_suffix = (f" [{det_data['n']}]" if det_data is not None else "")
-            if len(fname) > 22:
-                fname = fname[:20] + "…"
+            if len(fname) > 18:
+                fname = fname[:16] + "…"
             fn_lbl = Label(cell, text=fname + n_suffix, bg="#111130",
                            fg="#9090bb", font=("Consolas", 7), anchor=W, padx=2)
             fn_lbl.pack(fill=X)
 
             state = _path_review_state(fpath)
             if state == "correct":
-                indicator = Label(cell, text="✔", bg="#1a3a1a",
-                                  fg=SUCCESS, font=F_MAIN)
-                indicator.pack(fill=X)
+                Label(cell, text="✔", bg="#1a3a1a", fg=SUCCESS,
+                      font=("Segoe UI", 7)).pack(fill=X)
             elif state == "incorrect":
-                indicator = Label(cell, text="✖", bg="#3a1a1a",
-                                  fg="#e06060", font=F_MAIN)
-                indicator.pack(fill=X)
+                Label(cell, text="✖", bg="#3a1a1a", fg="#e06060",
+                      font=("Segoe UI", 7)).pack(fill=X)
 
             for widget in (cell, img_lbl, fn_lbl):
-                widget.bind("<Button-1>",
-                            lambda e, p=fpath: self._grid_click(p))
-                widget.bind("<MouseWheel>", lambda e: (
-                    self._grid_canvas.yview_scroll(
-                        int(-1 * (e.delta / 120)), "units")))
+                widget.bind("<Button-1>", lambda e, p=fpath: self._grid_click(p))
 
             self._grid_cells.append({
                 "path": fpath, "frame": cell, "img_lbl": img_lbl,
@@ -1784,10 +2140,8 @@ class YoloTab(Frame):
 
         for c in range(n_cols):
             self._grid_inner.columnconfigure(c, weight=1)
-
-        self._grid_canvas.update_idletasks()
-        self._grid_canvas.configure(scrollregion=self._grid_canvas.bbox("all"))
-        self._grid_canvas.yview_moveto(0)
+        for r in range(n_rows):
+            self._grid_inner.rowconfigure(r, weight=1)
 
         self._grid_render_idx = 0
         self._schedule_film_render()
@@ -1858,11 +2212,12 @@ class YoloTab(Frame):
         self._open_image(fpath)
 
     def _update_filmstrip(self):
-        """Cập nhật highlight; chuyển trang nếu current image không ở trang hiện tại."""
+        """Chuyển đúng trang chứa ảnh hiện tại; cập nhật highlight."""
         if not self.image_list or not hasattr(self, "_grid_inner"):
             return
         n_cols   = max(1, self._grid_cols_var.get())
-        per_page = n_cols * 4
+        n_rows   = max(1, self._grid_rows_var.get())
+        per_page = n_cols * n_rows
         if self.current_image_path in self.image_list:
             fi           = self.image_list.index(self.current_image_path)
             target_page  = fi // per_page
@@ -1870,7 +2225,7 @@ class YoloTab(Frame):
                 self._grid_page = target_page
                 self._rebuild_grid()
                 return
-        # Same page — just update borders
+        # Cùng trang — chỉ đổi border
         for cell in self._grid_cells:
             is_cur = (cell["path"] == self.current_image_path)
             try:
@@ -1888,12 +2243,18 @@ class YoloTab(Frame):
     def _on_conf_thresh_change(self, _=None):
         self.lbl_conf_thresh_val.config(text=f"{self.v_conf_thresh.get():.2f}")
         if self.current_image_path and self.model:
+            # Xóa cache ảnh hiện tại → force re-detect với ngưỡng mới
+            with self._det_cache_lock:
+                self._det_cache.pop(self.current_image_path, None)
             self._detect_and_display()
 
     def _on_slider_change(self, _=None):
         self.lbl_conf.config(text=f"{self.v_conf.get():.2f}")
         self.lbl_iou.config(text=f"{self.v_iou.get():.2f}")
         if self.current_image_path:
+            # Xóa cache ảnh hiện tại → force re-detect với params mới
+            with self._det_cache_lock:
+                self._det_cache.pop(self.current_image_path, None)
             self._detect_and_display()
 
     def _get_sel_classes(self):
@@ -1907,15 +2268,17 @@ class YoloTab(Frame):
         box_list = []
         if boxes_obj is not None and len(boxes_obj):
             for box in boxes_obj:
-                cid = int(box.cls[0])
+                cid        = int(box.cls[0])
+                conf_score = float(box.conf[0])
                 classes_count[cid] = classes_count.get(cid, 0) + 1
                 cx_n, cy_n, w_n, h_n = box.xywhn[0].tolist()
                 w_px = float(box.xywh[0][2])
                 h_px = float(box.xywh[0][3])
-                box_list.append((cid, cx_n, cy_n, w_n, h_n, w_px, h_px))
-        self._det_cache[img_path] = {
-            "n": len(box_list), "classes": classes_count, "boxes": box_list
-        }
+                box_list.append((cid, cx_n, cy_n, w_n, h_n, w_px, h_px, conf_score))
+        with self._det_cache_lock:
+            self._det_cache[img_path] = {
+                "n": len(box_list), "classes": classes_count, "boxes": box_list
+            }
         # Xóa thumbnail cache của ảnh này để render lại với bbox mới
         for key in list(self._grid_rendered_cache.keys()):
             if key[0] == img_path:
@@ -1949,13 +2312,13 @@ class YoloTab(Frame):
                 pass
             break
 
-    def _run_model(self, mdl, image_path, sel_cls):
-        conf = max(self.v_conf_thresh.get(), self.slider_conf.get())
+    def _run_model(self, mdl, image_path, sel_cls,
+                   conf: float = 0.25, iou: float = 0.45):
         return mdl.predict(
             source=image_path,
             classes=sel_cls,
             conf=conf,
-            iou=self.slider_iou.get(),
+            iou=iou,
             imgsz=640,
             agnostic_nms=True,
             verbose=False,
@@ -1974,18 +2337,163 @@ class YoloTab(Frame):
         return 0, ""
 
     def _on_plot_param_change(self):
+        """Debounce 200 ms — tránh render liên tục khi kéo slider."""
+        if self._plot_after:
+            self.after_cancel(self._plot_after)
+        self._plot_after = self.after(200, self._do_replot)
+
+    def _do_replot(self):
+        self._plot_after = None
         self._grid_rendered_cache.clear()
-        if self.current_image_path and self.model:
-            self._detect_and_display()
+        if self._last_results1 is not None:
+            try:
+                pil1, ann1_bgr = self._annotated_to_pil(self._last_results1)
+                self._last_annotated_bgr = ann1_bgr
+                self._pil1_full = pil1
+                self._render_display()
+            except Exception:
+                pass
+        elif self.current_image_path and self.current_image_path in self._det_cache:
+            # Đang hiển thị từ cache → vẽ lại với font/line mới
+            try:
+                pil1 = self._annotated_from_cache(self.current_image_path)
+                ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
+                self._last_annotated_bgr = ann1_bgr
+                self._pil1_full = pil1
+                self._render_display()
+            except Exception:
+                pass
         self._schedule_grid_rebuild()
 
-    def _annotated_to_pil(self, results):
-        annotated = results[0].plot(
-            line_width=max(1, self.v_line_width.get()),
-            font_size=max(6, self.v_font_size.get()),
-        )
-        rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
-        return Image.fromarray(rgb), annotated
+    # Màu cố định cho từng panel khi so sánh 2 model
+    _PANEL1_COLOR = (0, 200, 255)    # cyan  — Model 1
+    _PANEL2_COLOR = (240, 89, 34)    # orange ACCENT — Model 2
+
+    def _annotated_to_pil(self, results, single_color=None):
+        """Vẽ annotation bằng PIL để font_size hoạt động độc lập với line_width.
+        single_color: tuple RGB — dùng màu cố định này cho mọi box (bỏ qua class).
+        Dùng trong dual-panel mode để 2 panel có màu khác nhau rõ ràng."""
+        from PIL import ImageFont, ImageDraw as _Draw
+
+        lw = max(1, self.v_line_width.get())
+        fs = max(6, self.v_font_size.get())
+
+        orig_bgr = results[0].orig_img
+        orig_rgb = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2RGB)
+        pil_img  = Image.fromarray(orig_rgb)
+        draw     = _Draw.Draw(pil_img)
+
+        try:
+            font = ImageFont.truetype("arial.ttf", fs)
+        except Exception:
+            try:
+                font = ImageFont.load_default(size=fs)
+            except Exception:
+                font = ImageFont.load_default()
+
+        # Màu theo class (single panel) hoặc màu cố định (dual panel)
+        if single_color is None:
+            try:
+                from ultralytics.utils.plotting import colors as _yc
+                def _color(cls_id):
+                    c = _yc(int(cls_id), True)
+                    return (int(c[2]), int(c[1]), int(c[0]))
+            except Exception:
+                _pal = [(0,200,255),(0,255,0),(255,100,0),(255,0,200),(200,200,0)]
+                def _color(cls_id):
+                    return _pal[int(cls_id) % len(_pal)]
+        else:
+            def _color(_):
+                return single_color
+
+        boxes = results[0].boxes
+        names = getattr(results[0], "names", {}) or {}
+        if not isinstance(names, dict):
+            names = {}
+
+        if boxes is not None and len(boxes):
+            for box in boxes:
+                x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
+                cls_id   = int(box.cls[0])
+                conf     = float(box.conf[0])
+                cls_name = names.get(cls_id, str(cls_id))
+                label    = f"{cls_name} {conf:.2f}"
+                color    = _color(cls_id)
+
+                draw.rectangle([x1, y1, x2, y2], outline=color, width=lw)
+
+                try:
+                    tb = draw.textbbox((0, 0), label, font=font)
+                    tw, th = tb[2] - tb[0], tb[3] - tb[1]
+                    ty = max(y1 - th - 4, 0)
+                    draw.rectangle([x1, ty, x1 + tw + 6, ty + th + 4], fill=color)
+                    draw.text((x1 + 3, ty + 2), label, fill=(255, 255, 255), font=font)
+                except Exception:
+                    draw.text((x1, max(y1 - fs - 2, 0)), label, fill=color, font=font)
+
+        ann_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        return pil_img, ann_bgr
+
+    def _annotated_from_cache(self, img_path: str):
+        """Vẽ annotated image từ _det_cache — nhất quán với grid thumbnail."""
+        from PIL import ImageFont, ImageDraw as _Draw
+        with self._det_cache_lock:
+            data = self._det_cache.get(img_path)
+        pil = Image.open(img_path).convert("RGB")
+        try:
+            from PIL import ImageOps
+            pil = ImageOps.exif_transpose(pil)
+        except Exception:
+            pass
+        if not data or data["n"] == 0:
+            return pil
+        lw = max(1, self.v_line_width.get())
+        fs = max(6, self.v_font_size.get())
+        iw, ih = pil.size
+        draw = _Draw.Draw(pil)
+        try:
+            font = ImageFont.truetype("arial.ttf", fs)
+        except Exception:
+            try:
+                font = ImageFont.load_default(size=fs)
+            except Exception:
+                font = ImageFont.load_default()
+        try:
+            from ultralytics.utils.plotting import colors as _yc
+            def _color(cls_id):
+                c = _yc(int(cls_id), True)
+                return (int(c[2]), int(c[1]), int(c[0]))
+        except Exception:
+            _pal = [(0,200,255),(0,255,0),(255,100,0),(255,0,200),(200,200,0)]
+            def _color(cls_id):
+                return _pal[int(cls_id) % len(_pal)]
+        names = {}
+        if self.model:
+            try:
+                names = dict(self.model.names) or {}
+            except Exception:
+                pass
+        for box_t in data["boxes"]:
+            cid        = int(box_t[0])
+            cx_n, cy_n, w_n, h_n = box_t[1], box_t[2], box_t[3], box_t[4]
+            conf_score = float(box_t[7]) if len(box_t) > 7 else 0.0
+            x1 = max(0, int((cx_n - w_n / 2) * iw))
+            y1 = max(0, int((cy_n - h_n / 2) * ih))
+            x2 = min(iw - 1, int((cx_n + w_n / 2) * iw))
+            y2 = min(ih - 1, int((cy_n + h_n / 2) * ih))
+            cls_name = names.get(cid, str(cid))
+            label    = f"{cls_name} {conf_score:.2f}"
+            color    = _color(cid)
+            draw.rectangle([x1, y1, x2, y2], outline=color, width=lw)
+            try:
+                tb = draw.textbbox((0, 0), label, font=font)
+                tw2, th2 = tb[2] - tb[0], tb[3] - tb[1]
+                ty = max(y1 - th2 - 4, 0)
+                draw.rectangle([x1, ty, x1 + tw2 + 6, ty + th2 + 4], fill=color)
+                draw.text((x1 + 3, ty + 2), label, fill=(255, 255, 255), font=font)
+            except Exception:
+                draw.text((x1, max(y1 - fs - 2, 0)), label, fill=color, font=font)
+        return pil
 
     def _resize_pil(self, pil_img, w, h):
         copy = pil_img.copy()
@@ -1993,77 +2501,160 @@ class YoloTab(Frame):
         return copy
 
     def _detect_and_display(self):
+        """Chạy YOLO detect trên background thread — không block UI."""
         if not self.current_image_path or not self.model:
             return
         if not _PIL_OK or not _CV2_OK:
             self.lbl_result.config(
                 text="Cần cài: pip install Pillow opencv-python", fg=ACCENT)
             return
-        try:
-            sel_cls = self._get_sel_classes()
-            results1 = self._run_model(self.model, self.current_image_path, sel_cls)
-            n_det, summary = self._results_summary(results1, self.model.names)
+        if self._detecting:
+            self._det_pending = True  # re-detect sau khi xong
+            return
+        self._detecting   = True
+        self._det_pending = False
+        self.lbl_result.config(text="⏳ Đang nhận diện…", fg=DIM)
 
-            self._cache_single_result(self.current_image_path, results1)
+        img_path  = self.current_image_path  # capture trước khi user chuyển ảnh
+        model1    = self.model
+        model2    = self.model2
+        sel_cls   = self._get_sel_classes()
+        # Capture params trên main thread (Tkinter widget không thread-safe)
+        conf_val  = max(self.v_conf_thresh.get(), self.v_conf.get())
+        iou_val   = self.v_iou.get()
+        # Dùng cache nếu có (nhất quán với grid thumbnail), trừ dual-model mode
+        with self._det_cache_lock:
+            cached = self._det_cache.get(img_path) if model2 is None else None
 
-            pil1, ann1_bgr = self._annotated_to_pil(results1)
-            self._last_annotated_bgr = ann1_bgr
-            self._last_results1 = results1
-
-            self.root.update_idletasks()
-
-            if self.model2 is not None:
-                # Side-by-side mode
-                self.panel2_frame.pack(side=LEFT, fill=BOTH, expand=True)
-                m1_name = os.path.basename(self.v_model_path.get())
-                m2_name = os.path.basename(self.v_model2_path.get())
-
-                results2 = self._run_model(self.model2, self.current_image_path, sel_cls)
-                n_det2, summary2 = self._results_summary(results2, self.model2.names)
-                pil2, _ = self._annotated_to_pil(results2)
-
-                self.lbl_panel1_title.config(
-                    text=f"Model 1: {m1_name}  ({n_det} obj)")
-                self.lbl_panel2_title.config(
-                    text=f"Model 2: {m2_name}  ({n_det2} obj)")
-
-                half_w = max(self.panels_frame.winfo_width() // 2, 400)
-                ph = max(self.panels_frame.winfo_height(), 400)
-
-                pil1r = self._resize_pil(pil1, half_w, ph)
-                pil2r = self._resize_pil(pil2, half_w, ph)
-
-                self._pil2_full = pil2
-                self._photo_ref = ImageTk.PhotoImage(image=pil1r)
-                self._photo_ref2 = ImageTk.PhotoImage(image=pil2r)
-                self.canvas.config(image=self._photo_ref, text="")
-                self.canvas2.config(image=self._photo_ref2, text="")
-
-                txt = (f"Model1: {n_det} obj"
-                       + (f"  [{summary}]" if summary else "")
-                       + f"    Model2: {n_det2} obj"
-                       + (f"  [{summary2}]" if summary2 else ""))
-                self.lbl_result.config(text=txt, fg=SUCCESS if n_det or n_det2 else DIM)
-            else:
-                # Single panel mode
-                self.panel2_frame.pack_forget()
-                self.lbl_panel1_title.config(text="")
-
-                self._pil1_full = pil1
-                self._pil1_orig = Image.open(self.current_image_path).convert("RGB")
-                self._last_n_det = n_det
-                self._render_display()
-
-                if n_det > 0:
-                    self.lbl_result.config(
-                        text=f"Phát hiện {n_det} đối tượng  —  {summary}",
-                        fg=SUCCESS)
+        def _run():
+            try:
+                if cached is not None:
+                    # ── Cache hit: vẽ từ cache, không gọi model ──
+                    pil1     = self._annotated_from_cache(img_path)
+                    ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
+                    try:
+                        from PIL import ImageOps
+                        pil_orig = Image.open(img_path).convert("RGB")
+                        pil_orig = ImageOps.exif_transpose(pil_orig)
+                    except Exception:
+                        pil_orig = None
+                    n_det = cached["n"]
+                    _names = {}
+                    try:
+                        _names = dict(model1.names) or {}
+                    except Exception:
+                        pass
+                    summary = "  |  ".join(
+                        f"{_names.get(k, str(k))}: {v}"
+                        for k, v in cached["classes"].items())
+                    self.root.after(0, lambda: self._on_detect_done(
+                        img_path, None, pil1, ann1_bgr, pil_orig,
+                        n_det, summary, None, None, None, 0, ""))
                 else:
-                    self.lbl_result.config(
-                        text="Không phát hiện đối tượng nào", fg=DIM)
+                    # ── Không có cache: chạy model, lưu cache ──
+                    results1 = self._run_model(model1, img_path, sel_cls, conf_val, iou_val)
+                    n_det, summary = self._results_summary(results1, model1.names)
+                    self._cache_single_result(img_path, results1)
+                    pil1, ann1_bgr = self._annotated_to_pil(results1)
+                    try:
+                        from PIL import ImageOps
+                        pil_orig = Image.open(img_path).convert("RGB")
+                        pil_orig = ImageOps.exif_transpose(pil_orig)
+                    except Exception:
+                        pil_orig = None
+                    if model2 is not None:
+                        results2 = self._run_model(model2, img_path, sel_cls, conf_val, iou_val)
+                        n_det2, summary2 = self._results_summary(results2, model2.names)
+                        pil2, _ = self._annotated_to_pil(results2)
+                    else:
+                        results2, pil2, n_det2, summary2 = None, None, 0, ""
+                    self.root.after(0, lambda: self._on_detect_done(
+                        img_path, results1, pil1, ann1_bgr, pil_orig, n_det, summary,
+                        model2, results2, pil2, n_det2, summary2))
+            except Exception as e:
+                err = str(e)
+                self.root.after(0, lambda: self._on_detect_error(err))
 
-        except Exception as e:
-            self.lbl_result.config(text=f"Lỗi: {e}", fg=ACCENT)
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_detect_done(self, img_path, results1, pil1, ann1_bgr, pil_orig,
+                         n_det, summary, model2, results2, pil2, n_det2, summary2):
+        self._detecting = False
+        pending = self._det_pending
+        self._det_pending = False
+        # Bỏ qua nếu user đã chuyển sang ảnh khác trong lúc detect
+        if img_path != self.current_image_path:
+            if pending:
+                self._detect_and_display()
+            return
+
+        self._last_annotated_bgr = ann1_bgr
+        self._last_results1      = results1
+
+        if model2 is not None:
+            # Side-by-side mode
+            self.panel2_frame.pack(side=LEFT, fill=BOTH, expand=True)
+            m1_name = os.path.basename(self.v_model_path.get())
+            m2_name = os.path.basename(self.v_model2_path.get())
+
+            self.lbl_panel1_title.config(
+                text=f"Model 1: {m1_name}  ({n_det} obj)")
+            self.lbl_panel2_title.config(
+                text=f"Model 2: {m2_name}  ({n_det2} obj)")
+
+            half_w = max(self.panels_frame.winfo_width() // 2, 400)
+            ph     = max(self.panels_frame.winfo_height(), 400)
+            pil1r  = self._resize_pil(pil1, half_w, ph)
+            pil2r  = self._resize_pil(pil2, half_w, ph)
+
+            self._pil2_full  = pil2
+            self._photo_ref  = ImageTk.PhotoImage(image=pil1r)
+            self._photo_ref2 = ImageTk.PhotoImage(image=pil2r)
+
+            cw1 = max(self.canvas.winfo_width(), half_w)
+            ch1 = max(self.canvas.winfo_height(), ph)
+            self.canvas.delete("all")
+            self.canvas.create_image(
+                (cw1 - pil1r.width) // 2, (ch1 - pil1r.height) // 2,
+                anchor=NW, image=self._photo_ref, tags="img")
+
+            cw2 = max(self.canvas2.winfo_width(), half_w)
+            ch2 = max(self.canvas2.winfo_height(), ph)
+            self.canvas2.delete("all")
+            self.canvas2.create_image(
+                (cw2 - pil2r.width) // 2, (ch2 - pil2r.height) // 2,
+                anchor=NW, image=self._photo_ref2, tags="img")
+
+            txt = (f"Model1: {n_det} obj" + (f"  [{summary}]" if summary else "")
+                   + f"    Model2: {n_det2} obj" + (f"  [{summary2}]" if summary2 else ""))
+            self.lbl_result.config(text=txt, fg=SUCCESS if n_det or n_det2 else DIM)
+        else:
+            # Single panel
+            self.panel2_frame.pack_forget()
+            self.lbl_panel1_title.config(text="")
+
+            self._pil1_full = pil1
+            self._pil1_orig = pil_orig
+            self._last_n_det = n_det
+            self._render_display()
+
+            if n_det > 0:
+                self.lbl_result.config(
+                    text=f"Phát hiện {n_det} đối tượng  —  {summary}", fg=SUCCESS)
+            else:
+                self.lbl_result.config(text="Không phát hiện đối tượng nào", fg=DIM)
+
+        # Nếu slider thay đổi trong lúc detect → re-detect ngay với params mới
+        if pending:
+            self._detect_and_display()
+
+    def _on_detect_error(self, err: str):
+        self._detecting = False
+        pending = self._det_pending
+        self._det_pending = False
+        self.lbl_result.config(text=f"Lỗi: {err}", fg=ACCENT)
+        if pending:
+            self._detect_and_display()
 
     # ================================================ UNDETECTED SAVE ==
 
@@ -2088,33 +2679,29 @@ class YoloTab(Frame):
         img_out = os.path.join(save_dir, f"{base}_detected.jpg")
         cv2.imwrite(img_out, self._last_annotated_bgr)
 
-        save_txt = messagebox.askyesno(
-            "Lưu nhãn YOLO",
-            "Bạn có muốn lưu file nhãn .txt định dạng YOLO không?",
-            parent=self.root)
-
-        if save_txt and self.model and self.current_image_path:
+        txt_out = None
+        if self.model and self.current_image_path:
             try:
-                sel_cls = self._get_sel_classes()
-                results = self._run_model(self.model, self.current_image_path, sel_cls)
+                sel_cls  = self._get_sel_classes()
+                conf_val = max(self.v_conf_thresh.get(), self.v_conf.get())
+                iou_val  = self.v_iou.get()
+                results = self._run_model(self.model, self.current_image_path, sel_cls,
+                                          conf_val, iou_val)
                 boxes = results[0].boxes
                 txt_out = os.path.join(save_dir, f"{base}_detected.txt")
-                orig_h, orig_w = self._last_annotated_bgr.shape[:2]
                 with open(txt_out, "w", encoding="utf-8") as f:
                     if boxes is not None and len(boxes):
                         for box in boxes:
                             cls_id = int(box.cls[0])
-                            xywhn = box.xywhn[0].tolist()
-                            cx, cy, bw, bh = xywhn
+                            cx, cy, bw, bh = box.xywhn[0].tolist()
                             f.write(f"{cls_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
-                messagebox.showinfo(
-                    "Đã lưu",
-                    f"Ảnh: {img_out}\nNhãn: {txt_out}",
-                    parent=self.root)
             except Exception as e:
                 messagebox.showerror("Lỗi lưu nhãn", str(e), parent=self.root)
-        else:
-            messagebox.showinfo("Đã lưu", f"Ảnh: {img_out}", parent=self.root)
+
+        msg = f"Ảnh: {img_out}"
+        if txt_out:
+            msg += f"\nNhãn: {txt_out}"
+        messagebox.showinfo("Đã lưu", msg, parent=self.root)
 
     # ========================================================== MAP CALC ==
 
@@ -2183,9 +2770,10 @@ class YoloTab(Frame):
             result_text.see(END)
             result_text.config(state=DISABLED)
 
+        conf_val = max(self.v_conf_thresh.get(), self.v_conf.get())
+        iou_val  = self.v_iou.get()
+
         def run():
-            conf_val = max(self.v_conf_thresh.get(), self.slider_conf.get())
-            iou_val = self.slider_iou.get()
             iou_thresh = 0.5
 
             tp_total = 0
@@ -2529,10 +3117,12 @@ class YoloTab(Frame):
             term_txt.yview_scroll(int(-1*(e.delta/120)), "units")
         term_txt.bind("<MouseWheel>", _term_scroll)
 
+        # ── Capture params trên main thread trước khi spawn thread ──
+        conf_val = max(self.v_conf_thresh.get(), self.v_conf.get())
+        iou_val  = self.v_iou.get()
+
         # ── Background thread ──
         def run():
-            conf_val = max(self.v_conf_thresh.get(), self.v_conf.get())
-            iou_val = self.v_iou.get()
             iou_thresh = 0.5
 
             per_class_tp = {}; per_class_fp = {}; per_class_fn = {}
@@ -2861,6 +3451,419 @@ class YoloTab(Frame):
             self.root.after(0, _update_ui)
 
         threading.Thread(target=run, daemon=True).start()
+
+    # ====================================================== VIDEO DETECTION ==
+
+    def _open_video_detect(self):
+        """Dialog chọn nguồn video, sau đó mở cửa sổ detect liên tục."""
+        if not self.model:
+            messagebox.showwarning("Chưa có model",
+                                   "Vui lòng chọn model trước.", parent=self.root)
+            return
+        if not _CV2_OK or not _PIL_OK:
+            messagebox.showerror("Thiếu thư viện",
+                                  "pip install opencv-python Pillow", parent=self.root)
+            return
+
+        dlg = Toplevel(self.root)
+        dlg.title("Chọn nguồn video")
+        dlg.configure(bg=BG)
+        dlg.resizable(False, False)
+        dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
+        dlg.grab_set()
+
+        Label(dlg, text="Nhận dạng YOLO liên tục từ video",
+              font=F_BOLD, bg=BG, fg=TEXT).pack(padx=24, pady=(16, 4))
+
+        # File video row
+        file_frame = Frame(dlg, bg=BG)
+        file_frame.pack(fill=X, padx=16, pady=(8, 2))
+        Label(file_frame, text="File video:", bg=BG, fg=DIM, font=F_MAIN,
+              width=14, anchor=W).pack(side=LEFT)
+        v_vidpath = StringVar()
+        hist_vals = _get_history("h.yolo.video_path")
+        combo_vid = ttk.Combobox(file_frame, textvariable=v_vidpath,
+                                  font=F_MAIN, width=36)
+        combo_vid["values"] = hist_vals
+        if hist_vals:
+            combo_vid.set(hist_vals[0])
+        combo_vid.pack(side=LEFT, fill=X, expand=True, padx=(0, 4))
+        _bind_history("h.yolo.video_path", combo_vid)
+
+        def _pick_video():
+            p = filedialog.askopenfilename(
+                title="Chọn file video",
+                filetypes=[("Video", "*.mp4 *.avi *.mkv *.mov *.wmv *.m4v *.ts *.flv"),
+                           ("All files", "*.*")],
+                parent=dlg)
+            if p:
+                v_vidpath.set(p)
+                _push_history("h.yolo.video_path", p)
+                combo_vid["values"] = _get_history("h.yolo.video_path")
+
+        Button(file_frame, text="Duyệt…", command=_pick_video,
+               bg=ACCENT2, fg="white", font=F_MAIN, relief="flat",
+               padx=8, cursor="hand2").pack(side=LEFT)
+
+        # Loop checkbox
+        v_loop = BooleanVar(value=True)
+        loop_row = Frame(dlg, bg=BG)
+        loop_row.pack(fill=X, padx=16, pady=(2, 4))
+        Label(loop_row, text="", bg=BG, width=14).pack(side=LEFT)
+        Checkbutton(loop_row, text="Lặp lại (Loop) khi hết video",
+                    variable=v_loop, bg=BG, fg=TEXT,
+                    activebackground=BG, selectcolor="#16162a",
+                    font=F_MAIN, cursor="hand2").pack(side=LEFT)
+
+        # Separator
+        Frame(dlg, bg=DIM, height=1).pack(fill=X, padx=16, pady=4)
+
+        # Webcam row
+        cam_row = Frame(dlg, bg=BG)
+        cam_row.pack(fill=X, padx=16, pady=(2, 16))
+        Label(cam_row, text="Webcam index:", bg=BG, fg=DIM, font=F_MAIN,
+              width=14, anchor=W).pack(side=LEFT)
+        v_cam = StringVar(value="0")
+        Spinbox(cam_row, from_=0, to=9, textvariable=v_cam,
+                width=3, bg="#16162a", fg=TEXT, insertbackground=TEXT,
+                buttonbackground=ACCENT2, relief="flat", font=F_MONO,
+                ).pack(side=LEFT, padx=(0, 8))
+        Label(cam_row, text="(0 = camera mặc định)", bg=BG, fg=DIM,
+              font=("Segoe UI", 8)).pack(side=LEFT)
+
+        # Buttons
+        btn_frame = Frame(dlg, bg=BG)
+        btn_frame.pack(pady=(0, 16))
+
+        _result = [None]
+
+        def _start_file():
+            path = v_vidpath.get().strip()
+            if not path:
+                messagebox.showwarning("Chưa chọn", "Vui lòng chọn file video.",
+                                       parent=dlg)
+                return
+            if not os.path.isfile(path):
+                messagebox.showwarning("Không tìm thấy",
+                                       f"File không tồn tại:\n{path}", parent=dlg)
+                return
+            _push_history("h.yolo.video_path", path)
+            combo_vid["values"] = _get_history("h.yolo.video_path")
+            _result[0] = ("file", path, v_loop.get())
+            dlg.destroy()
+
+        def _start_cam():
+            try:
+                idx = int(v_cam.get())
+            except ValueError:
+                idx = 0
+            _result[0] = ("cam", idx, False)
+            dlg.destroy()
+
+        Button(btn_frame, text="▶ Mở File Video", command=_start_file,
+               bg=ACCENT, fg="white", font=F_BOLD, relief="flat",
+               padx=12, cursor="hand2").pack(side=LEFT, padx=(0, 8))
+        Button(btn_frame, text="📷 Mở Webcam", command=_start_cam,
+               bg="#2e5fa3", fg="white", font=F_BOLD, relief="flat",
+               padx=12, cursor="hand2").pack(side=LEFT, padx=(0, 8))
+        Button(btn_frame, text="Hủy", command=dlg.destroy,
+               bg=CARD, fg=DIM, font=F_MAIN, relief="flat",
+               padx=8, cursor="hand2").pack(side=LEFT)
+
+        # Center dialog
+        dlg.update_idletasks()
+        x = (self.root.winfo_x()
+             + (self.root.winfo_width()  - dlg.winfo_width())  // 2)
+        y = (self.root.winfo_y()
+             + (self.root.winfo_height() - dlg.winfo_height()) // 2)
+        dlg.geometry(f"+{x}+{y}")
+
+        self.root.wait_window(dlg)
+        if _result[0] is None:
+            return
+
+        src_type, src_val, do_loop = _result[0]
+        if src_type == "file":
+            self._launch_video_window(src_val, os.path.basename(src_val), do_loop)
+        else:
+            self._launch_video_window(src_val, f"Webcam #{src_val}", False)
+
+    def _launch_video_window(self, source, source_name: str, loop_video: bool):
+        """Cửa sổ detect video liên tục — worker thread gửi frame qua queue."""
+        # speed map: label → multiplier (0.0 = tối đa, không sleep)
+        _SPEED_MAP = {
+            "0.25×": 0.25, "0.5×": 0.5, "1×": 1.0,
+            "1.5×": 1.5,   "2×": 2.0,   "4×": 4.0, "Max": 0.0,
+        }
+
+        win = Toplevel(self.root)
+        win.title(f"YOLO Video Detection — {source_name}")
+        win.configure(bg=BG)
+        win.resizable(True, True)
+        win.minsize(640, 400)
+        win.geometry("960x580")
+
+        _running  = [True]
+        _paused   = [False]
+        _after_id = [None]
+        _last_pil = [None]
+        frame_q   = _q.Queue(maxsize=2)
+        v_speed   = StringVar(value="1×")
+
+        def _stop_and_close():
+            _running[0] = False
+            if _after_id[0]:
+                try:
+                    win.after_cancel(_after_id[0])
+                except Exception:
+                    pass
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+        win.protocol("WM_DELETE_WINDOW", _stop_and_close)
+        win.bind("<Escape>", lambda _: _stop_and_close())
+
+        # ── Info bar ──────────────────────────────────────────────────────
+        info_bar = Frame(win, bg=CARD, padx=8, pady=5)
+        info_bar.pack(fill=X)
+
+        Label(info_bar, text=f"▶ {source_name}",
+              bg=CARD, fg=TEXT, font=F_BOLD).pack(side=LEFT, padx=(0, 12))
+
+        lbl_fps = Label(info_bar, text="FPS: —",
+                        bg=CARD, fg=ACCENT, font=F_MONO)
+        lbl_fps.pack(side=LEFT, padx=(0, 8))
+
+        # Native FPS label — updated once cap opens
+        lbl_src_fps = Label(info_bar, text="",
+                            bg=CARD, fg=DIM, font=F_MONO)
+        lbl_src_fps.pack(side=LEFT, padx=(0, 12))
+
+        lbl_ndet = Label(info_bar, text="Đối tượng: —",
+                         bg=CARD, fg=SUCCESS, font=F_MONO)
+        lbl_ndet.pack(side=LEFT, padx=(0, 12))
+
+        lbl_det_info = Label(info_bar, text="",
+                             bg=CARD, fg=DIM, font=F_MONO)
+        lbl_det_info.pack(side=LEFT, expand=True, anchor=W)
+
+        lbl_status = Label(info_bar, text="Đang khởi động...",
+                           bg=CARD, fg=DIM, font=F_MAIN)
+        lbl_status.pack(side=RIGHT)
+
+        # ── Video canvas ──────────────────────────────────────────────────
+        vid_label = Label(win, bg="#0d0d1a",
+                          text="Đang khởi tạo...", fg=DIM,
+                          font=("Segoe UI", 14))
+        vid_label.pack(fill=BOTH, expand=True)
+
+        def _on_zoom(_e=None):
+            if _last_pil[0] is not None:
+                from ...core.ui_helpers import _zoom_image_window
+                _zoom_image_window(win, _last_pil[0], source_name)
+
+        vid_label.bind("<Double-Button-1>", _on_zoom)
+
+        # ── Control bar ──────────────────────────────────────────────────
+        ctrl_bar = Frame(win, bg=CARD, padx=8, pady=6)
+        ctrl_bar.pack(fill=X)
+
+        btn_pause = Button(ctrl_bar, text="⏸ Tạm dừng",
+                           command=lambda: _toggle_pause(),
+                           bg=ACCENT2, fg="white", font=F_MAIN,
+                           relief="flat", padx=10, cursor="hand2")
+        btn_pause.pack(side=LEFT, padx=(0, 8))
+
+        Button(ctrl_bar, text="■ Dừng & Đóng",
+               command=_stop_and_close,
+               bg=ACCENT, fg="white", font=F_MAIN,
+               relief="flat", padx=10, cursor="hand2").pack(side=LEFT)
+
+        # Speed control
+        Frame(ctrl_bar, bg=DIM, width=1).pack(side=LEFT, fill=Y, padx=(12, 8))
+        Label(ctrl_bar, text="Tốc độ:", bg=CARD, fg=TEXT,
+              font=F_BOLD).pack(side=LEFT)
+        speed_combo = ttk.Combobox(
+            ctrl_bar, textvariable=v_speed,
+            values=list(_SPEED_MAP.keys()),
+            state="readonly", font=F_MAIN, width=5)
+        speed_combo.pack(side=LEFT, padx=(4, 0))
+
+        # Keyboard shortcuts: [ = slower, ] = faster
+        _speed_keys = list(_SPEED_MAP.keys())
+
+        def _speed_step(delta: int):
+            cur = v_speed.get()
+            idx = _speed_keys.index(cur) if cur in _speed_keys else 2
+            new_idx = max(0, min(len(_speed_keys) - 1, idx + delta))
+            v_speed.set(_speed_keys[new_idx])
+
+        win.bind("[", lambda _: _speed_step(-1))
+        win.bind("]", lambda _: _speed_step(+1))
+
+        # Conf / IoU read-only display
+        conf_val = max(self.v_conf_thresh.get(), self.v_conf.get())
+        iou_val  = self.v_iou.get()
+        Frame(ctrl_bar, bg=DIM, width=1).pack(side=LEFT, fill=Y, padx=(12, 8))
+        Label(ctrl_bar, text=f"Conf: {conf_val:.2f}",
+              bg=CARD, fg=DIM, font=F_MONO).pack(side=LEFT)
+        Label(ctrl_bar, text=f"  IoU: {iou_val:.2f}",
+              bg=CARD, fg=DIM, font=F_MONO).pack(side=LEFT, padx=(4, 0))
+        if loop_video:
+            Label(ctrl_bar, text="  [Loop]",
+                  bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(8, 0))
+
+        Label(ctrl_bar,
+              text="Space=pause  [ ]=tốc độ  Dbl-click=zoom",
+              bg=CARD, fg=DIM, font=("Segoe UI", 8)).pack(side=RIGHT)
+
+        win.bind("<space>", lambda _: _toggle_pause())
+
+        def _toggle_pause():
+            _paused[0] = not _paused[0]
+            btn_pause.config(
+                text="▶ Tiếp tục" if _paused[0] else "⏸ Tạm dừng",
+                bg="#c0411a" if _paused[0] else ACCENT2)
+            lbl_status.config(
+                text="Tạm dừng" if _paused[0] else "Đang chạy...")
+
+        # Capture params trên main thread
+        sel_cls = self._get_sel_classes()
+        lw      = max(1, self.v_line_width.get())
+        fs      = max(6, self.v_font_size.get())
+
+        # ── Worker thread: read + detect ─────────────────────────────────
+        def _worker():
+            cap = cv2.VideoCapture(source)
+            if not cap.isOpened():
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Lỗi mở video",
+                    f"Không thể mở nguồn: {source}", parent=win))
+                _running[0] = False
+                return
+
+            fps_native = cap.get(cv2.CAP_PROP_FPS)
+            if fps_native <= 0:
+                fps_native = 25.0
+
+            # Show native fps in info bar
+            self.root.after(0, lambda f=fps_native:
+                            lbl_src_fps.config(text=f"(src {f:.0f}fps)"))
+
+            t0          = time.time()
+            frame_count = 0
+            fps_disp    = 0.0
+
+            self.root.after(0, lambda: lbl_status.config(text="Đang chạy..."))
+
+            while _running[0]:
+                if _paused[0]:
+                    time.sleep(0.05)
+                    continue
+
+                t_frame_start = time.time()
+
+                ret, frame = cap.read()
+                if not ret:
+                    if loop_video and isinstance(source, str):
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        continue
+                    self.root.after(0, lambda: lbl_status.config(
+                        text="Video kết thúc"))
+                    break
+
+                # Detect
+                try:
+                    results = self.model.predict(
+                        source=frame,
+                        classes=sel_cls,
+                        conf=conf_val,
+                        iou=iou_val,
+                        imgsz=640,
+                        agnostic_nms=True,
+                        verbose=False,
+                    )
+                    annotated_bgr = results[0].plot(
+                        line_width=lw, font_size=fs)
+                    boxes  = results[0].boxes
+                    n_det  = len(boxes) if boxes is not None else 0
+                    if n_det > 0 and self.model and hasattr(self.model, "names"):
+                        cnts = {}
+                        for cid in boxes.cls.tolist():
+                            nm = self.model.names[int(cid)]
+                            cnts[nm] = cnts.get(nm, 0) + 1
+                        det_summary = "  ".join(
+                            f"{nm}:{c}" for nm, c in cnts.items())
+                    else:
+                        det_summary = ""
+                except Exception:
+                    annotated_bgr = frame
+                    n_det         = 0
+                    det_summary   = ""
+
+                # FPS counter (actual throughput)
+                frame_count += 1
+                elapsed = time.time() - t0
+                if elapsed >= 0.5:
+                    fps_disp    = frame_count / elapsed
+                    frame_count = 0
+                    t0          = time.time()
+
+                # BGR → PIL
+                rgb       = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
+                pil_frame = Image.fromarray(rgb)
+
+                # Push (drop if full — don't block worker)
+                try:
+                    frame_q.put_nowait((pil_frame, n_det, fps_disp, det_summary))
+                except _q.Full:
+                    pass
+
+                # ── Speed throttle ────────────────────────────────────────
+                speed_mul = _SPEED_MAP.get(v_speed.get(), 1.0)
+                if speed_mul > 0 and fps_native > 0:
+                    # target interval for this frame at the chosen multiplier
+                    target_interval = 1.0 / (fps_native * speed_mul)
+                    spent = time.time() - t_frame_start
+                    sleep_dur = target_interval - spent
+                    if sleep_dur > 0.001:
+                        time.sleep(sleep_dur)
+                # speed_mul == 0 → "Max": no sleep, run as fast as YOLO allows
+
+            cap.release()
+
+        # ── Main-thread polling ──────────────────────────────────────────
+        def _poll():
+            try:
+                pil_frame, n_det, fps_val, det_summary = frame_q.get_nowait()
+                _last_pil[0] = pil_frame
+
+                cw = max(vid_label.winfo_width(),  640)
+                ch = max(vid_label.winfo_height(), 360)
+                display = pil_frame.copy()
+                display.thumbnail((cw, ch), Image.Resampling.LANCZOS)
+
+                tk_img = ImageTk.PhotoImage(display)
+                vid_label.config(image=tk_img, text="")
+                vid_label._tk_img = tk_img
+
+                lbl_fps.config(text=f"FPS: {fps_val:.1f}")
+                lbl_ndet.config(
+                    text=f"Đối tượng: {n_det}",
+                    fg=SUCCESS if n_det > 0 else DIM)
+                lbl_det_info.config(text=det_summary)
+            except _q.Empty:
+                pass
+            except Exception:
+                pass
+
+            if _running[0]:
+                _after_id[0] = win.after(16, _poll)
+
+        threading.Thread(target=_worker, daemon=True).start()
+        win.after(200, _poll)
 
 
 def _path_review_state(path: str) -> str:

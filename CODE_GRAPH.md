@@ -1,5 +1,5 @@
 # CODE_GRAPH.md — KZTEK Image Tools
-<!-- Cập nhật: 2026-06-18 | SplitTab: thêm option đổi tên file theo tên folder (rename_with_folder) cho mode Train/Val YOLO -->
+<!-- Cập nhật: 2026-06-18 | TrainTab: +FP/Miss/Imbalance/Size&Shape/Brightness Analysis, +HTML Report -->
 
 ## Hướng dẫn sử dụng
 
@@ -279,6 +279,9 @@ Yêu cầu: `_PADDLE_OK`
 | `_clear_det_filters` | Xóa tất cả detect filters |
 | `_apply_det_filters` | Áp dụng filter class/n_det/bbox vào danh sách ảnh |
 
+| `_open_video_detect` | Dialog chọn nguồn video (file / webcam) |
+| `_launch_video_window` | Cửa sổ detect liên tục: worker thread đọc frame + YOLO, main thread poll queue 16ms |
+
 | `_toggle_grid` | Ẩn/hiện grid panel bằng PanedWindow |
 | `_build_grid_panel` | Build scrollable thumbnail grid UI vào `_grid_outer` |
 | `_rebuild_grid` | Populate `_grid_inner` với cells từ `image_list` |
@@ -370,6 +373,15 @@ Targets: KZTEK LPR AI Server, OpenALPR
 | `_monitor_training` | Theo dõi training live |
 | `_open_miss_analysis` | Mở cửa sổ Miss Detection Analysis |
 | `_run_miss_analysis` | Thread: batch predict → FN per class → lưu ảnh missed |
+| `_open_fp_analysis` | Mở cửa sổ False Positive Analysis |
+| `_run_fp_analysis` | Thread: batch predict → FP per class → confusion matrix → lưu ảnh FP + summary.json |
+| `_open_imbalance_analysis` | Mở cửa sổ Class Imbalance Analysis |
+| `_run_imbalance_analysis` | Thread: quét .txt labels → đếm per-class → ghi imbalance_summary.json |
+| `_open_shape_analysis` | Mở cửa sổ Size & Shape Analysis |
+| `_run_shape_analysis` | Thread: quét .txt labels → phân bố kích thước/tỉ lệ bbox → ghi shape_summary.json |
+| `_open_brightness_analysis` | Mở cửa sổ Brightness Analysis |
+| `_run_brightness_analysis` | Thread: đọc ảnh → tính mean brightness → phân bố 5 mức → per-class → ghi brightness_summary.json |
+| `_generate_html_report` | Tổng hợp tất cả summary.json + results.csv → HTML report → mở browser |
 
 Models: yolo11n/s/m/l/x
 
