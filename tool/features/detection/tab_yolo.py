@@ -78,8 +78,10 @@ class YoloTab(Frame):
         self._last_results1 = None
         self._zoom_factor = 0.0
         self._img_pos     = [0, 0]   # vị trí ảnh trên canvas (top-left)
-        self._pan_start   = None     # điểm bắt đầu kéo chuột
+        self._pan_start   = None     # điểm bắt đầu kéo chuột (left drag)
         self._pan_origin  = [0, 0]   # _img_pos tại lúc bắt đầu kéo
+        self._mmb_pan_start  = None  # middle mouse / Ctrl+drag pan
+        self._mmb_pan_origin = [0, 0]
         self._search_after = None
         self._autoplay_id = None
         self._last_n_det = -1
@@ -153,35 +155,53 @@ class YoloTab(Frame):
         top = Frame(self, bg=CARD, padx=10, pady=8)
         top.pack(fill=X)
 
-        # Row 0 — model 1
+        # Row 0 — model 1 + model 2 (cùng 1 dòng)
         r0 = Frame(top, bg=CARD)
         r0.pack(fill=X)
 
-        Button(r0, text="Chọn Model 1 (.pt)", command=self._select_model,
-               bg=ACCENT2, fg="white", font=F_BOLD, relief="flat",
-               padx=10, cursor="hand2",
-               activebackground=ACCENT, activeforeground="white",
-               ).pack(side=LEFT)
-
-        self.lbl_model = Label(r0, text="Chưa chọn model",
-                               font=("Segoe UI", 9, "italic"),
-                               bg=CARD, fg=DIM)
-        self.lbl_model.pack(side=LEFT, padx=(6, 0))
-
+        # Action buttons on RIGHT (pack trước để không bị squish)
         Button(r0, text="🔍 Validate true/", command=self._validate_true_folder,
                bg="#1a5276", fg="white", font=F_MAIN, relief="flat",
                padx=8, cursor="hand2",
                ).pack(side=RIGHT, padx=(4, 0))
-
         Button(r0, text="Tính mAP", command=self._start_map_calc,
                bg="#2e7d32", fg="white", font=F_MAIN, relief="flat",
                padx=8, cursor="hand2",
                ).pack(side=RIGHT, padx=(4, 0))
-
         Button(r0, text="Lưu kết quả", command=self._save_result,
                bg="#555570", fg="white", font=F_MAIN, relief="flat",
                padx=8, cursor="hand2",
                ).pack(side=RIGHT)
+
+        # Model 1
+        Button(r0, text="Model 1", command=self._select_model,
+               bg=ACCENT2, fg="white", font=F_BOLD, relief="flat",
+               padx=8, cursor="hand2",
+               activebackground=ACCENT, activeforeground="white",
+               ).pack(side=LEFT)
+        self.lbl_model = Label(r0, text="Chưa chọn",
+                               font=("Segoe UI", 9, "italic"),
+                               bg=CARD, fg=DIM, width=18, anchor=W)
+        self.lbl_model.pack(side=LEFT, padx=(4, 0))
+
+        # Separator
+        Frame(r0, bg=DIM, width=1).pack(side=LEFT, fill=Y, padx=(8, 8))
+
+        # Model 2
+        Button(r0, text="Model 2", command=self._select_model2,
+               bg="#3a5a3a", fg="white", font=F_BOLD, relief="flat",
+               padx=8, cursor="hand2",
+               activebackground="#4a7a4a", activeforeground="white",
+               ).pack(side=LEFT)
+        self.lbl_model2 = Label(r0, text="Chưa chọn",
+                                font=("Segoe UI", 9, "italic"),
+                                bg=CARD, fg=DIM, width=18, anchor=W)
+        self.lbl_model2.pack(side=LEFT, padx=(4, 0))
+        Button(r0, text="×", command=self._clear_model2,
+               bg=CARD, fg=DIM, font=F_BOLD, relief="flat",
+               padx=4, cursor="hand2",
+               activebackground="#3a1a1a", activeforeground=ACCENT,
+               ).pack(side=LEFT, padx=(2, 0))
 
         # Row 0a — path input (ảnh hoặc thư mục kiểm tra)
         r0a = Frame(top, bg=CARD)
@@ -225,26 +245,6 @@ class YoloTab(Frame):
         Label(r0a, text="→ ✓ true/   ✗ false/",
               font=F_MAIN, bg=CARD, fg=DIM).pack(side=LEFT)
 
-        # Row 0b — model 2
-        r0b = Frame(top, bg=CARD)
-        r0b.pack(fill=X, pady=(6, 0))
-
-        Button(r0b, text="Chọn Model 2 (.pt)", command=self._select_model2,
-               bg="#3a5a3a", fg="white", font=F_BOLD, relief="flat",
-               padx=10, cursor="hand2",
-               activebackground="#4a7a4a", activeforeground="white",
-               ).pack(side=LEFT)
-
-        self.lbl_model2 = Label(r0b, text="Chưa chọn model 2",
-                                font=("Segoe UI", 9, "italic"),
-                                bg=CARD, fg=DIM)
-        self.lbl_model2.pack(side=LEFT, padx=(6, 8))
-
-        Button(r0b, text="Xoá Model 2", command=self._clear_model2,
-               bg=CARD, fg=DIM, font=F_MAIN, relief="flat",
-               padx=6, cursor="hand2",
-               ).pack(side=LEFT)
-
         # Row 1 — conf slider (new feature: Ngưỡng confidence with resolution 0.05)
         r1 = Frame(top, bg=CARD)
         r1.pack(fill=X, pady=(8, 0))
@@ -284,20 +284,19 @@ class YoloTab(Frame):
                               font=F_MONO, width=5)
         self.lbl_iou.pack(side=LEFT)
 
-        # Row 2 — class filter
+        # Row 2 — class filter (compact inline)
         r2 = Frame(top, bg=CARD)
-        r2.pack(fill=X, pady=(8, 0))
+        r2.pack(fill=X, pady=(4, 0))
 
-        Label(r2, text="Lọc class (bỏ trống = tất cả):",
-              font=F_MAIN, bg=CARD, fg=DIM).pack(anchor=W)
-
+        Label(r2, text="Lọc class:", font=F_MAIN, bg=CARD, fg=DIM,
+              anchor=W).pack(side=LEFT, padx=(0, 4))
         cls_wrap = Frame(r2, bg=CARD)
-        cls_wrap.pack(fill=X)
+        cls_wrap.pack(side=LEFT, fill=BOTH, expand=True)
         sb = Scrollbar(cls_wrap, orient=VERTICAL)
         sb.pack(side=RIGHT, fill=Y)
         self.lb_classes = Listbox(cls_wrap, selectmode=MULTIPLE,
                                    yscrollcommand=sb.set,
-                                   height=4, font=F_MONO,
+                                   height=2, font=F_MONO,
                                    bg="#16162a", fg=TEXT,
                                    selectbackground=ACCENT2,
                                    activestyle="none",
@@ -669,6 +668,14 @@ class YoloTab(Frame):
         self.canvas.bind("<B1-Motion>",          self._on_pan_drag)
         self.canvas.bind("<Double-Button-1>",    self._on_canvas1_zoom)
         self.canvas2.bind("<Double-Button-1>",   self._on_canvas2_zoom)
+        # Middle mouse pan (like BBoxEditor)
+        self.canvas.bind("<ButtonPress-2>",      self._on_mmb_press)
+        self.canvas.bind("<B2-Motion>",          self._on_mmb_drag)
+        self.canvas.bind("<ButtonRelease-2>",    self._on_mmb_release)
+        # Ctrl+drag to pan
+        self.canvas.bind("<Control-ButtonPress-1>", self._on_mmb_press)
+        self.canvas.bind("<Control-B1-Motion>",     self._on_mmb_drag)
+        self.canvas.bind("<Control-ButtonRelease-1>", self._on_mmb_release)
 
         if _DND_OK:
             try:
@@ -740,7 +747,7 @@ class YoloTab(Frame):
     def _clear_model2(self):
         self.model2 = None
         self.v_model2_path.set("")
-        self.lbl_model2.config(text="Chưa chọn model 2", fg=DIM)
+        self.lbl_model2.config(text="Chưa chọn", fg=DIM)
         self.panel2_frame.pack_forget()
         self.lbl_panel1_title.config(text="")
         if self.current_image_path and self.model:
@@ -1380,6 +1387,39 @@ class YoloTab(Frame):
         if items:
             self.canvas.coords(items[0], self._img_pos[0], self._img_pos[1])
 
+    def _on_mmb_press(self, event):
+        """Middle mouse / Ctrl+drag — bắt đầu pan (hoạt động ở mọi zoom level)."""
+        pil = self._pil1_full or self._pil1_orig
+        if self._zoom_factor == 0.0 and pil:
+            cw = max(self.canvas.winfo_width(), 400)
+            ch = max(self.canvas.winfo_height(), 300)
+            fit = min(cw / pil.width, ch / pil.height)
+            self._zoom_factor = fit
+            nw = int(pil.width * fit)
+            nh = int(pil.height * fit)
+            self._img_pos = [(cw - nw) // 2, (ch - nh) // 2]
+            self._render_display()
+        self._mmb_pan_start  = (event.x, event.y)
+        self._mmb_pan_origin = list(self._img_pos)
+        self.canvas.config(cursor="fleur")
+
+    def _on_mmb_drag(self, event):
+        """Middle mouse / Ctrl+drag — kéo pan."""
+        if not hasattr(self, "_mmb_pan_start") or self._mmb_pan_start is None:
+            return
+        dx = event.x - self._mmb_pan_start[0]
+        dy = event.y - self._mmb_pan_start[1]
+        self._img_pos = [self._mmb_pan_origin[0] + dx,
+                         self._mmb_pan_origin[1] + dy]
+        items = self.canvas.find_withtag("img")
+        if items:
+            self.canvas.coords(items[0], self._img_pos[0], self._img_pos[1])
+
+    def _on_mmb_release(self, event):
+        """Middle mouse / Ctrl+drag — kết thúc pan."""
+        self._mmb_pan_start = None
+        self.canvas.config(cursor="fleur")
+
     def _zoom_step(self, delta: float):
         """delta=0.0 resets to fit; otherwise shifts zoom factor."""
         if delta == 0.0:
@@ -1405,8 +1445,29 @@ class YoloTab(Frame):
         self._render_display()
 
     def _on_canvas_scroll(self, event):
-        delta = 0.15 if event.delta > 0 else -0.15
-        self._zoom_step(delta)
+        """Scroll to zoom centered on cursor position (like BBoxEditor)."""
+        pil = self._pil1_full or self._pil1_orig
+        if pil is None:
+            return
+        factor = 1.15 if event.delta > 0 else (1.0 / 1.15)
+        cw = max(self.canvas.winfo_width(), 400)
+        ch = max(self.canvas.winfo_height(), 300)
+        if self._zoom_factor == 0.0:
+            fit = min(cw / pil.width, ch / pil.height)
+            self._zoom_factor = fit
+            nw = int(pil.width * fit)
+            nh = int(pil.height * fit)
+            self._img_pos = [(cw - nw) // 2, (ch - nh) // 2]
+        old = self._zoom_factor
+        new = max(0.05, min(8.0, old * factor))
+        if abs(new - old) < 0.001:
+            return
+        ratio = new / old
+        cx, cy = event.x, event.y
+        self._img_pos[0] = int(cx - (cx - self._img_pos[0]) * ratio)
+        self._img_pos[1] = int(cy - (cy - self._img_pos[1]) * ratio)
+        self._zoom_factor = new
+        self._render_display()
 
     # ======================================================== AUTO-PLAY ==
 

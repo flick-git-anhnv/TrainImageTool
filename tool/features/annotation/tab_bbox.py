@@ -1,4 +1,4 @@
-import os
+﻿import os
 from pathlib import Path
 from tkinter import *
 from tkinter import messagebox, ttk
@@ -53,6 +53,7 @@ class BBoxEditorTab(Frame):
         self._filter_name_var  = StringVar()
         self._filter_label_var = StringVar(value="Tất cả")
         self._filter_after     = None
+        self._filter_gen       = 0          # bumped each call; workers abort on mismatch
         self._filter_unlabeled = BooleanVar(value=False)
         self._present_label_cids: list = []
         self._progress_set:        set  = set()
@@ -93,6 +94,15 @@ class BBoxEditorTab(Frame):
         self._rubber_rect  = None
         self._rubber_start = (0, 0)
 
+        # Zoom & pan state (Paint-like canvas zoom)
+        self._zoom_level        = 1.0   # multiplier on top of fit-to-canvas scale
+        self._pan_x             = 0     # viewport pan offset in canvas pixels
+        self._pan_y             = 0
+        self._panning           = False # True while middle-mouse is held
+        self._pan_start         = (0, 0)
+        self._pan_start_offset  = (0, 0)
+        self._ctrl_panning      = False # True while Ctrl+left-drag panning
+
         # Undo/Redo stacks
         self._undo_stack = []
         self._redo_stack = []
@@ -114,6 +124,8 @@ class BBoxEditorTab(Frame):
         self._film_render_idx   = 0
         self._film_ncols        = 3
         self._film_page         = 0
+        self._film_page_var     = StringVar(value="1")
+        self._film_max_page     = 0
 
         self._build()
 
@@ -165,6 +177,8 @@ class BBoxEditorTab(Frame):
               font=F_BOLD).pack(pady=(8, 2), padx=8, anchor=W)
         self._lbl_imgcount = Label(left, text="—", bg=CARD, fg=DIM, font=F_MAIN)
         self._lbl_imgcount.pack(padx=8, anchor=W)
+        self._lbl_labelcount = Label(left, text="", bg=CARD, fg=DIM, font=F_MAIN)
+        self._lbl_labelcount.pack(padx=8, anchor=W)
 
         flt_name = Frame(left, bg=CARD)
         flt_name.pack(fill=X, padx=6, pady=(4, 1))
@@ -350,7 +364,7 @@ class BBoxEditorTab(Frame):
         tb = Frame(center, bg=CARD, pady=5, padx=8)
         tb.pack(fill=X)
 
-        Label(tb, text="⚡ Tự động  (click=chọn · drag=kéo · empty=vẽ  Ctrl+drag=rubber)",
+        Label(tb, text="⚡ Tự động  (click=chọn · drag=kéo · empty=vẽ  Ctrl+drag=kéo hình)",
               bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(0, 8))
 
         Frame(tb, bg=DIM, width=1).pack(side=LEFT, fill=Y, padx=8)
@@ -384,6 +398,21 @@ class BBoxEditorTab(Frame):
 
         self._info_lbl = Label(tb, text="", bg=CARD, fg=DIM, font=F_MAIN)
         self._info_lbl.pack(side=RIGHT, padx=8)
+
+        # ── Zoom controls (right side, left of info_lbl) ──
+        Frame(tb, bg=DIM, width=1).pack(side=RIGHT, fill=Y, padx=(6, 0))
+        self._zoom_lbl = Label(tb, text="Fit", bg=CARD, fg="#5a5a7a",
+                               font=("Consolas", 9), width=5, cursor="hand2")
+        self._zoom_lbl.pack(side=RIGHT)
+        self._zoom_lbl.bind("<Button-1>", lambda e: self._zoom_reset())
+        Button(tb, text="−", command=lambda: self._zoom_step(0.8),
+               bg=CARD, fg=TEXT, font=F_BOLD, relief="flat",
+               cursor="hand2", width=2).pack(side=RIGHT)
+        Button(tb, text="+", command=lambda: self._zoom_step(1.25),
+               bg=CARD, fg=TEXT, font=F_BOLD, relief="flat",
+               cursor="hand2", width=2).pack(side=RIGHT, padx=(0, 1))
+        Label(tb, text="🔍", bg=CARD, fg=DIM, font=F_MAIN).pack(
+            side=RIGHT, padx=(8, 2))
 
         _spn = Spinbox(tb, from_=1, to=6, textvariable=self._thumb_n_var,
                        width=3, bg="#16162a", fg=TEXT, insertbackground=TEXT,
@@ -436,19 +465,53 @@ class BBoxEditorTab(Frame):
 
         _nav = Frame(self._film_outer, bg=CARD, pady=5)
         _nav.pack(side=BOTTOM, fill=X)
-        Button(_nav, text="◀  Trước", width=9,
+
+        # Left: first + prev
+        Button(_nav, text="⏮", width=3,
+               command=lambda: self._go_page_abs(0),
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", relief=FLAT, font=F_MAIN
+               ).pack(side=LEFT, padx=(6, 2))
+        Button(_nav, text="◀ Trước", width=9,
                command=lambda: self._go_page(-1),
                bg=ACCENT2, fg="white", activebackground=ACCENT,
                activeforeground="white", relief=FLAT, font=F_MAIN
-               ).pack(side=LEFT, padx=(6, 4))
-        self._film_nav_lbl = Label(_nav, text="—", bg=CARD, fg=TEXT,
-                                   font=F_BOLD)
-        self._film_nav_lbl.pack(side=LEFT, padx=6, expand=True)
-        Button(_nav, text="Sau  ▶", width=9,
+               ).pack(side=LEFT, padx=(0, 4))
+
+        # Right: next + last + delete (pack right-to-left)
+        Button(_nav, text="🗑 Xóa trang",
+               command=self._delete_page_to_deleted,
+               bg="#c62828", fg="white", activebackground="#8b0000",
+               activeforeground="white", font=F_MAIN,
+               relief=FLAT, padx=6, cursor="hand2"
+               ).pack(side=RIGHT, padx=(0, 4))
+        Button(_nav, text="⏭", width=3,
+               command=lambda: self._go_page_abs(-1),
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", relief=FLAT, font=F_MAIN
+               ).pack(side=RIGHT, padx=(2, 0))
+        Button(_nav, text="Sau ▶", width=9,
                command=lambda: self._go_page(1),
                bg=ACCENT2, fg="white", activebackground=ACCENT,
                activeforeground="white", relief=FLAT, font=F_MAIN
-               ).pack(side=RIGHT, padx=(4, 6))
+               ).pack(side=RIGHT, padx=(4, 2))
+
+        # Center: page entry + total
+        _pg_frame = Frame(_nav, bg=CARD)
+        _pg_frame.pack(side=LEFT, expand=True)
+        Label(_pg_frame, text="Trang", bg=CARD, fg=DIM, font=F_MAIN
+              ).pack(side=LEFT, padx=(0, 4))
+        self._film_page_entry = Entry(_pg_frame, textvariable=self._film_page_var,
+                                      width=4, font=F_BOLD, justify=CENTER,
+                                      bg="#1a1a2e", fg=TEXT, insertbackground=TEXT,
+                                      relief=FLAT, bd=0, highlightthickness=1,
+                                      highlightcolor=ACCENT, highlightbackground=ACCENT2)
+        self._film_page_entry.pack(side=LEFT)
+        self._film_page_entry.bind("<Return>",   lambda e: self._go_page_direct())
+        self._film_page_entry.bind("<FocusOut>", lambda e: self._go_page_direct())
+        self._film_nav_lbl = Label(_pg_frame, text="/ —  (0 ảnh)", bg=CARD, fg=TEXT,
+                                   font=F_BOLD)
+        self._film_nav_lbl.pack(side=LEFT, padx=(6, 0))
 
         _grid_area = Frame(self._film_outer, bg="#0d0d1e")
         _grid_area.pack(fill=BOTH, expand=True)
@@ -497,6 +560,16 @@ class BBoxEditorTab(Frame):
         self._canvas.bind("<d>",               lambda e: self._next_img())
         self._canvas.bind("<c>",               lambda e: self._cycle_class())
         self._canvas.bind("<Control-c>",       lambda e: self._copy_to_next())
+        for _k in range(10):
+            self._canvas.bind(f"<Key-{_k}>", lambda e, k=_k: self._on_numkey_label(k))
+        self._canvas.bind("<MouseWheel>",      self._on_canvas_wheel)
+        self._canvas.bind("<ButtonPress-2>",   self._on_pan_start)
+        self._canvas.bind("<B2-Motion>",       self._on_pan_drag)
+        self._canvas.bind("<ButtonRelease-2>", self._on_pan_end)
+        self._canvas.bind("<Control-0>",       lambda e: self._zoom_reset())
+        self._canvas.bind("<F5>",              lambda e: self._zoom_reset())
+        self._canvas.bind("<Control-equal>",   lambda e: self._zoom_step(1.25))
+        self._canvas.bind("<Control-minus>",   lambda e: self._zoom_step(0.8))
 
         self._img_lb.bind("<Left>",   lambda e: self._prev_img())
         self._img_lb.bind("<Right>",  lambda e: self._next_img())
@@ -512,7 +585,8 @@ class BBoxEditorTab(Frame):
         self._status.pack(side=LEFT, fill=X, expand=True)
 
         self._shortcut_lbl = Label(status_row,
-            text="A/←=trước  D/→=sau  Del=xóa  Ctrl+S=lưu  Enter=lưu+✓  C=class  Ctrl+Z/Y=undo/redo",
+            text="A/←=trước  D/→=sau  Del=xóa  Ctrl+S=lưu  Enter=lưu+✓  C=class  0-9=đặt nhãn  Ctrl+Z/Y=undo/redo"
+                 "  Ctrl+A=all  Ctrl+click=multi  Scroll=zoom  Mid/Ctrl+drag=pan  Ctrl+0=fit",
             bg=BG, fg="#5a5a7a", font=("Segoe UI", 8), anchor=E)
         self._shortcut_lbl.pack(side=RIGHT, padx=6)
 
@@ -569,6 +643,22 @@ class BBoxEditorTab(Frame):
         self._cls_lb.see(nxt)
         name = vals[nxt]
         self._status.config(text=f"Class: {name}")
+
+    def _on_numkey_label(self, n: int):
+        """Phím số 0-9: chuyển sang class n. Nếu đang chọn bbox, đặt lại nhãn ngay."""
+        vals = list(self._cls_combo["values"])
+        if not vals or n >= len(vals):
+            self._status.config(text=f"Không có class {n}")
+            return
+        self._cls_combo.current(n)
+        self._cls_lb.selection_clear(0, END)
+        self._cls_lb.selection_set(n)
+        self._cls_lb.see(n)
+        name = self.label_list[n] if n < len(self.label_list) else str(n)
+        if self._selected_set:
+            self._relabel_selected()
+        else:
+            self._status.config(text=f"Class [{n}:{name}] — click bbox để áp dụng")
 
     # ── Copy bboxes to next image ──────────────────────────────────────────
 
@@ -758,6 +848,9 @@ class BBoxEditorTab(Frame):
         self._modified     = False
         self._undo_stack   = []
         self._redo_stack   = []
+        self._zoom_level   = 1.0
+        self._pan_x        = 0
+        self._pan_y        = 0
 
         lbl_dir  = self.lbl_dir_var.get().strip()
         lbl_path = (Path(lbl_dir) / (fp.stem + ".txt")
@@ -831,11 +924,23 @@ class BBoxEditorTab(Frame):
             self._canvas.after(80, self._render); return
 
         iw, ih = self._pil_img.size
-        scale   = min(cw / iw, ch / ih, 1.0)
-        nw, nh  = max(1, int(iw * scale)), max(1, int(ih * scale))
-        self._scale = scale
-        self._off_x = (cw - nw) // 2
-        self._off_y = (ch - nh) // 2
+        fit_scale    = min(cw / iw, ch / ih, 1.0)
+        actual_scale = fit_scale * self._zoom_level
+        nw, nh       = max(1, int(iw * actual_scale)), max(1, int(ih * actual_scale))
+        self._scale  = actual_scale
+
+        base_x = (cw - nw) // 2
+        base_y = (ch - nh) // 2
+        if self._zoom_level <= 1.0:
+            self._pan_x = 0
+            self._pan_y = 0
+        else:
+            limit_x = max(cw // 2, nw // 2)
+            limit_y = max(ch // 2, nh // 2)
+            self._pan_x = max(-limit_x, min(limit_x, self._pan_x))
+            self._pan_y = max(-limit_y, min(limit_y, self._pan_y))
+        self._off_x = base_x + self._pan_x
+        self._off_y = base_y + self._pan_y
 
         resized      = self._pil_img.resize((nw, nh), self._PIL_Image.LANCZOS)
         self._tk_img = self._PIL_ImageTk.PhotoImage(resized)
@@ -845,6 +950,12 @@ class BBoxEditorTab(Frame):
                                   anchor=NW, image=self._tk_img)
         self._draw_all_bboxes()
 
+        # Update zoom indicator
+        pct = int(actual_scale * 100)
+        if hasattr(self, "_zoom_lbl"):
+            self._zoom_lbl.config(
+                text="Fit" if self._zoom_level == 1.0 else f"{pct}%")
+
     def _active_label_filter_id(self):
         val = self._filter_label_var.get()
         if not val or val in ("Tất cả", "Không có label"):
@@ -853,6 +964,45 @@ class BBoxEditorTab(Frame):
             return int(val.split(":")[0])
         except (ValueError, IndexError):
             return None
+
+    def _get_visible_indices(self):
+        """Trả về set index các bbox đang được hiển thị (qua tất cả filter hiện tại)."""
+        only_cid = self._active_label_filter_id()
+
+        def _fv(var):
+            v = var.get().strip()
+            try: return float(v) if v else None
+            except ValueError: return None
+        df_smin = _fv(self._filter_size_min_var)
+        df_smax = _fv(self._filter_size_max_var)
+        df_wmin = _fv(self._filter_w_min_var)
+        df_wmax = _fv(self._filter_w_max_var)
+        df_hmin = _fv(self._filter_h_min_var)
+        df_hmax = _fv(self._filter_h_max_var)
+        _dim_on = any(v is not None for v in (df_smin, df_smax, df_wmin, df_wmax, df_hmin, df_hmax))
+
+        visible = set()
+        for i, ann in enumerate(self._bboxes):
+            cid = ann[0]
+            is_poly4 = (len(ann) == 9)
+            if only_cid is not None and cid != only_cid:
+                continue
+            if _dim_on:
+                if is_poly4:
+                    _, px1, py1, px2, py2, px3, py3, px4, py4 = ann
+                    xs = [px1, px2, px3, px4]; ys = [py1, py2, py3, py4]
+                    x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+                else:
+                    _, x1, y1, x2, y2 = ann
+                bw_px = x2 - x1; bh_px = y2 - y1
+                if df_smin is not None and bw_px * bh_px < df_smin: continue
+                if df_smax is not None and bw_px * bh_px > df_smax: continue
+                if df_wmin is not None and bw_px < df_wmin: continue
+                if df_wmax is not None and bw_px > df_wmax: continue
+                if df_hmin is not None and bh_px < df_hmin: continue
+                if df_hmax is not None and bh_px > df_hmax: continue
+            visible.add(i)
+        return visible
 
     def _redraw_bboxes_only(self):
         """Xóa và vẽ lại chỉ bbox — không reload ảnh nền."""
@@ -986,8 +1136,11 @@ class BBoxEditorTab(Frame):
                 (cy - self._off_y) / self._scale)
 
     def _hit_test_all(self, cx, cy):
+        visible = self._get_visible_indices()
         hits = []
         for i, ann in enumerate(self._bboxes):
+            if i not in visible:
+                continue
             if len(ann) == 9:
                 _, px1, py1, px2, py2, px3, py3, px4, py4 = ann
                 xs = [px1, px2, px3, px4]; ys = [py1, py2, py3, py4]
@@ -1055,21 +1208,23 @@ class BBoxEditorTab(Frame):
                 "sb_h_double_arrow" if op in ("resize_W",  "resize_E")  else "crosshair")
 
     def _on_hover(self, event):
-        # Show resize cursor for selected bbox handles
-        if self._selected >= 0:
+        visible = self._get_visible_indices()
+        # Show resize cursor for selected bbox handles (only if selected is visible)
+        if self._selected >= 0 and self._selected in visible:
             op = self._handle_hit(event.x, event.y, self._selected)
             if op:
                 self._canvas.config(cursor=self._op_cursor(op))
                 return
-        # Show resize cursor if hovering over any bbox handle (auto-select on click)
-        for i in range(len(self._bboxes) - 1, -1, -1):
+        # Show resize cursor if hovering over any visible bbox handle
+        for i in sorted(visible, reverse=True):
             op = self._handle_hit(event.x, event.y, i)
             if op:
                 self._canvas.config(cursor=self._op_cursor(op))
                 return
-        # Show move cursor over any bbox body + highlight hovered bbox
+        # Show move cursor over any visible bbox body + highlight hovered bbox
         hits = self._hit_test_all(event.x, event.y)
-        self._canvas.config(cursor="fleur" if hits else "crosshair")
+        ctrl = bool(event.state & 0x4)
+        self._canvas.config(cursor="fleur" if hits else ("fleur" if ctrl else "crosshair"))
         new_hover = hits[-1] if hits else -1
         if new_hover != self._hover_idx:
             self._hover_idx = new_hover
@@ -1087,8 +1242,9 @@ class BBoxEditorTab(Frame):
         ctrl = bool(event.state & 0x4)
 
         if not ctrl:
-            # Priority 1: resize handles on ANY bbox (topmost first)
-            for i in range(len(self._bboxes) - 1, -1, -1):
+            # Priority 1: resize handles on visible bboxes only (topmost first)
+            _visible = self._get_visible_indices()
+            for i in sorted(_visible, reverse=True):
                 op = self._handle_hit(cx, cy, i)
                 if op:
                     if i != self._selected or i not in self._selected_set:
@@ -1132,11 +1288,11 @@ class BBoxEditorTab(Frame):
         else:
             # Priority 3: empty area
             if ctrl:
-                # Ctrl+drag = rubber-band select
-                self._rubber_band  = True
-                self._rubber_start = (cx, cy)
-                self._rubber_rect  = self._canvas.create_rectangle(
-                    cx, cy, cx, cy, outline="#aaaaff", width=1, dash=(3, 3))
+                # Ctrl+drag on empty area = pan canvas
+                self._ctrl_panning = True
+                self._pan_start = (cx, cy)
+                self._pan_start_offset = (self._pan_x, self._pan_y)
+                self._canvas.config(cursor="fleur")
             else:
                 # Deselect then draw new bbox
                 self._selected = -1
@@ -1165,6 +1321,12 @@ class BBoxEditorTab(Frame):
             self._drag_prev = (cx, cy)
             self._apply_drag((cx - px) / self._scale,
                              (cy - py) / self._scale)
+        elif self._ctrl_panning:
+            dx = event.x - self._pan_start[0]
+            dy = event.y - self._pan_start[1]
+            self._pan_x = self._pan_start_offset[0] + dx
+            self._pan_y = self._pan_start_offset[1] + dy
+            self._render()
         elif self._rubber_band and self._rubber_rect:
             x0, y0 = self._rubber_start
             self._canvas.coords(self._rubber_rect, x0, y0, event.x, event.y)
@@ -1227,6 +1389,10 @@ class BBoxEditorTab(Frame):
         self._render()
 
     def _on_release(self, event):
+        if self._ctrl_panning:
+            self._ctrl_panning = False
+            self._canvas.config(cursor="crosshair")
+            return
         if self._rubber_band:
             self._rubber_band = False
             if self._rubber_rect:
@@ -1239,7 +1405,10 @@ class BBoxEditorTab(Frame):
             if not ctrl:
                 self._selected_set = set()
             if (rx2 - rx1) >= 4 and (ry2 - ry1) >= 4:
+                _visible = self._get_visible_indices()
                 for i, ann in enumerate(self._bboxes):
+                    if i not in _visible:
+                        continue
                     if len(ann) == 9:
                         _, px1, py1, px2, py2, px3, py3, px4, py4 = ann
                         xs = [px1, px2, px3, px4]; ys = [py1, py2, py3, py4]
@@ -1295,9 +1464,11 @@ class BBoxEditorTab(Frame):
             self._bboxes.append([cid, ix1, iy1, ix2, iy2])
             kind = "bbox"
         self._selected = len(self._bboxes) - 1
+        self._selected_set = {self._selected}
         self._modified = True
         self._render()
         self._refresh_present_labels()
+        self._update_info_lbl()
         name = (self.label_list[cid] if cid < len(self.label_list) else str(cid))
         self._status.config(
             text=f"Đã vẽ {kind}  [{cid}:{name}]  |  {len(self._bboxes)} nhãn tổng")
@@ -1593,6 +1764,85 @@ class BBoxEditorTab(Frame):
             self._load_image(self._filtered_files[best_fi][0])
         self._status.config(text=f"Đã xóa {fp.name}")
 
+    def _delete_page_to_deleted(self):
+        """Di chuyển tất cả ảnh & label trong trang grid hiện tại vào thư mục 'deleted'."""
+        if not self._film_cells:
+            messagebox.showinfo("Xóa trang", "Không có ảnh nào trong trang này.")
+            return
+
+        page_items = [(cell["real_idx"], self.image_files[cell["real_idx"]])
+                      for cell in self._film_cells]
+        n = len(page_items)
+        if not messagebox.askyesno(
+                "Xóa trang",
+                f"Di chuyển {n} ảnh (và label tương ứng) trong trang này\n"
+                f"vào thư mục 'deleted'?\n\nCó thể khôi phục lại từ thư mục 'deleted'.",
+                icon="warning"):
+            return
+
+        import shutil
+        lbl_dir = self.lbl_dir_var.get().strip()
+        moved_paths: set = set()
+        errors: list = []
+
+        for ri, fp in page_items:
+            try:
+                img_del = fp.parent / "deleted"
+                img_del.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(fp), str(img_del / fp.name))
+
+                lbl_path = (Path(lbl_dir) / (fp.stem + ".txt")
+                            if lbl_dir else fp.parent / (fp.stem + ".txt"))
+                if lbl_path.exists():
+                    lbl_del = (Path(lbl_dir) / "deleted" if lbl_dir
+                               else fp.parent / "deleted")
+                    lbl_del.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(lbl_path), str(lbl_del / lbl_path.name))
+
+                moved_paths.add(fp)
+                self._progress_set.discard(self._progress_key(fp))
+            except Exception as e:
+                errors.append(f"{fp.name}: {e}")
+
+        if errors:
+            messagebox.showerror("Lỗi di chuyển", "\n".join(errors[:5]))
+
+        if not moved_paths:
+            return
+
+        old_fp = (self.image_files[self.current_idx]
+                  if 0 <= self.current_idx < len(self.image_files) else None)
+        self.image_files = [fp for fp in self.image_files if fp not in moved_paths]
+        self._thumb_cache.clear()
+        self._img_size_cache.clear()
+        self._save_progress()
+
+        if old_fp and old_fp not in moved_paths:
+            try:
+                self.current_idx = self.image_files.index(old_fp)
+            except ValueError:
+                self.current_idx = -1
+        else:
+            self.current_idx = -1
+
+        self._apply_filters()
+
+        if self.current_idx < 0:
+            if self._filtered_files:
+                self._img_lb.selection_set(0)
+                self._img_lb.see(0)
+                self._load_image(self._filtered_files[0][0])
+            else:
+                self._pil_img = None
+                self._bboxes  = []
+                self._canvas.delete("all")
+                self._refresh_present_labels()
+                self._status.config(text="Đã di chuyển — không còn ảnh nào")
+                return
+
+        self._status.config(
+            text=f"Đã di chuyển {len(moved_paths)} ảnh vào thư mục 'deleted'")
+
     def _clear_filters(self):
         self._filter_name_var.set("")
         self._filter_label_var.set("Tất cả")
@@ -1720,14 +1970,23 @@ class BBoxEditorTab(Frame):
         if not self.image_files:
             self._filtered_files = []
             self._lbl_imgcount.config(text="—")
+            self._lbl_labelcount.config(text="")
             return
 
+        # Bump generation — any in-flight worker with an older gen will abort
+        self._filter_gen += 1
+        gen = self._filter_gen
+
+        # Snapshot all filter params on the main thread (thread-safe reads)
         name_q         = self._filter_name_var.get().strip().lower()
         label_q        = self._filter_label_var.get()
         only_unlabeled = self._filter_unlabeled.get()
         prog_q         = self._filter_progress_var.get()
         lbl_dir        = self.lbl_dir_var.get().strip()
         img_root       = Path(self.img_dir_var.get().strip())
+        recursive      = self.v_recursive.get()
+        must_have      = self._get_must_have_ids()
+        must_not       = self._get_must_not_have_ids()
 
         label_id = None
         if label_q and label_q != "Tất cả":
@@ -1737,185 +1996,211 @@ class BBoxEditorTab(Frame):
                 try:
                     label_id = int(label_q.split(":")[0])
                 except (ValueError, IndexError):
-                    label_id = None
-
-        must_have = self._get_must_have_ids()
-        must_not  = self._get_must_not_have_ids()
-
-        size_min = size_max = None
-        try:
-            v = self._filter_size_min_var.get().strip()
-            if v: size_min = float(v)
-        except ValueError:
-            pass
-        try:
-            v = self._filter_size_max_var.get().strip()
-            if v: size_max = float(v)
-        except ValueError:
-            pass
-
-        w_min = w_max = None
-        try:
-            v = self._filter_w_min_var.get().strip()
-            if v: w_min = float(v)
-        except ValueError:
-            pass
-        try:
-            v = self._filter_w_max_var.get().strip()
-            if v: w_max = float(v)
-        except ValueError:
-            pass
-
-        h_min = h_max = None
-        try:
-            v = self._filter_h_min_var.get().strip()
-            if v: h_min = float(v)
-        except ValueError:
-            pass
-        try:
-            v = self._filter_h_max_var.get().strip()
-            if v: h_max = float(v)
-        except ValueError:
-            pass
-
-        result = []
-        for real_idx, fp in enumerate(self.image_files):
-            if name_q and name_q not in fp.name.lower():
-                continue
-
-            # Progress filter
-            if prog_q == "Đã xử lý" and not self._is_done(fp):
-                continue
-            if prog_q == "Chưa xử lý" and self._is_done(fp):
-                continue
-
-            lbl_path = (Path(lbl_dir) / (fp.stem + ".txt")
-                        if lbl_dir else fp.parent / (fp.stem + ".txt"))
-
-            # "Chỉ hiện chưa có nhãn" filter
-            if only_unlabeled:
-                if lbl_path.exists() and lbl_path.stat().st_size > 0:
-                    continue
-
-            if label_id is not None:
-                if label_id == -2:
-                    if lbl_path.exists() and lbl_path.stat().st_size > 0:
-                        continue
-                else:
-                    if not lbl_path.exists():
-                        continue
-                    found = False
-                    try:
-                        with open(lbl_path, encoding="utf-8") as f:
-                            for line in f:
-                                parts = line.strip().split()
-                                if parts and int(parts[0]) == label_id:
-                                    found = True
-                                    break
-                    except Exception:
-                        pass
-                    if not found:
-                        continue
-
-            # Multi-label filter: phải có / không có
-            if must_have or must_not:
-                file_cids: set = set()
-                if lbl_path.exists():
-                    try:
-                        with open(lbl_path, encoding="utf-8") as f:
-                            for line in f:
-                                parts = line.strip().split()
-                                if parts:
-                                    file_cids.add(int(parts[0]))
-                    except Exception:
-                        pass
-                if must_have and not must_have.issubset(file_cids):
-                    continue
-                if must_not and must_not.intersection(file_cids):
-                    continue
-
-            # Dimensional filter: ít nhất 1 bbox thỏa đồng thời tất cả điều kiện area/W/H
-            _dim_active = (size_min is not None or size_max is not None or
-                           w_min is not None or w_max is not None or
-                           h_min is not None or h_max is not None)
-            if _dim_active:
-                if not lbl_path.exists() or lbl_path.stat().st_size == 0:
-                    continue
-                key = str(fp)
-                if key not in self._img_size_cache:
-                    try:
-                        from PIL import Image as _PILImg
-                        with _PILImg.open(fp) as _im:
-                            self._img_size_cache[key] = _im.size
-                    except Exception:
-                        self._img_size_cache[key] = (0, 0)
-                iw, ih = self._img_size_cache[key]
-                if iw == 0 or ih == 0:
-                    continue
-                dim_pass = False
-                try:
-                    with open(lbl_path, encoding="utf-8") as f:
-                        for line in f:
-                            parts = line.strip().split()
-                            if len(parts) == 5:
-                                if label_id is not None and label_id >= 0 and int(parts[0]) != label_id:
-                                    continue
-                                bw = float(parts[3]) * iw
-                                bh = float(parts[4]) * ih
-                            elif len(parts) == 9:
-                                if label_id is not None and label_id >= 0 and int(parts[0]) != label_id:
-                                    continue
-                                xs = [float(parts[k]) * iw for k in (1, 3, 5, 7)]
-                                ys = [float(parts[k]) * ih for k in (2, 4, 6, 8)]
-                                bw = max(xs) - min(xs)
-                                bh = max(ys) - min(ys)
-                            else:
-                                continue
-                            if size_min is not None and bw * bh < size_min:
-                                continue
-                            if size_max is not None and bw * bh > size_max:
-                                continue
-                            if w_min is not None and bw < w_min:
-                                continue
-                            if w_max is not None and bw > w_max:
-                                continue
-                            if h_min is not None and bh < h_min:
-                                continue
-                            if h_max is not None and bh > h_max:
-                                continue
-                            dim_pass = True
-                            break
-                except Exception:
                     pass
-                if not dim_pass:
+
+        def _fv(s):
+            try: return float(s.strip()) if s.strip() else None
+            except ValueError: return None
+
+        size_min = _fv(self._filter_size_min_var.get())
+        size_max = _fv(self._filter_size_max_var.get())
+        w_min    = _fv(self._filter_w_min_var.get())
+        w_max    = _fv(self._filter_w_max_var.get())
+        h_min    = _fv(self._filter_h_min_var.get())
+        h_max    = _fv(self._filter_h_max_var.get())
+        _dim_active = any(v is not None for v in
+                          (size_min, size_max, w_min, w_max, h_min, h_max))
+
+        # Immutable snapshots safe to hand off to the worker thread
+        image_files   = list(self.image_files)
+        progress_snap = frozenset(self._progress_set)
+        cache_snap    = dict(self._img_size_cache)
+
+        n = len(image_files)
+        self._status.config(text=f"Đang lọc {n:,} ảnh…")
+        self._lbl_imgcount.config(text="…")
+
+        import threading
+
+        def _worker():
+            result    = []
+            new_cache = {}
+
+            for real_idx, fp in enumerate(image_files):
+                if self._filter_gen != gen:
+                    return  # superseded — abort
+
+                if name_q and name_q not in fp.name.lower():
                     continue
 
-            result.append((real_idx, fp))
+                fname = fp.name
+                if prog_q == "Đã xử lý"   and fname not in progress_snap: continue
+                if prog_q == "Chưa xử lý" and fname in progress_snap:     continue
 
+                lbl_path = (Path(lbl_dir) / (fp.stem + ".txt")
+                            if lbl_dir else fp.parent / (fp.stem + ".txt"))
+
+                if only_unlabeled:
+                    try:
+                        if lbl_path.exists() and lbl_path.stat().st_size > 0:
+                            continue
+                    except OSError:
+                        pass
+
+                if label_id is not None:
+                    if label_id == -2:
+                        try:
+                            if lbl_path.exists() and lbl_path.stat().st_size > 0:
+                                continue
+                        except OSError:
+                            pass
+                    else:
+                        try:
+                            if not lbl_path.exists():
+                                continue
+                            found = False
+                            with open(lbl_path, encoding="utf-8") as f:
+                                for line in f:
+                                    parts = line.strip().split()
+                                    if parts and int(parts[0]) == label_id:
+                                        found = True; break
+                            if not found:
+                                continue
+                        except Exception:
+                            continue
+
+                if must_have or must_not:
+                    file_cids: set = set()
+                    try:
+                        if lbl_path.exists():
+                            with open(lbl_path, encoding="utf-8") as f:
+                                for line in f:
+                                    parts = line.strip().split()
+                                    if parts:
+                                        file_cids.add(int(parts[0]))
+                    except Exception:
+                        pass
+                    if must_have and not must_have.issubset(file_cids): continue
+                    if must_not  and must_not.intersection(file_cids):  continue
+
+                if _dim_active:
+                    try:
+                        if not lbl_path.exists() or lbl_path.stat().st_size == 0:
+                            continue
+                        key = str(fp)
+                        if key in cache_snap:
+                            iw, ih = cache_snap[key]
+                        else:
+                            from PIL import Image as _PILImg
+                            with _PILImg.open(fp) as _im:
+                                iw, ih = _im.size
+                            new_cache[key] = (iw, ih)
+                            cache_snap[key] = (iw, ih)
+                        if iw == 0 or ih == 0:
+                            continue
+                        dim_pass = False
+                        with open(lbl_path, encoding="utf-8") as f:
+                            for line in f:
+                                parts = line.strip().split()
+                                if len(parts) == 5:
+                                    if label_id is not None and label_id >= 0 \
+                                            and int(parts[0]) != label_id:
+                                        continue
+                                    bw = float(parts[3]) * iw
+                                    bh = float(parts[4]) * ih
+                                elif len(parts) == 9:
+                                    if label_id is not None and label_id >= 0 \
+                                            and int(parts[0]) != label_id:
+                                        continue
+                                    xs = [float(parts[k]) * iw for k in (1, 3, 5, 7)]
+                                    ys = [float(parts[k]) * ih for k in (2, 4, 6, 8)]
+                                    bw = max(xs) - min(xs); bh = max(ys) - min(ys)
+                                else:
+                                    continue
+                                if size_min is not None and bw * bh < size_min: continue
+                                if size_max is not None and bw * bh > size_max: continue
+                                if w_min    is not None and bw < w_min:          continue
+                                if w_max    is not None and bw > w_max:          continue
+                                if h_min    is not None and bh < h_min:          continue
+                                if h_max    is not None and bh > h_max:          continue
+                                dim_pass = True; break
+                        if not dim_pass:
+                            continue
+                    except Exception:
+                        continue
+
+                result.append((real_idx, fp))
+
+            if self._filter_gen != gen:
+                return  # superseded
+
+            self.after(0, lambda: self._finish_filter(
+                result, gen, img_root, recursive, lbl_dir, label_id, new_cache))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _finish_filter(self, result, gen, img_root, recursive,
+                       lbl_dir, label_id, new_cache):
+        """Main-thread callback invoked by the filter worker thread."""
+        if self._filter_gen != gen:
+            return  # superseded by a newer call
+
+        self._img_size_cache.update(new_cache)
         self._filtered_files = result
 
-        self._img_lb.delete(0, END)
-        for _, fp in self._filtered_files:
-            done    = self._is_done(fp)
-            prefix  = "✓" if done else "○"
-            display = (str(fp.relative_to(img_root))
-                       if self.v_recursive.get() else fp.name)
-            self._img_lb.insert(END, f"{prefix} {display}")
-            self._img_lb.itemconfig(END, fg="#4caf50" if done else "#9090b0")
-
         total = len(self.image_files)
-        shown = len(self._filtered_files)
+        shown = len(result)
         self._lbl_imgcount.config(
             text=f"{shown}/{total} ảnh" if shown != total else f"{total} ảnh")
+        self._lbl_labelcount.config(text="")
 
-        if self.current_idx >= 0:
-            for fi, (ri, _) in enumerate(self._filtered_files):
-                if ri == self.current_idx:
-                    self._img_lb.selection_set(fi)
-                    self._img_lb.see(fi)
-                    break
+        # Build display strings entirely in-memory (fast)
+        progress_set = self._progress_set
+        items  = []
+        colors = []
+        for _, fp in result:
+            done = fp.name in progress_set
+            try:
+                display = str(fp.relative_to(img_root)) if recursive else fp.name
+            except ValueError:
+                display = fp.name
+            items.append(("✓ " if done else "○ ") + display)
+            colors.append("#4caf50" if done else "#9090b0")
 
-        self.after(50, self._rebuild_filmstrip)
+        lb      = self._img_lb
+        cur_idx = self.current_idx
+
+        lb.delete(0, END)
+        # Set default fg to gray; only done items get an explicit green itemconfig
+        lb.config(fg="#9090b0")
+
+        def _chunk(start: int):
+            if self._filter_gen != gen:
+                return
+            CHUNK = 500
+            end   = min(start + CHUNK, len(items))
+            if start < end:
+                # One Tk round-trip for the whole chunk instead of N Python calls
+                lb.tk.call(lb._w, 'insert', 'end', *items[start:end])
+                # Only call itemconfig for done (green) items — gray is the default
+                for i in range(start, end):
+                    if colors[i] == "#4caf50":
+                        lb.itemconfig(i, fg="#4caf50")
+            if end < len(items):
+                self.after(0, lambda: _chunk(end))
+            else:
+                # All chunks inserted — restore selection then rebuild filmstrip
+                if cur_idx >= 0:
+                    for fi, (ri, _) in enumerate(self._filtered_files):
+                        if ri == cur_idx:
+                            lb.selection_set(fi)
+                            lb.see(fi)
+                            break
+                self._status.config(
+                    text=f"Đã lọc {shown:,} / {total:,} ảnh")
+                self.after(50, self._rebuild_filmstrip)
+
+        _chunk(0)
 
     def _prev_image(self): self._prev_img()
     def _next_image(self): self._next_img()
@@ -1927,6 +2212,111 @@ class BBoxEditorTab(Frame):
         _zoom_image_window(self.root, self._pil_img, "Phóng to ảnh",
                            bboxes=self._bboxes or None,
                            label_names=self.label_list)
+
+    # ── Paint-like canvas zoom & pan ──────────────────────────────────────────
+
+    def _on_canvas_wheel(self, event):
+        """Scroll wheel zooms in/out centered at cursor position."""
+        if self._pil_img is None:
+            return
+        cx, cy = event.x, event.y
+        # Image coords at cursor before zoom change
+        img_x = (cx - self._off_x) / self._scale
+        img_y = (cy - self._off_y) / self._scale
+
+        factor = 1.25 if event.delta > 0 else (1.0 / 1.25)
+        new_zoom = max(0.1, min(20.0, self._zoom_level * factor))
+        if abs(new_zoom - self._zoom_level) < 0.001:
+            return
+
+        self._canvas.update_idletasks()
+        cw = self._canvas.winfo_width()
+        ch = self._canvas.winfo_height()
+        iw, ih = self._pil_img.size
+        fit_scale = min(cw / iw, ch / ih, 1.0)
+        new_scale = fit_scale * new_zoom
+        nw = int(iw * new_scale)
+        nh = int(ih * new_scale)
+        base_x = (cw - nw) // 2
+        base_y = (ch - nh) // 2
+        # Adjust pan so cursor stays over same image point
+        self._pan_x = int(cx - img_x * new_scale - base_x)
+        self._pan_y = int(cy - img_y * new_scale - base_y)
+        self._zoom_level = new_zoom
+        self._render()
+
+    def _zoom_step(self, factor: float):
+        """Zoom centered on canvas center (used by +/- buttons)."""
+        if self._pil_img is None:
+            return
+        new_zoom = max(0.1, min(20.0, self._zoom_level * factor))
+        if abs(new_zoom - self._zoom_level) < 0.001:
+            return
+        cw = self._canvas.winfo_width()
+        ch = self._canvas.winfo_height()
+        iw, ih = self._pil_img.size
+        fit_scale = min(cw / iw, ch / ih, 1.0)
+        new_scale = fit_scale * new_zoom
+        nw = int(iw * new_scale)
+        nh = int(ih * new_scale)
+        cx, cy = cw // 2, ch // 2
+        img_x = (cx - self._off_x) / self._scale
+        img_y = (cy - self._off_y) / self._scale
+        base_x = (cw - nw) // 2
+        base_y = (ch - nh) // 2
+        self._pan_x = int(cx - img_x * new_scale - base_x)
+        self._pan_y = int(cy - img_y * new_scale - base_y)
+        self._zoom_level = new_zoom
+        self._render()
+
+    def _zoom_reset(self):
+        """Reset zoom to fit-to-canvas (Ctrl+0 or click zoom label)."""
+        self._zoom_level = 1.0
+        self._pan_x = 0
+        self._pan_y = 0
+        self._render()
+
+    def _on_pan_start(self, event):
+        """Middle-mouse press — begin panning."""
+        if self._pil_img is None:
+            return
+        self._panning = True
+        self._pan_start = (event.x, event.y)
+        self._pan_start_offset = (self._pan_x, self._pan_y)
+        self._canvas.config(cursor="fleur")
+
+    def _on_pan_drag(self, event):
+        """Middle-mouse drag — update pan offset."""
+        if not self._panning:
+            return
+        dx = event.x - self._pan_start[0]
+        dy = event.y - self._pan_start[1]
+        self._pan_x = self._pan_start_offset[0] + dx
+        self._pan_y = self._pan_start_offset[1] + dy
+        self._render()
+
+    def _on_pan_end(self, event):
+        """Middle-mouse release — end panning."""
+        self._panning = False
+        self._canvas.config(cursor="crosshair")
+
+    def _escape_action(self):
+        """Escape: cancel active operation or deselect all."""
+        if self._poly_placing:
+            self._poly_placing = False
+            for iid in self._poly_prev_items:
+                self._canvas.delete(iid)
+            self._poly_prev_items.clear()
+            self._poly_pts.clear()
+            self._render()
+            return
+        if self._drawing:
+            self._drawing = False
+            if self._draw_rect:
+                self._canvas.delete(self._draw_rect)
+                self._draw_rect = None
+            return
+        self._deselect_all()
 
     def _prev_img(self):
         if not self._filtered_files: return
@@ -2027,13 +2417,39 @@ class BBoxEditorTab(Frame):
         self._film_page = max(0, min(max_page, self._film_page + delta))
         self._rebuild_filmstrip()
 
+    def _go_page_abs(self, page: int):
+        """Nhảy tới trang đầu (0) hoặc trang cuối (-1)."""
+        if not self._filtered_files: return
+        if page < 0:
+            self._film_page = self._film_max_page
+        else:
+            self._film_page = 0
+        self._rebuild_filmstrip()
+
+    def _go_page_direct(self):
+        """Nhảy tới số trang nhập trực tiếp trong entry."""
+        if not self._filtered_files: return
+        try:
+            page_num = int(self._film_page_var.get())
+        except ValueError:
+            self._film_page_var.set(str(self._film_page + 1))
+            return
+        target = max(0, min(self._film_max_page, page_num - 1))
+        if target != self._film_page:
+            self._film_page = target
+            self._rebuild_filmstrip()
+        else:
+            self._film_page_var.set(str(self._film_page + 1))
+
     def _rebuild_filmstrip(self):
         for w in self._film_inner.winfo_children():
             w.destroy()
         self._film_cells.clear()
 
         if not self._filtered_files:
-            self._film_nav_lbl.config(text="—")
+            self._film_nav_lbl.config(text="/ —  (0 ảnh)")
+            self._film_page_var.set("1")
+            self._film_max_page = 0
             return
 
         n_cols = max(1, min(6, self._thumb_n_var.get()))
@@ -2049,8 +2465,10 @@ class BBoxEditorTab(Frame):
         end        = min(start + per_page, total)
         page_files = self._filtered_files[start:end]
 
+        self._film_max_page = max_page
+        self._film_page_var.set(str(self._film_page + 1))
         self._film_nav_lbl.config(
-            text=f"Trang {self._film_page + 1} / {max_page + 1}   ({total} ảnh)")
+            text=f"/ {max_page + 1}   ({total} ảnh)")
 
         canvas_w = self._film_canvas.winfo_width() or 500
         pad = 4
@@ -2160,3 +2578,5 @@ class BBoxEditorTab(Frame):
                 cell["tk_img"] = tk_img
                 cell["img_lbl"].config(image=tk_img)
                 break
+
+

@@ -112,4 +112,22 @@
 
 ---
 
+## [E013] BBoxEditor FreezeUI khi tải folder lớn
+- **File:** `tool/features/annotation/tab_bbox.py` — `_apply_filters()`
+- **Triệu chứng:** App bị treo (không tương tác được) khi nhấn "Tải ảnh" với folder có nhiều file
+- **Nguyên nhân:** `_apply_filters` chạy đồng bộ trên main thread: (1) đọc label file I/O từng ảnh, (2) gọi `lb.insert(END, ...)` + `lb.itemconfig(END, ...)` cho mỗi ảnh → hàng nghìn Tk blocking calls
+- **Cách sửa:** Chuyển filter logic sang `threading.Thread` (daemon); kết quả trả về main thread qua `self.after(0, ...)`. Listbox được populate bằng bulk `lb.tk.call(lb._w, 'insert', 'end', *chunk)` (500 items/lần), chỉ gọi `itemconfig` cho items màu xanh (done) vì gray là màu mặc định listbox. Generation counter `_filter_gen` tự hủy các worker cũ khi filter mới được trigger.
+- **Ngày:** 2026-06-20
+
+---
+
+## [E014] Binding `<1>`, `<2>`, `<3>` ghi đè mouse button — không vẽ được bbox
+- **File:** `tool/features/annotation/tab_bbox.py`
+- **Triệu chứng:** Sau khi bind phím số 0-9, không thể click để vẽ bbox nữa
+- **Nguyên nhân:** Trong Tkinter, `<1>` = `<Button-1>` (chuột trái), `<2>` = `<Button-2>` (chuột giữa), `<3>` = `<Button-3>` (chuột phải) — không phải phím bàn phím. Binding `<1>` đã ghi đè `<ButtonPress-1>` (handler vẽ bbox).
+- **Cách sửa:** Dùng `<Key-0>` … `<Key-9>` thay cho `<0>` … `<9>` khi bind phím số bàn phím vào canvas. Không dùng `f"<{digit}>"` — phải dùng `f"<Key-{digit}>"`.
+- **Ngày:** 2026-06-20
+
+---
+
 *Cập nhật file này mỗi khi gặp lỗi mới. Format: `[Ennn]` tăng dần.*

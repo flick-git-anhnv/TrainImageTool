@@ -321,6 +321,20 @@ class TrainTab(Frame):
                                 state=DISABLED)
         self._btn_stop.pack(side=LEFT, padx=(8, 0))
 
+        self._btn_resume = Button(ctrl, text="↩  Tiếp tục Train",
+                                   command=self._resume_train,
+                                   bg="#1565c0", fg="white",
+                                   activebackground="#0d47a1", activeforeground="white",
+                                   font=F_BOLD, relief="flat", padx=14, cursor="hand2")
+        self._btn_resume.pack(side=LEFT, padx=(8, 0))
+
+        self._btn_continue = Button(ctrl, text="🔄  Train thêm",
+                                     command=self._continue_train,
+                                     bg="#6a1b9a", fg="white",
+                                     activebackground="#4a148c", activeforeground="white",
+                                     font=F_BOLD, relief="flat", padx=14, cursor="hand2")
+        self._btn_continue.pack(side=LEFT, padx=(8, 0))
+
         self._btn_chart = Button(ctrl, text="📊  Biểu đồ",
                                   command=self._open_chart_window,
                                   bg=ACCENT2, fg="white",
@@ -1750,8 +1764,378 @@ class TrainTab(Frame):
             self._proc.terminate()
             _append_log(self._log, "⚠  Training đã bị dừng thủ công.")
         self._btn_start.config(state=NORMAL)
+        self._btn_resume.config(state=NORMAL)
+        self._btn_continue.config(state=NORMAL)
         self._btn_stop.config(state=DISABLED)
         self._status_lbl.config(text="Đã dừng", fg="#f0c040")
+
+    def _resume_train(self):
+        """Tiếp tục training từ last.pt sau khi bị gián đoạn."""
+        # Tìm last.pt tự động từ output_dir hoặc project/name
+        last_pt = self._find_last_pt()
+        if last_pt is None:
+            last_pt_str = filedialog.askopenfilename(
+                title="Chọn file last.pt để tiếp tục train",
+                filetypes=[("PyTorch checkpoint", "*.pt"), ("All files", "*.*")],
+                initialdir=self._project_var.get().strip() or ".")
+            if not last_pt_str:
+                return
+            last_pt = Path(last_pt_str)
+
+        if not last_pt.exists():
+            messagebox.showerror("Không tìm thấy", f"File không tồn tại:\n{last_pt}")
+            return
+
+        device = self._device_var.get().strip() or "0"
+        script = (
+            "import os, sys, multiprocessing\n"
+            "multiprocessing.freeze_support()\n"
+            "if __name__ == '__main__':\n"
+            "    os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')\n"
+            "    try:\n"
+            "        from ultralytics import YOLO\n"
+            "    except ImportError:\n"
+            "        print('[LỖI] ultralytics chưa được cài. Chạy: pip install ultralytics')\n"
+            "        sys.exit(1)\n"
+            f"    model = YOLO({str(last_pt)!r})\n"
+            f"    results = model.train(resume=True, device={device!r})\n"
+            "    print(f'KZTEK_SAVE_DIR: {results.save_dir}')\n"
+        )
+        tmp_script = Path(tempfile.gettempdir()) / "kztek_resume_job.py"
+        tmp_script.write_text(script, encoding="utf-8")
+
+        self._log.configure(state=NORMAL)
+        self._log.delete("1.0", END)
+        self._log.configure(state=DISABLED)
+        _append_log(self._log, f"↩  Tiếp tục train từ checkpoint: {last_pt}")
+        _append_log(self._log, f"   device={device}")
+        _append_log(self._log, "─" * 70)
+
+        self._train_stopped_early = False
+        self._train_epochs_total  = 0
+
+        try:
+            self._proc = subprocess.Popen(
+                [sys.executable, str(tmp_script)],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
+        except Exception as e:
+            messagebox.showerror("Lỗi khởi động", str(e)); return
+
+        # Cập nhật output_dir về thư mục chứa last.pt (weights → parent)
+        wd = last_pt.parent
+        self._output_dir = str(wd.parent if wd.name == "weights" else wd)
+
+        self._btn_start.config(state=DISABLED)
+        self._btn_resume.config(state=DISABLED)
+        self._btn_stop.config(state=NORMAL)
+        self._status_lbl.config(text="⏳ Đang tiếp tục train…", fg=ACCENT)
+        self._result_lbl.config(text="—")
+        self._open_btn.config(state=DISABLED)
+
+        if _MPL_OK:
+            self._open_chart_window()
+            self._stop_chart_poll()
+            self._start_chart_poll()
+
+        proc = self._proc
+        q    = self._out_queue
+
+        def _reader():
+            for raw in iter(proc.stdout.readline, b""):
+                q.put(raw.decode("utf-8", errors="replace"))
+            q.put(None)
+
+        threading.Thread(target=_reader, daemon=True).start()
+        self._poll_output()
+
+    def _find_last_pt(self):
+        """Tìm last.pt từ output_dir hoặc project/name/weights."""
+        candidates = []
+        if self._output_dir and os.path.isdir(self._output_dir):
+            candidates.append(Path(self._output_dir) / "weights" / "last.pt")
+            candidates.append(Path(self._output_dir) / "last.pt")
+        project = self._project_var.get().strip()
+        name    = self._name_var.get().strip() or "kztek_train"
+        if project:
+            candidates.append(Path(project) / name / "weights" / "last.pt")
+        for p in candidates:
+            if p.exists():
+                return p
+        return None
+
+    def _find_best_pt(self):
+        """Tìm best.pt từ output_dir hoặc project/name/weights."""
+        candidates = []
+        if self._output_dir and os.path.isdir(self._output_dir):
+            candidates.append(Path(self._output_dir) / "weights" / "best.pt")
+            candidates.append(Path(self._output_dir) / "best.pt")
+        project = self._project_var.get().strip()
+        name    = self._name_var.get().strip() or "kztek_train"
+        if project:
+            candidates.append(Path(project) / name / "weights" / "best.pt")
+        for p in candidates:
+            if p.exists():
+                return p
+        return None
+
+    def _ask_continue_params(self, best_pt, last_pt):
+        """Dialog hỏi: chọn best/last/custom .pt + số epochs train thêm.
+        Returns (pt_path, epochs) hoặc None nếu user hủy."""
+        result = [None]
+
+        dlg = Toplevel(self.root)
+        dlg.title("Train thêm epochs")
+        dlg.configure(bg=BG)
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        Label(dlg, text="Chọn checkpoint để train thêm",
+              bg=BG, fg=TEXT, font=F_BOLD,
+              padx=16, pady=10).pack(anchor=W)
+
+        _pt_choice = StringVar(
+            value="best" if best_pt else ("last" if last_pt else "custom"))
+        _custom_pt = StringVar()
+
+        def _radio_row(text, value, pt_path):
+            r = Frame(dlg, bg=BG)
+            r.pack(fill=X, padx=16, pady=2)
+            rb = Radiobutton(r, text=text, variable=_pt_choice, value=value,
+                             bg=BG, fg=TEXT, activebackground=BG,
+                             activeforeground=ACCENT, selectcolor=CARD, font=F_MAIN)
+            rb.pack(side=LEFT)
+            if pt_path:
+                Label(r, text=str(pt_path), bg=BG, fg=DIM,
+                      font=("Segoe UI", 8, "italic")).pack(side=LEFT, padx=(4, 0))
+            else:
+                rb.config(state=DISABLED, fg=DIM)
+
+        _radio_row("best.pt  (model chính xác nhất)", "best", best_pt)
+        _radio_row("last.pt  (checkpoint epoch cuối)", "last", last_pt)
+
+        custom_row = Frame(dlg, bg=BG)
+        custom_row.pack(fill=X, padx=16, pady=2)
+        Radiobutton(custom_row, text="Chọn file khác…", variable=_pt_choice,
+                    value="custom", bg=BG, fg=TEXT, activebackground=BG,
+                    activeforeground=ACCENT, selectcolor=CARD,
+                    font=F_MAIN).pack(side=LEFT)
+        custom_entry = Entry(custom_row, textvariable=_custom_pt,
+                             bg="#16162a", fg=TEXT, insertbackground=TEXT,
+                             relief="flat", font=F_MAIN, bd=4, width=32)
+        custom_entry.pack(side=LEFT, padx=(4, 4))
+
+        def _browse():
+            _pt_choice.set("custom")
+            p = filedialog.askopenfilename(
+                title="Chọn file .pt để train thêm",
+                filetypes=[("PyTorch model", "*.pt"), ("All files", "*.*")],
+                initialdir=self._project_var.get().strip() or ".")
+            if p:
+                _custom_pt.set(p)
+
+        Button(custom_row, text="📂", command=_browse,
+               bg=CARD, fg=TEXT, activebackground=ACCENT2, activeforeground="white",
+               font=F_MAIN, relief="flat", padx=6, cursor="hand2").pack(side=LEFT)
+
+        Frame(dlg, bg=DIM, height=1).pack(fill=X, padx=16, pady=10)
+
+        ep_row = Frame(dlg, bg=BG)
+        ep_row.pack(fill=X, padx=16, pady=4)
+        Label(ep_row, text="Số epochs train thêm:", bg=BG, fg=TEXT,
+              font=F_MAIN).pack(side=LEFT)
+        _extra_ep = StringVar(value="50")
+        Entry(ep_row, textvariable=_extra_ep,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MAIN, bd=4, width=8).pack(side=LEFT, padx=(8, 4))
+        Label(ep_row, text="epochs", bg=BG, fg=DIM,
+              font=("Segoe UI", 8, "italic")).pack(side=LEFT)
+
+        Label(dlg,
+              text="Output sẽ tạo run mới (không ghi đè run cũ)",
+              bg=BG, fg=DIM, font=("Segoe UI", 8, "italic"),
+              padx=16).pack(anchor=W, pady=(4, 0))
+
+        btn_row = Frame(dlg, bg=BG)
+        btn_row.pack(fill=X, padx=16, pady=(12, 16))
+
+        def _ok():
+            choice = _pt_choice.get()
+            if choice == "best":
+                pt = best_pt
+            elif choice == "last":
+                pt = last_pt
+            else:
+                raw = _custom_pt.get().strip()
+                pt  = Path(raw) if raw else None
+            if pt is None or not Path(str(pt)).exists():
+                messagebox.showerror("Lỗi", "Vui lòng chọn file .pt hợp lệ.", parent=dlg)
+                return
+            try:
+                ep = int(_extra_ep.get())
+                if ep <= 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("Lỗi", "Số epochs phải là số nguyên dương.", parent=dlg)
+                return
+            result[0] = (pt, ep)
+            dlg.destroy()
+
+        def _cancel():
+            dlg.destroy()
+
+        Button(btn_row, text="🔄  Bắt đầu Train thêm", command=_ok,
+               bg="#6a1b9a", fg="white",
+               activebackground="#4a148c", activeforeground="white",
+               font=F_BOLD, relief="flat", padx=18, cursor="hand2").pack(side=LEFT)
+        Button(btn_row, text="Hủy", command=_cancel,
+               bg=CARD, fg=DIM, activebackground=ACCENT2, activeforeground="white",
+               font=F_MAIN, relief="flat", padx=12, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+
+        dlg.bind("<Return>", lambda _e: _ok())
+        dlg.bind("<Escape>", lambda _e: _cancel())
+        dlg.update_idletasks()
+        sw = dlg.winfo_screenwidth()
+        sh = dlg.winfo_screenheight()
+        w  = dlg.winfo_width()
+        h  = dlg.winfo_height()
+        dlg.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
+        dlg.wait_window()
+        return result[0]
+
+    def _continue_train(self):
+        """Train thêm epochs từ best.pt/last.pt sau khi đã train xong đủ số epoch."""
+        best_pt = self._find_best_pt()
+        last_pt = self._find_last_pt()
+
+        params = self._ask_continue_params(best_pt, last_pt)
+        if params is None:
+            return
+        pt_file, extra_epochs = params
+
+        labels = self._parse_labels()
+        if not labels:
+            messagebox.showerror("Lỗi", "Vui lòng nhập danh sách nhãn."); return
+
+        try:
+            yaml_path, split_msg, n_train, n_val = self._write_yaml(labels)
+        except Exception as e:
+            messagebox.showerror("Lỗi tạo data.yaml", str(e)); return
+
+        project = self._project_var.get().strip() or str(
+            Path(self.train_dir.get().strip() or ".").parent / "runs")
+        name = self._name_var.get().strip() or "kztek_train"
+
+        try:
+            imgsz = int(self._imgsz_var.get())
+            batch = int(self._batch_var.get())
+        except ValueError:
+            messagebox.showerror("Lỗi", "Imgsz / Batch phải là số nguyên."); return
+
+        device = self._device_var.get().strip() or "0"
+        optimizer = self._optimizer_var.get().strip() or "AdamW"
+        try:
+            lr0 = float(self._lr0_var.get())
+        except ValueError:
+            lr0 = 0.01
+        try:
+            lrf = float(self._lrf_var.get())
+        except ValueError:
+            lrf = 0.01
+        try:
+            close_mosaic = int(self._close_mosaic_var.get())
+        except ValueError:
+            close_mosaic = 10
+        try:
+            workers = int(self._workers_var.get())
+        except ValueError:
+            workers = 4
+        try:
+            weight_decay = float(self._weight_decay_var.get())
+        except ValueError:
+            weight_decay = 0.0005
+        cache_raw = self._cache_var.get().strip()
+        cache_py  = "False" if cache_raw == "False" else f"'{cache_raw}'"
+        cos_lr    = self._cos_lr_var.get()
+
+        script = (
+            "import os, sys, multiprocessing\n"
+            "multiprocessing.freeze_support()\n"
+            "if __name__ == '__main__':\n"
+            "    os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')\n"
+            "    try:\n"
+            "        from ultralytics import YOLO\n"
+            "    except ImportError:\n"
+            "        print('[LỖI] ultralytics chưa được cài. Chạy: pip install ultralytics')\n"
+            "        sys.exit(1)\n"
+            f"    model = YOLO({str(pt_file)!r})\n"
+            f"    results = model.train(\n"
+            f"        data={yaml_path!r},\n"
+            f"        epochs={extra_epochs},\n"
+            f"        imgsz={imgsz},\n"
+            f"        batch={batch},\n"
+            f"        device={device!r},\n"
+            f"        project={project!r},\n"
+            f"        name={name!r},\n"
+            f"        exist_ok=False,\n"
+            f"        optimizer={optimizer!r},\n"
+            f"        lr0={lr0},\n"
+            f"        lrf={lrf},\n"
+            f"        close_mosaic={close_mosaic},\n"
+            f"        cache={cache_py},\n"
+            f"        workers={workers},\n"
+            f"        cos_lr={cos_lr},\n"
+            f"        weight_decay={weight_decay},\n"
+            f"    )\n"
+            "    print(f'KZTEK_SAVE_DIR: {results.save_dir}')\n"
+        )
+        tmp_script = Path(tempfile.gettempdir()) / "kztek_continue_job.py"
+        tmp_script.write_text(script, encoding="utf-8")
+
+        self._log.configure(state=NORMAL)
+        self._log.delete("1.0", END)
+        self._log.configure(state=DISABLED)
+        _append_log(self._log,
+                    f"🔄  Train thêm {extra_epochs} epochs từ: {pt_file}")
+        _append_log(self._log, f"   data.yaml : {yaml_path}")
+        _append_log(self._log, f"   dataset   : {n_train} train / {n_val} val")
+        if split_msg:
+            _append_log(self._log, f"   {split_msg}")
+        _append_log(self._log, f"   output    : {project}/{name}[+N]")
+        _append_log(self._log, "─" * 70)
+
+        self._train_epochs_total  = extra_epochs
+        self._train_stopped_early = False
+
+        try:
+            self._proc = subprocess.Popen(
+                [sys.executable, str(tmp_script)],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
+        except Exception as e:
+            messagebox.showerror("Lỗi khởi động", str(e)); return
+
+        self._btn_start.config(state=DISABLED)
+        self._btn_resume.config(state=DISABLED)
+        self._btn_continue.config(state=DISABLED)
+        self._btn_stop.config(state=NORMAL)
+        self._status_lbl.config(text="⏳ Đang train thêm…", fg=ACCENT)
+        self._result_lbl.config(text="—")
+        self._open_btn.config(state=DISABLED)
+
+        if _MPL_OK:
+            self._open_chart_window()
+            self._stop_chart_poll()
+            self._start_chart_poll()
+
+        proc = self._proc
+        q    = self._out_queue
+
+        def _reader():
+            for raw in iter(proc.stdout.readline, b""):
+                q.put(raw.decode("utf-8", errors="replace"))
+            q.put(None)
+
+        threading.Thread(target=_reader, daemon=True).start()
+        self._poll_output()
 
     def _poll_output(self):
         try:
@@ -1796,6 +2180,8 @@ class TrainTab(Frame):
         if self._poll_id:
             self.root.after_cancel(self._poll_id); self._poll_id = None
         self._btn_start.config(state=NORMAL)
+        self._btn_resume.config(state=NORMAL)
+        self._btn_continue.config(state=NORMAL)
         self._btn_stop.config(state=DISABLED)
         if rc == 0:
             best = os.path.join(self._output_dir, "weights", "best.pt")

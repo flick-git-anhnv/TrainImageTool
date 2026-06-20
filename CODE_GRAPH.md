@@ -1,5 +1,5 @@
 # CODE_GRAPH.md — KZTEK Image Tools
-<!-- Cập nhật: 2026-06-18 | TrainTab: +FP/Miss/Imbalance/Size&Shape/Brightness Analysis, +HTML Report -->
+<!-- Cập nhật: 2026-06-20 | BBoxEditorTab: +_on_numkey_label — phím 0-9 chọn class và relabel bbox đang chọn -->
 
 ## Hướng dẫn sử dụng
 
@@ -204,6 +204,17 @@ Tab đã đăng ký (theo thứ tự, 15 tab):
 | `_on_canvas_click` | Xử lý click chuột |
 | `_on_canvas_drag` | Xử lý kéo chuột |
 | `_save_labels` | Lưu file .txt YOLO |
+| `_delete_page_to_deleted` | Di chuyển toàn bộ ảnh+label trong trang grid vào thư mục `deleted/` (có thể khôi phục) |
+| `_lbl_labelcount` | Label hiển thị tổng số bbox: không filter → đếm tất cả; có filter class → chỉ đếm class đó |
+| `_on_canvas_wheel` | Mouse wheel → zoom in/out centered at cursor (Paint-like) |
+| `_zoom_step(factor)` | Zoom +/- centered on canvas center (dùng cho nút +/−) |
+| `_zoom_reset` | Reset zoom về Fit (Ctrl+0 hoặc click label zoom%) |
+| `_on_pan_start/drag/end` | Middle-mouse drag → pan khi zoomed in |
+| `_ctrl_panning` | Flag: Ctrl+left-drag trên vùng trống → pan (thay rubber-band) |
+| `_escape_action` | Escape: cancel poly/draw/deselect |
+| `_go_page_abs(page)` | Nhảy tới trang đầu (0) hoặc trang cuối (-1) — nút ⏮ ⏭ |
+| `_go_page_direct()` | Nhảy tới số trang nhập trong Entry (validate + clamp) |
+| `_on_numkey_label(n)` | Phím 0-9: chọn class n; nếu có bbox đang chọn → relabel ngay |
 
 ---
 
@@ -382,6 +393,11 @@ Targets: KZTEK LPR AI Server, OpenALPR
 | `_open_brightness_analysis` | Mở cửa sổ Brightness Analysis |
 | `_run_brightness_analysis` | Thread: đọc ảnh → tính mean brightness → phân bố 5 mức → per-class → ghi brightness_summary.json |
 | `_generate_html_report` | Tổng hợp tất cả summary.json + results.csv → HTML report → mở browser |
+| `_resume_train` | Tiếp tục training từ last.pt (resume=True) sau khi bị gián đoạn |
+| `_find_last_pt` | Tìm last.pt tự động từ output_dir / project/name/weights |
+| `_find_best_pt` | Tìm best.pt tự động từ output_dir / project/name/weights |
+| `_ask_continue_params` | Dialog chọn best/last/custom .pt + số epochs train thêm |
+| `_continue_train` | Train thêm epochs từ best.pt/last.pt sau khi train đã hoàn tất |
 
 Models: yolo11n/s/m/l/x
 
