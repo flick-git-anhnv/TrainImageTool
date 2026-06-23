@@ -1,3 +1,4 @@
+import base64
 import json
 import queue
 import re
@@ -78,6 +79,28 @@ _IMG_FIELDS = [
     "imageFull", "imagePlate",
     "imageUrl", "imageUrls",
 ]
+
+# Base64 variant field names (img_mode="base64")
+_IMG_FIELDS_B64 = [
+    "imageFullInBase64", "imageFullOutBase64",
+    "imagePlateInBase64", "imagePlateOutBase64",
+    "imageInBase64", "imageOutBase64",
+    "imageFullBase64", "imagePlateBase64",
+    "imageBase64",
+]
+
+
+def _b64decode(s: str) -> bytes:
+    s = s.strip().replace("\n", "").replace("\r", "").replace(" ", "")
+    padding = (4 - len(s) % 4) % 4
+    return base64.b64decode(s + "=" * padding)
+
+
+def _looks_b64(s: str) -> bool:
+    """Heuristic: chuỗi đủ dài, chỉ gồm base64 chars, không phải URL."""
+    if len(s) < 64 or s.startswith("http") or s.startswith("/"):
+        return False
+    return bool(re.match(r'^[A-Za-z0-9+/\r\n]+=*$', s[:256]))
 
 
 def _p8_safe(s: str) -> str:
@@ -171,7 +194,8 @@ def _get_nested(d: dict, path: str):
     return curr
 
 
-def _p8_make_filter(start: str, end: str, page: int, size: int) -> dict:
+def _p8_make_filter(start: str, end: str, page: int, size: int,
+                    keyword: str = "") -> dict:
     """Build the request body for /exits/search or /entries/search."""
     filter_obj = {
         "and": [
@@ -183,13 +207,13 @@ def _p8_make_filter(start: str, end: str, page: int, size: int) -> dict:
             ]},
             {"or": [
                 {"QueryKey": "plateNumber",     "QueryType": "TEXT",
-                 "QueryValue": "", "Operation": "contains"},
+                 "QueryValue": keyword, "Operation": "contains"},
                 {"QueryKey": "accessKey.code",  "QueryType": "TEXT",
-                 "QueryValue": "", "Operation": "contains"},
+                 "QueryValue": keyword, "Operation": "contains"},
                 {"QueryKey": "accessKey.name",  "QueryType": "TEXT",
-                 "QueryValue": "", "Operation": "contains"},
+                 "QueryValue": keyword, "Operation": "contains"},
                 {"QueryKey": "note",            "QueryType": "TEXT",
-                 "QueryValue": "", "Operation": "contains"},
+                 "QueryValue": keyword, "Operation": "contains"},
             ]},
         ]
     }
@@ -244,13 +268,13 @@ class Parkingv8ApiClient:
             return False
 
     def search(self, endpoint: str, start: str, end: str,
-               page: int, size: int):
+               page: int, size: int, keyword: str = ""):
         url  = f"{self.api_url}/{endpoint}/search"
         hdrs = {
             "Content-Type":  "application/json",
             "Authorization": f"Bearer {self.token}",
         }
-        body = _p8_make_filter(start, end, page, size)
+        body = _p8_make_filter(start, end, page, size, keyword=keyword)
         for attempt in range(3):
             try:
                 r = self._session.post(
@@ -262,14 +286,19 @@ class Parkingv8ApiClient:
                     time.sleep(2 * (attempt + 1))
         return False, {}
 
-    def fetch_detail(self, endpoint: str, record_id: str) -> dict:
-        """GET {api_url}/{endpoint}/{id}?presignedUrl=true — trả về record kèm presigned URL ảnh."""
+    def fetch_detail(self, endpoint: str, record_id: str, img_mode: str = "url") -> dict:
+        """GET {api_url}/{endpoint}/{id} — trả về record kèm ảnh.
+
+        img_mode='url'    → ?presignedUrl=true  (mặc định)
+        img_mode='base64' → không truyền param (response chứa base64 trực tiếp)
+        """
         url = f"{self.api_url}/{endpoint}/{record_id}"
+        params = {} if img_mode == "base64" else {"presignedUrl": "true"}
         try:
             r = self._session.get(
                 url, timeout=self.timeout,
                 headers={"Authorization": f"Bearer {self.token}"},
-                params={"presignedUrl": "true"})
+                params=params)
             if r.ok:
                 return r.json()
         except Exception:
@@ -277,14 +306,35 @@ class Parkingv8ApiClient:
         return {}
 
     def fetch_image(self, url: str):
-        """Tải ảnh từ PresignedUrl.
+        """Tải ảnh từ URL hoặc decode base64/data URI.
 
-        Presigned URL: GET trực tiếp (không cần auth).
-        URL tương đối hoặc bearer-protected: thêm Authorization header.
+        - data URI (data:image/...;base64,<data>): decode trực tiếp
+        - Raw base64 string (không có http prefix): decode trực tiếp
+        - Presigned URL: GET plain (không cần auth)
+        - Bearer-protected URL: GET với Authorization header
         """
         if not url or not _CV2_OK:
             return None
         cv2, np = _cv2_mod, _np_mod
+
+        # Data URI: data:image/jpeg;base64,/9j/...
+        if url.startswith("data:"):
+            try:
+                _, b64_part = url.split(",", 1)
+                buf = np.frombuffer(_b64decode(b64_part), np.uint8)
+                return cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            except Exception:
+                return None
+
+        # Raw base64 string
+        if _looks_b64(url):
+            try:
+                buf = np.frombuffer(_b64decode(url), np.uint8)
+                img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+                if img is not None:
+                    return img
+            except Exception:
+                pass
 
         # Relative path → build absolute URL
         target = url if url.startswith("http") else f"{self.api_url}/{url.lstrip('/')}"
@@ -312,24 +362,30 @@ class Parkingv8ApiClient:
             return None
 
     @staticmethod
-    def extract_detail_images(detail: dict, endpoint: str) -> list:
+    def extract_detail_images(detail: dict, endpoint: str, img_mode: str = "url") -> list:
         """Trích ảnh từ detail record (GET /exits/{id} hoặc /entries/{id}).
 
-        Format: images = [{presignedUrl: str, type: int}, ...]
-        Trả về: [(presigned_url, suffix), ...]
-          - exit  images: type 0→"fo", 1→"vo", 2→"po"
-          - entry images: type 0→"fi", 1→"vi", 2→"pi"
-        Ảnh từ entry sub-record chỉ lấy khi endpoint="exits" (tránh duplicate khi "both").
+        img_mode='url'    → đọc presignedUrl/url field
+        img_mode='base64' → ưu tiên base64/imageBase64 field, fallback presignedUrl
+        Trả về: [(url_or_b64, suffix), ...]
         """
         images = []
         main_map = (_IMG_TYPE_SUFFIX_EXIT if endpoint == "exits"
                     else _IMG_TYPE_SUFFIX_ENTRY)
 
+        def _pick(img_dict: dict) -> str:
+            if img_mode == "base64":
+                v = (img_dict.get("base64") or img_dict.get("imageBase64") or
+                     img_dict.get("Base64") or img_dict.get("ImageBase64") or "")
+                if v:
+                    return v
+            return (img_dict.get("presignedUrl") or img_dict.get("PresignedUrl") or
+                    img_dict.get("url") or img_dict.get("Url") or "")
+
         for img in (detail.get("images") or []):
             if not isinstance(img, dict):
                 continue
-            url = (img.get("presignedUrl") or img.get("PresignedUrl") or
-                   img.get("url") or img.get("Url") or "")
+            url = _pick(img)
             if not url:
                 continue
             typ = img.get("type")
@@ -341,8 +397,7 @@ class Parkingv8ApiClient:
             for img in (detail.get("entry") or {}).get("images") or []:
                 if not isinstance(img, dict):
                     continue
-                url = (img.get("presignedUrl") or img.get("PresignedUrl") or
-                       img.get("url") or img.get("Url") or "")
+                url = _pick(img)
                 if not url:
                     continue
                 typ = img.get("type")
@@ -352,16 +407,22 @@ class Parkingv8ApiClient:
         return images
 
     @staticmethod
-    def extract_images(rec: dict) -> list:
-        """Fallback: trích ảnh từ các field name cũ (server không dùng PresignedUrl)."""
+    def extract_images(rec: dict, img_mode: str = "url") -> list:
+        """Fallback: trích ảnh từ các field name cũ (server không dùng PresignedUrl/Base64 API)."""
         images = []
-        for field in _IMG_FIELDS:
+        fields = (_IMG_FIELDS_B64 + _IMG_FIELDS) if img_mode == "base64" else _IMG_FIELDS
+        seen_suffixes: set = set()
+        for field in fields:
             val = rec.get(field)
             if not val:
                 continue
             suffix = _IMG_SUFFIX.get(field, field)
+            # Tránh duplicate khi cả url và base64 fields đều có cùng suffix
+            if suffix in seen_suffixes:
+                continue
             if isinstance(val, str):
                 images.append((val, suffix))
+                seen_suffixes.add(suffix)
             elif isinstance(val, list):
                 for item in val:
                     if isinstance(item, str) and item:
@@ -372,6 +433,8 @@ class Parkingv8ApiClient:
                         typ = item.get("type") or item.get("Type") or suffix
                         if url:
                             images.append((url, _IMG_SUFFIX.get(str(typ), str(typ))))
+                if images:
+                    seen_suffixes.add(suffix)
         return images
 
 
@@ -576,7 +639,8 @@ class Parkingv8Worker:
                 return
             self._log(f"  [{endpoint.upper()} PAGE {page}] Đang gọi API...")
             t0 = time.time()
-            ok, data = api.search(endpoint, d_from, d_to, page, size)
+            ok, data = api.search(endpoint, d_from, d_to, page, size,
+                                  keyword=self.cfg.get("keyword", ""))
             elapsed = time.time() - t0
             if not ok:
                 self.stats["error"] += 1
@@ -650,12 +714,13 @@ class Parkingv8Worker:
             vtype = _p8_categorize(str(vt_name), self._vtype_cfg)
 
         # Gọi detail API để lấy ảnh (search result trả images=[])
+        img_mode = self.cfg.get("img_mode", "url")
         full_id = str(rec.get("id") or rec.get("Id") or "")
-        detail = api.fetch_detail(endpoint, full_id)
+        detail = api.fetch_detail(endpoint, full_id, img_mode=img_mode)
         if detail:
-            images = api.extract_detail_images(detail, endpoint)
+            images = api.extract_detail_images(detail, endpoint, img_mode=img_mode)
         else:
-            images = api.extract_images(rec)   # fallback nếu detail API lỗi
+            images = api.extract_images(rec, img_mode=img_mode)   # fallback nếu detail API lỗi
 
         bad_result = _p8_bad_reason(rec) if self.cfg.get("collect_bad") else None
         bad_reason = bad_result[0] if bad_result else None

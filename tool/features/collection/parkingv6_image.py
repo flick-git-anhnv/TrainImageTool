@@ -163,7 +163,7 @@ class Parkingv6ApiClient:
             return False
 
     def search(self, source: str, from_dt: str, to_dt: str,
-               page: int, size: int) -> Tuple[bool, dict]:
+               page: int, size: int, keyword: str = "") -> Tuple[bool, dict]:
         """POST reporting/parking/{source} — pageIndex 0-based, filter camelCase."""
         if not self._session:
             return False, {}
@@ -176,7 +176,7 @@ class Parkingv6ApiClient:
             "filter": {
                 "fromUtc":          from_dt,
                 "toUtc":            to_dt,
-                "keyword":          "",
+                "keyword":          keyword,
                 "laneIds":          [],
                 "identityGroupIds": [],
                 "transactionTypes": [],
@@ -451,7 +451,8 @@ class Parkingv6Worker:
                 return
             self._log(f"  [{source.upper()} PAGE {page}] Đang gọi API...")
             t0 = time.time()
-            ok, data = api.search(source, d_from, d_to, page, size)
+            ok, data = api.search(source, d_from, d_to, page, size,
+                                  keyword=self.cfg.get("keyword", ""))
             elapsed = time.time() - t0
             if not ok:
                 self.stats["error"] += 1

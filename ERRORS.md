@@ -130,4 +130,58 @@
 
 ---
 
+## [E015] `_snapshot` trả về tuple thay vì list — undo_stack.pop() phải unpack 2 giá trị
+- **File:** `tool/features/annotation/tab_bbox.py` — `_undo`, `_redo`
+- **Triệu chứng:** `TypeError: cannot unpack non-iterable list` nếu snapshot cũ (list) còn trong stack khi nâng cấp
+- **Nguyên nhân:** Sau khi đổi `_snapshot()` trả về `(bboxes, attrs)` tuple, các snapshot cũ trong stack vẫn là `list` từ session trước — không thể unpack
+- **Cách sửa:** Đây là backward-incompatible change nhưng undo stack không persist giữa các session (reset khi load ảnh mới), nên không ảnh hưởng runtime. Chỉ cần đảm bảo `_undo`/`_redo` luôn unpack `(bboxes, attrs)`.
+- **Ngày:** 2026-06-20
+
+---
+
+## [E017] BBoxEditor mũi tên ←/→ lùi/tiến 2 ảnh thay vì 1 ảnh
+- **File:** `tool/features/annotation/tab_bbox.py` — canvas & listbox key bindings
+- **Triệu chứng:** Nhấn ← một lần nhưng lùi 2 ảnh
+- **Nguyên nhân:** `BBoxEditorTab` có alias `_prev_image`/`_next_image` (line 2427-2428) khớp với `_global_left`/`_global_right` trong `app.py`. Khi canvas có focus, binding canvas + root đều fire → navigate 2 lần
+- **Cách sửa:** Thêm `return "break"` trong canvas và listbox binding `<Left>`/`<Right>` để chặn event bubble lên root
+- **Ngày:** 2026-06-23
+
+---
+
+## [E016] BBoxEditor Ctrl+Z lùi 2 step thay vì 1 step
+- **File:** `tool/features/annotation/tab_bbox.py` — canvas key bindings
+- **Triệu chứng:** Nhấn Ctrl+Z một lần nhưng `_undo()` bị gọi 2 lần → lùi 2 bước undo
+- **Nguyên nhân:** `<Control-z>` bind ở 2 chỗ: canvas (`tab_bbox.py:617`) và root window (`app.py:271`). Tkinter event propagation: canvas → parent frames → root, nên cả hai handler đều kích hoạt
+- **Cách sửa:** Thêm `return "break"` trong canvas binding để chặn event bubble lên root: `lambda e: (self._undo(), "break")[-1]`
+- **Ngày:** 2026-06-23
+
+---
+
+## [E018] Lotte API trả về `"RegistedPlate"` (typo) thay vì `"RegisteredPlate"`
+- **File:** `tool/features/collection/lotte_image.py` — `_li_bad_reason()` và `_process()`
+- **Triệu chứng:** Ảnh thẻ tháng xe máy không được lưu khi bật "Chỉ lấy ảnh có GT" — log hiện `skipped` tăng, `saved=0`
+- **Nguyên nhân:** Lotte API server trả về field `"RegistedPlate"` (thiếu chữ 'r'), nhưng code lookup `rec.get("RegisteredPlate")` → luôn trả về `None` → `gt_plate=None` → GT filter skip toàn bộ ảnh. Thẻ 74FA5C4D ví dụ có `RegistedPlate="29F1-6352"` nhưng bị bỏ qua.
+- **Cách sửa:** Thêm `rec.get("RegistedPlate")` làm fallback đầu tiên ở cả 2 chỗ: `_li_bad_reason()` line 55 và `_process()` line 525. Pattern: `rec.get("RegistedPlate") or rec.get("RegisteredPlate") or rec.get("CardPlate") or ...`
+- **Ngày:** 2026-06-23
+
+---
+
+## [E019] conf_thresh slider không cập nhật ảnh đã detect trước đó
+- **File:** `tool/features/detection/tab_yolo.py` — `_on_conf_thresh_change`, `_annotated_from_cache`, `_render_grid_thumb`
+- **Triệu chứng:** Kéo "Ngưỡng confidence" chỉ re-detect ảnh hiện tại; các ảnh trong cache (Detect All) không thay đổi
+- **Nguyên nhân:** `_on_conf_thresh_change` xóa cache ảnh hiện tại và re-detect thay vì filter display-time. `_annotated_from_cache` và `_render_grid_thumb` không filter boxes theo conf_thresh khi render từ cache.
+- **Cách sửa:** Đổi `conf_thresh` thành bộ lọc display-time: (1) không xóa cache trong `_on_conf_thresh_change`; (2) `_annotated_from_cache` filter boxes `conf_score >= conf_thresh`; (3) `_render_grid_thumb` tương tự, thêm conf_thresh vào cache_key; (4) cache hit path trong `_detect_and_display` tính lại n_det/summary theo filtered boxes.
+- **Ngày:** 2026-06-23
+
+---
+
+## [E020] _det_cache không persist giữa các session — Detect All phải chạy lại mỗi lần mở app
+- **File:** `tool/features/detection/tab_yolo.py` — `_detect_all`, `_load_image_list`
+- **Triệu chứng:** Detect All chạy xong nhưng sau khi đóng/mở app, phải chạy lại từ đầu
+- **Nguyên nhân:** `_det_cache` là in-memory dict, không được lưu ra disk
+- **Cách sửa:** `_save_det_cache_to_disk()` lưu JSON vào `{folder}/.kztek_det_cache.json` sau Detect All / Detect trang. `_load_det_cache_from_disk()` load lại khi `_load_image_list` được gọi, validate model path + iou; JSON class keys (string) được convert về int khi load.
+- **Ngày:** 2026-06-23
+
+---
+
 *Cập nhật file này mỗi khi gặp lỗi mới. Format: `[Ennn]` tăng dần.*

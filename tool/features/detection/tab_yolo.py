@@ -1,4 +1,5 @@
 # tab_yolo.py — YOLO Detection tab
+import fnmatch
 import os
 import queue as _q
 import threading
@@ -10,6 +11,7 @@ from ...core.constants import (BG, CARD, ACCENT, ACCENT2, TEXT, DIM, SUCCESS,
                          F_MAIN, F_BOLD, F_MONO, IMAGE_EXTENSIONS)
 import shutil
 from ...core.settings import _bind_cfg, _cfg_dir, _CFG, _cfg_save, _bind_history, _push_history, _get_history
+from ...core.ui_helpers import GridPageNav
 
 try:
     from PIL import Image, ImageDraw, ImageTk
@@ -63,6 +65,7 @@ class YoloTab(Frame):
         self.v_subfolder     = BooleanVar(value=False)
         self.v_show_original = BooleanVar(value=False)
         self.v_check_folder  = StringVar()
+        self.v_wrong_folder  = StringVar()
         self.v_conf_thresh   = DoubleVar(value=0.25)
         self.v_conf          = DoubleVar(value=0.30)
         self.v_iou           = DoubleVar(value=0.45)
@@ -123,6 +126,7 @@ class YoloTab(Frame):
         self._grid_render_idx = 0
         self._grid_rebuild_after = None
         self._grid_reflow_after  = None
+        self._session_restored = False
 
         _bind_cfg("yolo.model_path",    self.v_model_path)
         _bind_cfg("yolo.check_folder",  self.v_check_folder)
@@ -138,11 +142,13 @@ class YoloTab(Frame):
         _bind_cfg("yolo.export_rename", self.v_export_rename)
         _bind_cfg("yolo.grid_cols",     self._grid_cols_var)
         _bind_cfg("yolo.grid_rows",     self._grid_rows_var)
+        _bind_cfg("yolo.wrong_folder",  self.v_wrong_folder)
 
         self._build()
         self.after(200, self._auto_load_model)
         self.after(300, self._bind_keys)
         self.after(400, self._sync_slider_labels)
+        self.after(700, self._auto_restore_session)
 
     # ================================================================ BUILD ==
 
@@ -244,6 +250,23 @@ class YoloTab(Frame):
 
         Label(r0a, text="→ ✓ true/   ✗ false/",
               font=F_MAIN, bg=CARD, fg=DIM).pack(side=LEFT)
+
+        # Row 0b — folder lưu ảnh sai
+        r0b = Frame(top, bg=CARD)
+        r0b.pack(fill=X, pady=(4, 0))
+
+        Label(r0b, text="📁 Lưu ảnh sai:", font=F_MAIN, bg=CARD, fg=DIM).pack(side=LEFT, padx=(0, 4))
+        self.combo_wrong_folder = ttk.Combobox(r0b, textvariable=self.v_wrong_folder, font=F_MAIN)
+        self.combo_wrong_folder.pack(side=LEFT, fill=X, expand=True, padx=(0, 4))
+        _bind_history("h.yolo.wrong_folder", self.combo_wrong_folder)
+
+        Button(r0b, text="Chọn…", command=self._browse_wrong_folder,
+               bg="#3a3a5a", fg=TEXT, font=F_MAIN, relief="flat",
+               padx=8, cursor="hand2").pack(side=LEFT, padx=(0, 4))
+        Button(r0b, text="📂", command=self._open_wrong_folder,
+               bg=CARD, fg=TEXT, font=F_MAIN, relief="flat",
+               padx=6, cursor="hand2",
+               activebackground=ACCENT2, activeforeground="white").pack(side=LEFT)
 
         # Row 1 — conf slider (new feature: Ngưỡng confidence with resolution 0.05)
         r1 = Frame(top, bg=CARD)
@@ -377,6 +400,11 @@ class YoloTab(Frame):
         self.btn_detect_page.pack(side=LEFT, padx=(4, 0))
         self.lbl_cache_info = Label(r3, text="", font=F_MONO, bg=CARD, fg=DIM)
         self.lbl_cache_info.pack(side=LEFT, padx=(4, 0))
+        Button(r3, text="🗑", command=self._clear_cache,
+               bg=CARD, fg=DIM, font=F_MAIN, relief="flat",
+               padx=4, cursor="hand2",
+               activebackground="#3a1a1a", activeforeground=ACCENT,
+               ).pack(side=LEFT, padx=(2, 0))
 
         Frame(r3, bg=DIM, width=1).pack(side=LEFT, fill=Y, padx=(12, 6))
 
@@ -415,10 +443,31 @@ class YoloTab(Frame):
         search_row = Frame(sidebar, bg=CARD)
         search_row.pack(fill=X, padx=4, pady=(0, 3))
         Label(search_row, text="🔍", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
-        Entry(search_row, textvariable=self._v_search,
+        _search_entry = Entry(search_row, textvariable=self._v_search,
               bg="#16162a", fg=TEXT, insertbackground=TEXT,
-              relief="flat", font=F_MONO, bd=2).pack(side=LEFT, fill=X, expand=True, padx=(2, 0))
-        self._v_search.trace_add("write", lambda *_: self._schedule_search())
+              relief="flat", font=F_MONO, bd=2)
+        _search_entry.pack(side=LEFT, fill=X, expand=True, padx=(2, 4))
+        _search_entry.bind("<Return>", lambda e: self._apply_filter(self._active_filter))
+        Button(search_row, text="Tìm", command=lambda: self._apply_filter(self._active_filter),
+               bg=ACCENT2, fg="white", font=F_MAIN, relief="flat",
+               padx=6, cursor="hand2").pack(side=LEFT)
+
+        # Search hint
+        hint_lines = [
+            "Cách dùng ô tìm kiếm:",
+            "• Nhiều từ = AND:  sang cong 5",
+            "• *  = bất kỳ chuỗi:  07*  *canh",
+            "• ?  = đúng 1 ký tự:  07?507",
+            "• Kết hợp:  sang 07*",
+            "• Enter hoặc nút Tìm để áp dụng",
+        ]
+        hint_frame = Frame(sidebar, bg="#12122a", bd=0)
+        hint_frame.pack(fill=X, padx=4, pady=(0, 3))
+        for line in hint_lines:
+            Label(hint_frame, text=line,
+                  bg="#12122a", fg="#6060a0",
+                  font=("Segoe UI", 7), anchor=W,
+                  justify=LEFT).pack(fill=X, padx=4, pady=0)
 
         # Filter buttons
         filter_row = Frame(sidebar, bg=CARD)
@@ -616,6 +665,10 @@ class YoloTab(Frame):
                command=self._mark_page_correct,
                bg="#0d2a1a", fg="#4caf50", font=F_MAIN, relief="flat",
                padx=6, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+        Button(mark_row, text="💾 Lưu ảnh sai",
+               command=self._save_wrong_image,
+               bg="#2a1a0a", fg="#ffaa55", font=F_MAIN, relief="flat",
+               padx=6, cursor="hand2").pack(side=LEFT, padx=(8, 0))
         self.lbl_mark_state = Label(mark_row, text="", font=F_MONO,
                                      bg=BG, fg=DIM)
         self.lbl_mark_state.pack(side=LEFT, padx=(12, 0))
@@ -781,6 +834,9 @@ class YoloTab(Frame):
         self._update_class_list()
         if self.current_image_path:
             self._detect_and_display()
+        elif not self._session_restored:
+            # Model vừa load xong (lần đầu) → thử restore session
+            self.after(100, self._auto_restore_session)
 
     def _auto_load_model(self):
         saved = self.v_model_path.get()
@@ -792,6 +848,30 @@ class YoloTab(Frame):
                 "yolo11n.pt")
             if os.path.isfile(default):
                 self._load_model(default)
+
+    def _auto_restore_session(self):
+        """Tự động load lại folder + ảnh từ phiên làm việc trước."""
+        if self._session_restored:
+            return
+        if not self.model:
+            return
+        self._session_restored = True
+
+        folder   = _CFG.get("yolo.session.folder", "")
+        last_img = _CFG.get("yolo.session.image", "")
+
+        if not folder or not os.path.isdir(folder):
+            return
+
+        # Update path combo nhưng không trigger _load_path_input
+        self.v_check_folder.set(folder)
+
+        # Load folder (sẽ mở ảnh đầu tiên mặc định)
+        self._load_folder(folder)
+
+        # Nếu có ảnh được lưu và tồn tại → navigate tới đó
+        if last_img and os.path.isfile(last_img) and last_img in self.image_list:
+            self._open_image(last_img)
 
     def _update_class_list(self):
         self.lb_classes.delete(0, END)
@@ -913,6 +993,12 @@ class YoloTab(Frame):
             self._flt_class_var.set("Tất cả")
         if not self._base_folder and files:
             self._base_folder = os.path.dirname(files[0])
+        # Thử load cache từ disk (nếu model đã load và iou khớp)
+        _cache_loaded = self._load_det_cache_from_disk()
+        if hasattr(self, "lbl_cache_info") and _cache_loaded:
+            n_cached = len(self._det_cache)
+            self.lbl_cache_info.config(text=f"✓{n_cached}/{len(files)} (disk)")
+            self.after(0, self._update_class_filter_combo)
         self._active_filter = "all"
         for code, btn in self._filter_btns.items():
             btn.config(relief="sunken" if code == "all" else "flat",
@@ -920,6 +1006,9 @@ class YoloTab(Frame):
         self._rebuild_tree(files)
         self._update_filter_counts()
         if files:
+            # Lưu folder vào session
+            _CFG["yolo.session.folder"] = self._base_folder or os.path.dirname(files[0])
+            _cfg_save()
             self._open_image(files[0])
 
     def _rebuild_tree(self, files: list):
@@ -1001,8 +1090,23 @@ class YoloTab(Frame):
             filtered = list(self._all_images) + true_imgs + false_imgs
         search = self._v_search.get().strip().lower()
         if search:
-            filtered = [f for f in filtered
-                        if search in os.path.basename(f).lower()]
+            terms = search.split()
+            _base = self._base_folder or ""
+            def _matches(f, ts=terms, b=_base):
+                name = os.path.basename(f).lower()
+                try:
+                    rel = os.path.relpath(f, b).replace("\\", "/").lower() if b else f.lower()
+                except ValueError:
+                    rel = f.lower()
+                for t in ts:
+                    if "*" in t or "?" in t:
+                        if not fnmatch.fnmatch(name, t):
+                            return False
+                    else:
+                        if t not in rel:
+                            return False
+                return True
+            filtered = [f for f in filtered if _matches(f)]
         filtered = self._apply_det_filters(filtered)
         self._rebuild_tree(filtered)
 
@@ -1223,6 +1327,9 @@ class YoloTab(Frame):
         self._pan_start = None
         self._update_filmstrip()
         self._detect_and_display()
+        # Lưu ảnh đang xem vào session
+        _CFG["yolo.session.image"] = path
+        _cfg_save()
 
     def _is_active(self):
         """Trả về True nếu YOLO tab đang được chọn trong Notebook."""
@@ -1681,24 +1788,35 @@ class YoloTab(Frame):
                                   "pip install ultralytics opencv-python", parent=self.root)
             return
 
+        # Chỉ detect ảnh chưa có trong cache
+        with self._det_cache_lock:
+            pending = [p for p in self._all_images if p not in self._det_cache]
+
+        if not pending:
+            n = len(self._det_cache)
+            if hasattr(self, "lbl_cache_info"):
+                self.lbl_cache_info.config(text=f"✓{n}/{n} (đã xong)")
+            return
+
         self._det_stop_flag = False
         self._det_running = True
         self.btn_detect_all.config(text="■ Dừng", bg=ACCENT, fg="white")
-        all_images = list(self._all_images)
-        total = len(all_images)
-        sel_cls = self._get_sel_classes()
-        conf    = max(self.v_conf_thresh.get(), self.v_conf.get())
-        iou     = self.v_iou.get()
+        n_already = len(self._all_images) - len(pending)
+        n_total   = len(self._all_images)
+        sel_cls   = self._get_sel_classes()
+        conf      = max(self.v_conf_thresh.get(), self.v_conf.get())
+        iou       = self.v_iou.get()
 
         def run():
             import time
             BATCH   = 8
             last_ui = time.monotonic()
+            n_pending = len(pending)
 
-            for batch_start in range(0, total, BATCH):
+            for batch_start in range(0, n_pending, BATCH):
                 if self._det_stop_flag:
                     break
-                batch_paths = all_images[batch_start:batch_start + BATCH]
+                batch_paths = pending[batch_start:batch_start + BATCH]
                 try:
                     results = self.model.predict(
                         source=batch_paths, classes=sel_cls,
@@ -1727,12 +1845,12 @@ class YoloTab(Frame):
                 except Exception:
                     pass
 
-                done = min(batch_start + BATCH, total)
-                now  = time.monotonic()
-                # Chỉ update label text — KHÔNG rebuild tree trong khi đang chạy
-                if now - last_ui >= 0.5 or done >= total:
+                done_pending = min(batch_start + BATCH, n_pending)
+                done_total   = n_already + done_pending
+                now = time.monotonic()
+                if now - last_ui >= 0.5 or done_pending >= n_pending:
                     last_ui = now
-                    self.root.after(0, lambda d=done, t=total:
+                    self.root.after(0, lambda d=done_total, t=n_total:
                         self.lbl_cache_info.config(text=f"{d}/{t}"))
 
             self.root.after(0, self._on_detect_all_done)
@@ -1810,6 +1928,7 @@ class YoloTab(Frame):
         self.lbl_cache_info.config(text=f"✓{n}/{total}")
         self._grid_rendered_cache.clear()
         self._rebuild_grid()
+        self._save_det_cache_to_disk()
 
     def _on_detect_all_progress(self, done: int, total: int):
         self.lbl_cache_info.config(text=f"{done}/{total}")
@@ -1826,6 +1945,7 @@ class YoloTab(Frame):
         self._update_class_filter_combo()
         self._apply_filter(self._active_filter)
         self._rebuild_grid()
+        self._save_det_cache_to_disk()
 
     def _update_class_filter_combo(self):
         if not hasattr(self, "_flt_class_combo"):
@@ -1845,6 +1965,98 @@ class YoloTab(Frame):
         if cur not in vals:
             self._flt_class_var.set("Tất cả")
         self._update_must_have_lists()
+
+    # ================================================= CACHE DISK PERSISTENCE ==
+
+    def _save_det_cache_to_disk(self):
+        """Lưu _det_cache ra file JSON trong folder để restore khi mở lại app."""
+        import json as _json
+        folder = self._base_folder
+        if not folder or not os.path.isdir(folder):
+            return
+        cache_file = os.path.join(folder, ".kztek_det_cache.json")
+        model_path = self.v_model_path.get()
+        conf = max(self.v_conf_thresh.get(), self.v_conf.get())
+        iou  = self.v_iou.get()
+        with self._det_cache_lock:
+            data = {
+                k: {
+                    "n": v["n"],
+                    "classes": {str(ck): cv for ck, cv in v["classes"].items()},
+                    "boxes": [list(b) for b in v["boxes"]],
+                }
+                for k, v in self._det_cache.items()
+            }
+        payload = {
+            "meta": {"model": model_path, "conf": round(conf, 4),
+                     "iou": round(iou, 4), "version": 1},
+            "data": data,
+        }
+        try:
+            with open(cache_file, "w", encoding="utf-8") as f:
+                _json.dump(payload, f, ensure_ascii=False)
+            n = len(data)
+            if hasattr(self, "lbl_cache_info"):
+                self.lbl_cache_info.config(text=f"✓{n} (đã lưu)")
+        except Exception:
+            pass
+
+    def _load_det_cache_from_disk(self) -> bool:
+        """Load _det_cache từ file JSON nếu model + iou khớp.
+        Trả về True nếu load được ít nhất 1 ảnh."""
+        import json as _json
+        folder = self._base_folder
+        if not folder or not os.path.isdir(folder):
+            return False
+        cache_file = os.path.join(folder, ".kztek_det_cache.json")
+        if not os.path.isfile(cache_file):
+            return False
+        model_path = self.v_model_path.get()
+        if not model_path:
+            return False
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                payload = _json.load(f)
+            meta = payload.get("meta", {})
+            # Invalidate nếu model hoặc iou thay đổi (conf có thể filter lại display-time)
+            if meta.get("model") != model_path:
+                return False
+            if abs(meta.get("iou", 0.0) - self.v_iou.get()) > 0.005:
+                return False
+            data = payload.get("data", {})
+            loaded = {}
+            for img_path, v in data.items():
+                if not os.path.isfile(img_path):
+                    continue
+                loaded[img_path] = {
+                    "n": v["n"],
+                    "classes": {int(ck): cv for ck, cv in v.get("classes", {}).items()},
+                    "boxes": [tuple(b) for b in v.get("boxes", [])],
+                }
+            if not loaded:
+                return False
+            with self._det_cache_lock:
+                self._det_cache.update(loaded)
+            return True
+        except Exception:
+            return False
+
+    def _clear_cache(self):
+        """Xóa toàn bộ detect cache (memory + file disk)."""
+        with self._det_cache_lock:
+            self._det_cache.clear()
+        self._grid_rendered_cache.clear()
+        folder = self._base_folder
+        if folder:
+            cache_file = os.path.join(folder, ".kztek_det_cache.json")
+            try:
+                if os.path.isfile(cache_file):
+                    os.remove(cache_file)
+            except Exception:
+                pass
+        if hasattr(self, "lbl_cache_info"):
+            self.lbl_cache_info.config(text="")
+        self._schedule_grid_rebuild()
 
     def _schedule_det_filter(self):
         if self._flt_schedule_after:
@@ -2024,24 +2236,15 @@ class YoloTab(Frame):
         parent = self._grid_outer
 
         # ── Nav bar ────────────────────────────────────────────────────────
-        nav = Frame(parent, bg=CARD, pady=3)
-        nav.pack(side=BOTTOM, fill=X)
-
-        Button(nav, text="◀", width=3,
-               command=lambda: self._go_grid_page(-1),
-               bg=ACCENT2, fg="white", relief=FLAT, font=F_BOLD,
-               activebackground=ACCENT, activeforeground="white",
-               cursor="hand2").pack(side=LEFT, padx=(4, 2))
-
-        self._grid_nav_lbl = Label(nav, text="—", bg=CARD, fg=TEXT,
-                                   font=F_MAIN, anchor=CENTER)
-        self._grid_nav_lbl.pack(side=LEFT, expand=True, fill=X)
-
-        Button(nav, text="▶", width=3,
-               command=lambda: self._go_grid_page(+1),
-               bg=ACCENT2, fg="white", relief=FLAT, font=F_BOLD,
-               activebackground=ACCENT, activeforeground="white",
-               cursor="hand2").pack(side=RIGHT, padx=(2, 4))
+        self._grid_page_nav = GridPageNav(
+            parent,
+            on_first=lambda: self._go_grid_page_abs(0),
+            on_prev=lambda: self._go_grid_page(-1),
+            on_next=lambda: self._go_grid_page(+1),
+            on_last=lambda: self._go_grid_page_abs(-1),
+            on_direct=self._go_grid_page_direct,
+        )
+        self._grid_page_nav.pack(side=BOTTOM, fill=X)
 
         # ── Toolbar: Cột + Hàng ────────────────────────────────────────────
         gtb = Frame(parent, bg=CARD, padx=6, pady=2)
@@ -2123,6 +2326,39 @@ class YoloTab(Frame):
         self._grid_page = max(0, min(max_page, self._grid_page + delta))
         self._rebuild_grid()
 
+    def _go_grid_page_abs(self, page: int):
+        """Nhảy tới trang đầu (0) hoặc trang cuối (-1)."""
+        if not self.image_list:
+            return
+        n_cols   = max(1, self._grid_cols_var.get())
+        n_rows   = max(1, self._grid_rows_var.get())
+        per_page = n_cols * n_rows
+        total    = len(self.image_list)
+        max_page = max(0, (total - 1) // per_page)
+        self._grid_page = 0 if page == 0 else max_page
+        self._rebuild_grid()
+
+    def _go_grid_page_direct(self):
+        """Nhảy tới số trang nhập trong Entry (1-indexed, validate + clamp)."""
+        if not self.image_list:
+            return
+        try:
+            page = int(self._grid_page_nav.page_var.get()) - 1  # 1-indexed → 0-indexed
+        except ValueError:
+            self._grid_page_nav.page_var.set(str(self._grid_page + 1))
+            return
+        n_cols   = max(1, self._grid_cols_var.get())
+        n_rows   = max(1, self._grid_rows_var.get())
+        per_page = n_cols * n_rows
+        total    = len(self.image_list)
+        max_page = max(0, (total - 1) // per_page)
+        new_page = max(0, min(max_page, page))
+        if new_page == self._grid_page:
+            self._grid_page_nav.page_var.set(str(new_page + 1))
+            return
+        self._grid_page = new_page
+        self._rebuild_grid()
+
     def _rebuild_grid(self):
         if not hasattr(self, "_grid_inner"):
             return
@@ -2138,7 +2374,7 @@ class YoloTab(Frame):
         total    = len(files)
 
         if not total:
-            self._grid_nav_lbl.config(text="—")
+            self._grid_page_nav.update(0, 0, 0)
             Label(self._grid_inner, text="Không có ảnh",
                   bg="#0d0d1e", fg=DIM, font=F_MAIN).grid(
                   row=0, column=0, pady=20)
@@ -2148,8 +2384,7 @@ class YoloTab(Frame):
         self._grid_page = max(0, min(max_page, self._grid_page))
         start = self._grid_page * per_page
         end   = min(start + per_page, total)
-        self._grid_nav_lbl.config(
-            text=f"{self._grid_page + 1}/{max_page + 1}  ({total})")
+        self._grid_page_nav.update(self._grid_page, max_page, total)
 
         # Tính tw/th từ kích thước thực của frame
         fw = max(self._grid_frame.winfo_width(),  200)
@@ -2235,10 +2470,11 @@ class YoloTab(Frame):
         """Thumbnail với bbox overlay từ detect cache."""
         if not _PIL_OK:
             return None
-        tw, th   = self._grid_thumb_w, self._grid_thumb_h
-        in_cache = img_path in self._det_cache
-        lw       = max(1, self.v_line_width.get())
-        cache_key = (img_path, tw, th, in_cache, lw)
+        tw, th      = self._grid_thumb_w, self._grid_thumb_h
+        in_cache    = img_path in self._det_cache
+        lw          = max(1, self.v_line_width.get())
+        conf_thresh = self.v_conf_thresh.get()
+        cache_key   = (img_path, tw, th, in_cache, lw, conf_thresh)
         if cache_key in self._grid_rendered_cache:
             return self._grid_rendered_cache[cache_key]
         try:
@@ -2251,12 +2487,14 @@ class YoloTab(Frame):
             drw = _ID.Draw(pil)
             iw, ih = pil.size
             for box in data["boxes"]:
+                if len(box) > 7 and float(box[7]) < conf_thresh:
+                    continue
                 cid, cx_n, cy_n, w_n, h_n = box[0], box[1], box[2], box[3], box[4]
                 x1 = max(0, int((cx_n - w_n / 2) * iw))
                 y1 = max(0, int((cy_n - h_n / 2) * ih))
                 x2 = min(iw - 1, int((cx_n + w_n / 2) * iw))
                 y2 = min(ih - 1, int((cy_n + h_n / 2) * ih))
-                color = _THUMB_PALETTE[cid % len(_THUMB_PALETTE)]
+                color = _THUMB_PALETTE[int(cid) % len(_THUMB_PALETTE)]
                 drw.rectangle([x1, y1, x2, y2], outline=color, width=lw)
         pil.thumbnail((tw, th), Image.Resampling.LANCZOS)
         bg_img = Image.new("RGB", (tw, th), "#1a1a2e")
@@ -2303,10 +2541,9 @@ class YoloTab(Frame):
 
     def _on_conf_thresh_change(self, _=None):
         self.lbl_conf_thresh_val.config(text=f"{self.v_conf_thresh.get():.2f}")
+        # conf_thresh là bộ lọc hiển thị — KHÔNG xóa cache, chỉ re-render từ cache với ngưỡng mới
+        self._grid_rendered_cache.clear()
         if self.current_image_path and self.model:
-            # Xóa cache ảnh hiện tại → force re-detect với ngưỡng mới
-            with self._det_cache_lock:
-                self._det_cache.pop(self.current_image_path, None)
             self._detect_and_display()
 
     def _on_slider_change(self, _=None):
@@ -2508,6 +2745,11 @@ class YoloTab(Frame):
             pass
         if not data or data["n"] == 0:
             return pil
+        conf_thresh = self.v_conf_thresh.get()
+        visible_boxes = [b for b in data["boxes"]
+                         if (len(b) > 7 and float(b[7]) >= conf_thresh)]
+        if not visible_boxes:
+            return pil
         lw = max(1, self.v_line_width.get())
         fs = max(6, self.v_font_size.get())
         iw, ih = pil.size
@@ -2534,7 +2776,7 @@ class YoloTab(Frame):
                 names = dict(self.model.names) or {}
             except Exception:
                 pass
-        for box_t in data["boxes"]:
+        for box_t in visible_boxes:
             cid        = int(box_t[0])
             cx_n, cy_n, w_n, h_n = box_t[1], box_t[2], box_t[3], box_t[4]
             conf_score = float(box_t[7]) if len(box_t) > 7 else 0.0
@@ -2576,13 +2818,14 @@ class YoloTab(Frame):
         self._det_pending = False
         self.lbl_result.config(text="⏳ Đang nhận diện…", fg=DIM)
 
-        img_path  = self.current_image_path  # capture trước khi user chuyển ảnh
-        model1    = self.model
-        model2    = self.model2
-        sel_cls   = self._get_sel_classes()
+        img_path        = self.current_image_path  # capture trước khi user chuyển ảnh
+        model1          = self.model
+        model2          = self.model2
+        sel_cls         = self._get_sel_classes()
         # Capture params trên main thread (Tkinter widget không thread-safe)
-        conf_val  = max(self.v_conf_thresh.get(), self.v_conf.get())
-        iou_val   = self.v_iou.get()
+        conf_val        = max(self.v_conf_thresh.get(), self.v_conf.get())
+        iou_val         = self.v_iou.get()
+        conf_thresh_val = self.v_conf_thresh.get()
         # Dùng cache nếu có (nhất quán với grid thumbnail), trừ dual-model mode
         with self._det_cache_lock:
             cached = self._det_cache.get(img_path) if model2 is None else None
@@ -2590,7 +2833,7 @@ class YoloTab(Frame):
         def _run():
             try:
                 if cached is not None:
-                    # ── Cache hit: vẽ từ cache, không gọi model ──
+                    # ── Cache hit: vẽ từ cache, filter theo conf_thresh hiện tại ──
                     pil1     = self._annotated_from_cache(img_path)
                     ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
                     try:
@@ -2599,7 +2842,14 @@ class YoloTab(Frame):
                         pil_orig = ImageOps.exif_transpose(pil_orig)
                     except Exception:
                         pil_orig = None
-                    n_det = cached["n"]
+                    # Tính n_det và summary chỉ với boxes vượt qua conf_thresh
+                    filtered_boxes = [b for b in cached["boxes"]
+                                      if (len(b) > 7 and float(b[7]) >= conf_thresh_val)]
+                    n_det = len(filtered_boxes)
+                    filtered_classes = {}
+                    for b in filtered_boxes:
+                        cid = int(b[0])
+                        filtered_classes[cid] = filtered_classes.get(cid, 0) + 1
                     _names = {}
                     try:
                         _names = dict(model1.names) or {}
@@ -2607,7 +2857,7 @@ class YoloTab(Frame):
                         pass
                     summary = "  |  ".join(
                         f"{_names.get(k, str(k))}: {v}"
-                        for k, v in cached["classes"].items())
+                        for k, v in filtered_classes.items())
                     self.root.after(0, lambda: self._on_detect_done(
                         img_path, None, pil1, ann1_bgr, pil_orig,
                         n_det, summary, None, None, None, 0, ""))
@@ -2717,7 +2967,48 @@ class YoloTab(Frame):
         if pending:
             self._detect_and_display()
 
-    # ================================================ UNDETECTED SAVE ==
+    # ================================================ WRONG FOLDER SAVE ==
+
+    def _browse_wrong_folder(self):
+        cur = self.v_wrong_folder.get().strip()
+        init = cur if cur and os.path.isdir(cur) else _cfg_dir("yolo.wrong_folder") or None
+        folder = filedialog.askdirectory(
+            title="Chọn thư mục lưu ảnh sai",
+            initialdir=init,
+            parent=self.root)
+        if folder:
+            self.v_wrong_folder.set(folder)
+            _push_history("h.yolo.wrong_folder", folder)
+            self.combo_wrong_folder["values"] = _get_history("h.yolo.wrong_folder")
+
+    def _open_wrong_folder(self):
+        p = self.v_wrong_folder.get().strip()
+        if p and os.path.isdir(p):
+            os.startfile(p)
+
+    def _save_wrong_image(self):
+        """Copy ảnh hiện tại vào folder lưu ảnh sai đã cấu hình."""
+        path = self.current_image_path
+        if not path or not os.path.isfile(path):
+            messagebox.showwarning("Chưa có ảnh",
+                                   "Vui lòng chọn ảnh trước.", parent=self.root)
+            return
+        dest_dir = self.v_wrong_folder.get().strip()
+        if not dest_dir:
+            messagebox.showwarning("Chưa chọn thư mục",
+                                   "Vui lòng chọn thư mục lưu ảnh sai (ô phía trên).",
+                                   parent=self.root)
+            return
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = os.path.join(dest_dir, os.path.basename(path))
+            shutil.copy2(path, dest)
+            self.lbl_mark_state.config(
+                text=f"💾 Đã lưu: {os.path.basename(path)}", fg="#ffaa55")
+            self.after(3000, lambda: self.lbl_mark_state.config(text=""))
+            self.v_status.set(f"💾 Lưu ảnh sai → {dest}")
+        except Exception as e:
+            messagebox.showerror("Lỗi lưu ảnh", str(e), parent=self.root)
 
     # ======================================================= SAVE RESULT ==
 

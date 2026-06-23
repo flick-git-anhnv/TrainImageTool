@@ -33,6 +33,7 @@
 | `tool/features/analysis/` | Tab + logic: Stats, Plate Search, core_gt |
 | `tool/features/detection/` | Tab: YOLO Detect, LPR Tester |
 | `tool/features/training/` | Tab: YOLO Train |
+| `tool/shared/` | Module tái dùng nhiều tab: bbox_renderer, label_io, canvas_zoom, detect_cache, filmstrip |
 | `tool/utils/` | Widget/tiện ích dùng chung: BadImageViewer, migrate_structure |
 | `.kztek_tools_settings.json` | Persistence tất cả cài đặt người dùng |
 
@@ -56,6 +57,76 @@ TEXT    = "#e0e0f0"
 DIM     = "#9090b0"
 SUCCESS = "#4caf50"
 ```
+
+---
+
+## Clean Architecture — Quy tắc bắt buộc (KHÔNG ĐƯỢC VI PHẠM)
+
+### 0. Giới hạn độ dài file — TUYỆT ĐỐI
+
+| Loại file | Giới hạn cứng | Khuyến nghị |
+|---|---|---|
+| Tab UI (`features/*/tab_*.py`) | **500 dòng** | 300 dòng |
+| Logic/helper (`shared/`, `core/`) | **300 dòng** | 200 dòng |
+| Bất kỳ file `.py` nào | **800 dòng** | — |
+
+**Khi file gần đạt giới hạn: tách ngay, không thêm tiếp.**
+
+Lý do: file dài → khó đọc, khó test, khó tái dùng, tốn nhiều context window, gây lỗi khi edit.
+
+---
+
+### Kiến trúc 4 lớp
+
+```
+core/        ← Hạ tầng dùng chung (constants, settings, ui_helpers)
+             ← KHÔNG import từ features/ hay shared/
+shared/      ← Widget / logic tái dùng nhiều tab (filmstrip, canvas_zoom, …)
+             ← Import từ core/ ONLY
+features/*/  ← Tab UI: chỉ orchestrate, KHÔNG chứa business logic
+             ← Import từ core/ và shared/
+utils/       ← Tiện ích độc lập (BadImageViewer, …)
+```
+
+**Quy tắc import:**
+- `features/*/` → `...core.X` (3 dấu chấm), `...shared.X`
+- `shared/` → `..core.X` (2 dấu chấm)
+- `core/` → stdlib, third-party ONLY — không import features/shared/utils
+
+---
+
+### Khi nào phải tách file
+
+1. **Hàm > 40 dòng** → extract sang `shared/` hoặc helper module
+2. **Logic xuất hiện ≥ 2 lần** trong codebase → extract sang `shared/`
+3. **File tab sắp vượt 500 dòng** → tách phần logic xuống `shared/`
+4. **Thêm tính năng mới vào tab đã ≥ 400 dòng** → tách trước, thêm sau
+
+**Các module đã có trong `tool/shared/` — dùng lại, không viết lại:**
+
+| Module | Cung cấp |
+|---|---|
+| `shared/bbox_renderer.py` | `PALETTE`, `draw_bboxes_on_pil`, `draw_bboxes_thumb`, `make_padded_thumb`, `open_image_safe` |
+| `shared/label_io.py` | `read_yolo_normalized`, `read_yolo_pixel`, `write_yolo_labels`, `label_path_for`, `read_attrs`, `write_attrs`, `load_progress`, `save_progress` |
+| `shared/canvas_zoom.py` | `CanvasZoomMixin` — zoom/pan state + handlers cho Canvas |
+| `shared/detect_cache.py` | `DetectCache` — thread-safe cache YOLO detect + disk persistence + filter |
+| `shared/filmstrip.py` | `FilmstripPanel(Frame)` — grid filmstrip phân trang |
+
+---
+
+### Tab file chỉ được chứa
+
+- `__init__`: khai báo biến, bind cfg, gọi `_build()`
+- `_build` / `_build_*`: tạo widget, layout
+- `_bind_shortcuts()`: đăng ký phím tắt
+- Thin orchestration methods (<20 dòng): gọi shared/core và cập nhật UI state
+
+**KHÔNG được chứa trong tab:**
+- Đọc/ghi file (→ `shared/label_io.py`)
+- Vẽ bbox lên PIL (→ `shared/bbox_renderer.py`)
+- Logic cache/filter (→ `shared/detect_cache.py`)
+- Grid filmstrip (→ `shared/filmstrip.py`)
+- Zoom/pan canvas (→ `shared/canvas_zoom.py`)
 
 ---
 

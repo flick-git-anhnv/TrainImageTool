@@ -1,5 +1,5 @@
 # CODE_GRAPH.md — KZTEK Image Tools
-<!-- Cập nhật: 2026-06-20 | BBoxEditorTab: +_on_numkey_label — phím 0-9 chọn class và relabel bbox đang chọn -->
+<!-- Cập nhật: 2026-06-23 | Thêm tool/shared/ + tab_detect_label.py (gộp YoloDetect + BBoxEditor) -->
 
 ## Hướng dẫn sử dụng
 
@@ -24,8 +24,9 @@ tool/core/app.py (App)
     → tool.features.detection.{tab_yolo, tab_lpr_tester, tab_slot_classifier, tab_classifier_tester}
     → tool.features.training.{tab_train, tab_classifier}
 
-tool/core/* (HUB — không import features/utils)
-tool/features/*/* → ...core.*   (3 dots)
+tool/core/* (HUB — không import features/shared/utils)
+tool/shared/* → ..core.*        (2 dots) — dùng bởi nhiều features
+tool/features/*/* → ...core.*   (3 dots), ...shared.*
 tool/utils/*      → ..core.*    (2 dots)
 ```
 
@@ -75,9 +76,9 @@ Global: `_CFG: dict`, `_SETTINGS_FILE: Path`
 ---
 
 #### `tool/core/ui_helpers.py`
-Class: `DateTimePicker(Frame)`
+Class: `GridPageNav(Frame)`, `DateTimePicker(Frame)`
 
-| Hàm | Chữ ký | Mô tả |
+| Hàm / Class | Chữ ký | Mô tả |
 |---|---|---|
 | `_style_all` | `()` | Cấu hình ttk styles theme tối KZTEK |
 | `_make_scrollable_frame` | `(parent)` | Tạo Canvas + Frame cuộn được |
@@ -89,6 +90,7 @@ Class: `DateTimePicker(Frame)`
 | `_pb_row` | `(parent)` | Build hàng progress bar |
 | `_set_progress` | `(lbl, pb, done, total, root)` | Cập nhật tiến trình |
 | `_action_btn` | `(parent, text, cmd, color, **kw)` | Tạo nút hành động |
+| `GridPageNav` | `(parent, *, on_prev, on_next, on_first, on_last, on_direct, extra_right=None)` | Thanh phân trang dùng chung (⏮ ◀ Trước … Sau ▶ ⏭); `.page_var`, `.update(cur, max, total)` |
 
 ---
 
@@ -192,6 +194,72 @@ Tab đã đăng ký (theo thứ tự, 15 tab):
 
 ---
 
+### tool/shared/
+
+> Module tái dùng cho nhiều tab. Import pattern: `from ...shared.X import Y` (3 dots từ features).
+
+#### `tool/shared/bbox_renderer.py`
+| Symbol | Mô tả |
+|---|---|
+| `PALETTE: list[str]` | 15 màu hex cho class 0–14 (KZTEK brand đầu) |
+| `hex_to_rgb(hex)` | Chuyển hex → tuple RGB |
+| `draw_bboxes_on_pil(pil, boxes, class_names, *, conf_thresh, line_width, font_size, palette, single_color)` | Vẽ bbox + label text; trả về PIL mới |
+| `draw_bboxes_thumb(pil, boxes, *, conf_thresh, filter_cid, line_width, palette)` | Vẽ bbox outline (không text) lên thumbnail |
+| `make_padded_thumb(pil, tw, th, bg)` | Resize giữ tỉ lệ + padding vào nền tw×th |
+| `open_image_safe(path)` | Mở PIL + EXIF rotate, trả None nếu lỗi |
+
+#### `tool/shared/label_io.py`
+| Symbol | Mô tả |
+|---|---|
+| `_ATTR_DEFAULTS` | Dict default cho sidecar attrs |
+| `read_yolo_normalized(lbl_path)` | Đọc .txt → list tuple (cid, cx, cy, w, h) normalized |
+| `read_yolo_pixel(lbl_path, img_w, img_h)` | Đọc .txt → list [cid, x1, y1, x2, y2] pixel |
+| `write_yolo_labels(lbl_path, bboxes_px, img_w, img_h)` | Ghi pixel bboxes → YOLO normalized |
+| `label_path_for(img_path, lbl_dir)` | Trả về Path .txt tương ứng |
+| `attrs_path_for(lbl_path)` | Trả về Path .attrs.json |
+| `read_attrs(lbl_path, n_bboxes, defaults)` | Đọc sidecar attrs |
+| `write_attrs(lbl_path, attrs, defaults)` | Ghi sidecar attrs |
+| `load_progress(progress_file)` | Đọc .kztek_progress.json → set tên file đã làm |
+| `save_progress(progress_file, done_set)` | Ghi tiến độ |
+
+#### `tool/shared/canvas_zoom.py`
+| Symbol | Mô tả |
+|---|---|
+| `CanvasZoomMixin` | Mixin zoom/pan cho class có `_canvas` và `_pil_img` |
+| `_zoom_init()` | Khởi tạo state (gọi trong `__init__`) |
+| `_zoom_reset()` | Reset về fit-to-canvas |
+| `_zoom_step(factor)` | Zoom theo factor, tâm canvas |
+| `_on_zoom_wheel(event)` | Handler scroll-wheel zoom tại cursor |
+| `_on_pan_start/drag/end(event)` | Middle-mouse pan handlers |
+| `_calc_zoom_offsets()` | Trả về `(scale, nw, nh, off_x, off_y)` để render |
+
+#### `tool/shared/detect_cache.py`
+| Symbol | Mô tả |
+|---|---|
+| `CACHE_FILENAME` | `".kztek_det_cache.json"` |
+| `DetectCache` | Thread-safe cache kết quả YOLO detect |
+| `.get(path)` | Lấy entry |
+| `.put(path, n, classes, boxes)` | Ghi entry |
+| `.has(path)` | Kiểm tra tồn tại |
+| `.pop(path)` | Xóa entry |
+| `.clear()` | Xóa toàn bộ |
+| `.snapshot()` | Bản sao shallow toàn bộ cache |
+| `.save_to_disk(folder, model_path, conf, iou)` | Lưu disk |
+| `.load_from_disk(folder, model_path, iou)` | Load disk; `True` nếu thành công |
+| `.filter_files(files, *, cls_filter, ndet_min, ndet_max, area_min, area_max, w_min, w_max, h_min, h_max, must_have, must_not)` | Lọc file theo cache |
+| `.all_class_counts()` | `{cid: count}` tổng hợp |
+
+#### `tool/shared/filmstrip.py`
+| Symbol | Mô tả |
+|---|---|
+| `FilmstripPanel(Frame)` | Grid filmstrip phân trang, lazy render |
+| `__init__(master, *, get_thumb, on_select, cols_var, rows_var, extra_nav)` | `get_thumb(path,tw,th)->PIL.Image` |
+| `.load(file_list, current_path)` | Nạp danh sách ảnh mới |
+| `.set_current(path)` | Cập nhật ảnh đang chọn, scroll tới trang |
+| `.invalidate_cache(path)` | Xóa thumbnail cache (khi label thay đổi) |
+
+---
+
 ### tool/features/annotation/
 
 #### `tab_bbox.py` → Class `BBoxEditorTab(Frame)`
@@ -206,15 +274,29 @@ Tab đã đăng ký (theo thứ tự, 15 tab):
 | `_save_labels` | Lưu file .txt YOLO |
 | `_delete_page_to_deleted` | Di chuyển toàn bộ ảnh+label trong trang grid vào thư mục `deleted/` (có thể khôi phục) |
 | `_lbl_labelcount` | Label hiển thị tổng số bbox: không filter → đếm tất cả; có filter class → chỉ đếm class đó |
-| `_on_canvas_wheel` | Mouse wheel → zoom in/out centered at cursor (Paint-like) |
-| `_zoom_step(factor)` | Zoom +/- centered on canvas center (dùng cho nút +/−) |
-| `_zoom_reset` | Reset zoom về Fit (Ctrl+0 hoặc click label zoom%) |
+| `_on_canvas_wheel` | Mouse wheel → BILINEAR preview ngay + schedule LANCZOS settle 200ms |
+| `_zoom_step(factor)` | Zoom +/- centered on canvas center; cancel settle, force LANCZOS |
+| `_zoom_reset` | Reset zoom về Fit; cancel settle, clear render cache |
+| `_render(resample)` | Re-render canvas; cache `_render_nw_nh` → skip PIL resize khi pan (size unchanged) |
 | `_on_pan_start/drag/end` | Middle-mouse drag → pan khi zoomed in |
 | `_ctrl_panning` | Flag: Ctrl+left-drag trên vùng trống → pan (thay rubber-band) |
-| `_escape_action` | Escape: cancel poly/draw/deselect |
+| `_escape_action` | Escape: cancel poly/draw/deselect (khôi phục bbox ẩn) |
+| `_hide_others` | Flag: khi đang vẽ/kéo/resize → `_draw_all_bboxes` chỉ vẽ bbox trong `_selected_set`, ẩn phần còn lại; tắt + render lại khi release |
+| `_draw_all_bboxes` (only_draw) | Hover → chỉ vẽ bbox đang hover (+ bbox đang chọn), ẩn còn lại; vẽ/kéo/resize → chỉ bbox đang thao tác |
 | `_go_page_abs(page)` | Nhảy tới trang đầu (0) hoặc trang cuối (-1) — nút ⏮ ⏭ |
 | `_go_page_direct()` | Nhảy tới số trang nhập trong Entry (validate + clamp) |
 | `_on_numkey_label(n)` | Phím 0-9: chọn class n; nếu có bbox đang chọn → relabel ngay |
+| `_bbox_attrs` | List[dict] song song với `_bboxes`: `{condition, occluded, truncated, difficult}` mỗi bbox |
+| `_default_attrs()` | Trả về dict attrs mặc định `{condition:day, occluded:none, truncated:false, difficult:false}` |
+| `_attrs_path(lbl_path)` | Đường dẫn sidecar `.attrs.json` bên cạnh file `.txt` |
+| `_read_attrs(path, n)` | Đọc sidecar JSON attrs; pad/trim về đúng `n` bbox |
+| `_write_attrs(path)` | Ghi sidecar; xóa file nếu tất cả attrs là mặc định |
+| `_write_attrs_to(path, attrs)` | Ghi attrs list tùy ý ra path (dùng cho copy_to_next) |
+| `_refresh_attr_bar()` | Load attrs của bbox đang chọn vào thanh attribute bar |
+| `_on_attr_change(key)` | Callback khi user đổi combobox attribute |
+| `_set_attr_bar_state(state)` | Enable/disable toàn bộ combobox trong attr bar |
+| `_restore_session()` | Khởi động: auto load folder + jump tới ảnh cuối cùng đã mở |
+| `_do_restore_nav()` | Điều hướng đến `_restore_img` sau khi async filter hoàn thành |
 
 ---
 
@@ -274,6 +356,34 @@ Yêu cầu: `_PADDLE_OK`
 
 ### tool/features/detection/
 
+#### `tab_detect_label.py` → Class `DetectLabelTab(Frame, CanvasZoomMixin)`
+Tab gộp YOLO Detect + BBox Label Editor. Import: `shared.{bbox_renderer, label_io, canvas_zoom, detect_cache, filmstrip}`.
+
+| Method | Mô tả |
+|---|---|
+| `_build_toolbar()` | Model path, conf/iou slider, Detect + Stop button |
+| `_build_left(paned)` | Folder rows, labels, filter panel, FilmstripPanel |
+| `_build_filter(parent)` | Class combo, nDet/size/W/H entries, must-have/not-have listboxes |
+| `_build_canvas(paned)` | Canvas toolbar, Canvas widget, bind zoom/pan/draw events |
+| `_load_folder()` | Scan image folder, load cache từ disk |
+| `_detect_folder()` | Validate + spawn detect thread |
+| `_detect_thread()` | Thread: run YOLO → DetectCache → save disk → update UI |
+| `_load_image(path)` | Load PIL, boxes từ .txt hoặc cache, _zoom_reset, render |
+| `_render(resample)` | Override CanvasZoomMixin: render PIL + draw bbox canvas items |
+| `_get_thumb(path,tw,th)` | Callback filmstrip: PIL + bbox overlay → padded thumb |
+| `_on_press/drag/release` | Draw new bbox bằng click+drag |
+| `_hit_test(cx,cy)` | Trả về index bbox tại canvas coords |
+| `_canvas_to_norm(cx,cy)` | Chuyển canvas px → normalized coords |
+| `_apply_filter()` | Lọc qua DetectCache.filter_files() → reload filmstrip |
+| `_save_labels()` | Ghi self._boxes → .txt (normalized) |
+| `_export_cache()` | Ghi toàn bộ detect cache → .txt files |
+| `_nav(delta)` | Điều hướng prev/next trong filtered list |
+| `_on_numkey(event)` | Phím 0–9: đổi class bbox đang chọn hoặc set cur_class |
+
+Settings keys prefix: `dl.*`
+
+---
+
 #### `tab_yolo.py` → Class `YoloTab(Frame)`
 | Method | Mô tả |
 |---|---|
@@ -289,13 +399,21 @@ Yêu cầu: `_PADDLE_OK`
 | `_schedule_det_filter` | Debounce 300ms khi gõ filter kích thước |
 | `_clear_det_filters` | Xóa tất cả detect filters |
 | `_apply_det_filters` | Áp dụng filter class/n_det/bbox vào danh sách ảnh |
+| `_save_det_cache_to_disk` | Lưu `_det_cache` ra `{folder}/.kztek_det_cache.json` sau Detect All |
+| `_load_det_cache_from_disk` | Load cache từ disk khi `_load_image_list`; validate model + iou |
+
+| `_browse_wrong_folder` | Mở dialog chọn thư mục lưu ảnh sai |
+| `_open_wrong_folder` | Mở Explorer tại thư mục lưu ảnh sai |
+| `_save_wrong_image` | Copy ảnh hiện tại vào `v_wrong_folder` (không move) |
 
 | `_open_video_detect` | Dialog chọn nguồn video (file / webcam) |
 | `_launch_video_window` | Cửa sổ detect liên tục: worker thread đọc frame + YOLO, main thread poll queue 16ms |
 
 | `_toggle_grid` | Ẩn/hiện grid panel bằng PanedWindow |
-| `_build_grid_panel` | Build scrollable thumbnail grid UI vào `_grid_outer` |
-| `_rebuild_grid` | Populate `_grid_inner` với cells từ `image_list` |
+| `_build_grid_panel` | Build thumbnail grid UI với nav bar ⏮◀Entry▶⏭ |
+| `_rebuild_grid` | Populate `_grid_inner` với cells từ `image_list`; cập nhật `_grid_page_entry_var` |
+| `_go_grid_page_abs(page)` | Nhảy tới trang đầu (0) hoặc trang cuối (-1) — nút ⏮ ⏭ |
+| `_go_grid_page_direct` | Nhảy tới số trang nhập trong Entry (validate + clamp, 1-indexed) |
 | `_grid_render_batch` | Render thumbnail theo batch 20 ảnh/16ms (lazy) |
 | `_render_grid_thumb` | Render thumbnail PIL với bbox overlay từ cache |
 | `_set_grid_thumb` | Gán PIL → PhotoImage vào Label |
@@ -304,9 +422,13 @@ Yêu cầu: `_PADDLE_OK`
 | `_grid_scroll_to_current` | Cuộn grid tới cell hiện tại |
 | `_on_grid_size_change` | Đổi kích thước thumbnail, xóa cache render |
 | `_schedule_grid_rebuild` | Debounce 200ms trước khi rebuild grid |
+| `_auto_restore_session` | Load lại folder + ảnh từ `yolo.session.*` trong config (chạy 1 lần sau model load) |
 
-Cache: `_det_cache = {path: {"n": int, "classes": {cid: count}, "boxes": [(cid, cx_n, cy_n, w_n, h_n, w_px, h_px)]}}`
-Hỗ trợ: YOLO v8/v11, dual-model, drag-drop, detect all + filter class/size + grid thumbnail panel
+Cache: `_det_cache = {path: {"n": int, "classes": {cid: count}, "boxes": [(cid, cx_n, cy_n, w_n, h_n, w_px, h_px, conf_score)]}}`
+Disk cache: `{folder}/.kztek_det_cache.json` — persist giữa session; validate model path + iou khi load
+`conf_thresh` (slider Ngưỡng) là **display-time filter** — không xóa cache, filter boxes khi render
+Session keys: `yolo.session.folder`, `yolo.session.image`
+Hỗ trợ: YOLO v8/v11, dual-model, drag-drop, detect all + filter class/size + grid thumbnail panel + session restore
 
 #### `tab_lpr_tester.py` → Class `LprTesterTab(Frame)`
 | Hàm / Method | Mô tả |
@@ -428,8 +550,13 @@ Models: yolo11n/s/m/l/x
 | `Parkingv8ApiClient` | API client Parkingv8 |
 | `Parkingv8Worker` | Worker thread |
 
-Hàm: `_p8_suffix_to_imgtype()` — map suffix → folder name
+Hàm module: `_p8_suffix_to_imgtype()`, `_b64decode(s)`, `_looks_b64(s)`
+`Parkingv8ApiClient.fetch_detail(endpoint, id, img_mode)` — img_mode='url'→presignedUrl / 'base64'→imageBase64
+`Parkingv8ApiClient.fetch_image(url)` — auto-detect data URI, raw base64, hoặc HTTP download
+`Parkingv8ApiClient.extract_detail_images(detail, endpoint, img_mode)` — trích URL hoặc base64 field
+`Parkingv8ApiClient.extract_images(rec, img_mode)` — fallback, check `_IMG_FIELDS_B64` khi base64
 Image types: vehicle, plate crop, panorama, face, other (entry/exit riêng)
+Config: `p8.img_mode` = `"url"` (default) | `"base64"`
 
 #### `parkingv6_image.py`
 | Class | Mô tả |
@@ -440,6 +567,7 @@ Image types: vehicle, plate crop, panorama, face, other (entry/exit riêng)
 
 Hàm tiện ích: `_p6_safe()`, `_p6_vi_to_ascii()`, `_p6_vtype_to_category()`, `_p6_img_type_from_key()`
 Vehicle types: `o_to` (car), `xe_may` (motorbike), `xe_dap` (bicycle)
+Config: `keyword` — truyền vào `filter.keyword` trong request body để lọc phía server
 
 #### `pgs_image.py`
 | Class / Hàm | Mô tả |

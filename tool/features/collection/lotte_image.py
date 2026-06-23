@@ -53,8 +53,8 @@ def _li_bad_reason(rec: dict) -> Optional[Tuple[str, str, str]]:
     plate_in  = re.sub(r"[^0-9A-Za-z]", "", str(rec.get("PlateIn")  or "")).upper()
     plate_out = re.sub(r"[^0-9A-Za-z]", "", str(rec.get("PlateOut") or "")).upper()
     plate_reg = re.sub(r"[^0-9A-Za-z]", "",
-                       str(rec.get("RegisteredPlate") or rec.get("CardPlate") or
-                           rec.get("PlateNumber")     or "")).upper()
+                       str(rec.get("RegistedPlate") or rec.get("RegisteredPlate") or
+                           rec.get("CardPlate")     or rec.get("PlateNumber") or "")).upper()
     if not plate_in and not plate_out:
         return ("none", "", "both")
     if plate_in and plate_out and plate_in != plate_out:
@@ -189,7 +189,7 @@ class LotteApiClient:
             return False
 
     def search(self, from_date: str, to_date: str,
-               page: int, size: int) -> Tuple[bool, dict]:
+               page: int, size: int, keyword: str = "") -> Tuple[bool, dict, dict, dict]:
         import json as _json
         url  = f"{self.base}/api/tblcardevent/byPagingInOut"
         hdrs = {
@@ -197,7 +197,7 @@ class LotteApiClient:
             "Authorization": f"Bearer {self.token}",
         }
         body = {
-            "keyword": "", "fromDate": from_date, "toDate": to_date,
+            "keyword": keyword, "fromDate": from_date, "toDate": to_date,
             "cardgroupIds": "", "customergroupIds": "",
             "laneIds": "", "userIds": "", "plateNumber": "",
             "pageIndex": page, "pageSize": size,
@@ -207,12 +207,14 @@ class LotteApiClient:
                 r = self._session.get(url, headers=hdrs, json=body,
                                       timeout=self.timeout)
                 r.raise_for_status()
-                res = r.json().get("result")
-                return True, (_json.loads(res) if res else {})
+                raw  = r.json()
+                res  = raw.get("result")
+                data = _json.loads(res) if res else {}
+                return True, data, body, raw
             except Exception:
                 if attempt < 2:
                     time.sleep(2 * (attempt + 1))
-        return False, {}
+        return False, {}, body, {}
 
     def fetch_image(self, file_path: str):
         if not file_path or not _CV2_OK:
@@ -445,8 +447,27 @@ class LotteWorker:
                 return
             self._log(f"  [PAGE {page}] Đang gọi API...")
             t0 = time.time()
-            ok, data = api.search(d_from, d_to, page, size)
+            ok, data, req_body, raw_resp = api.search(
+                d_from, d_to, page, size,
+                keyword=self.cfg.get("keyword", ""))
             elapsed = time.time() - t0
+            if page == 1:
+                import json as _j
+                self._log(f"  ── REQUEST ──")
+                self._log(f"  {_j.dumps(req_body, ensure_ascii=False)}")
+                self._log(f"  ── RESPONSE (raw keys) ──")
+                if raw_resp:
+                    top_keys = {k: (str(v)[:120] if not isinstance(v, (dict, list)) else f"[{type(v).__name__}]")
+                                for k, v in raw_resp.items()}
+                    self._log(f"  {_j.dumps(top_keys, ensure_ascii=False)}")
+                    if data and isinstance(data, dict):
+                        recs = data.get("Data") or data.get("data") or []
+                        self._log(f"  result parsed: TotalItems={data.get('TotalItems') or data.get('TotalRecords')}  records={len(recs)}")
+                        if recs:
+                            self._log(f"  record[0] keys: {list(recs[0].keys())}")
+                            self._log(f"  record[0]: {_j.dumps(recs[0], ensure_ascii=False, default=str)[:400]}")
+                else:
+                    self._log(f"  (response rỗng)")
             if not ok:
                 self.stats["error"] += 1
                 self._log(f"  [PAGE {page}] Lỗi/timeout sau {elapsed:.0f}s — bỏ qua.")
@@ -502,7 +523,8 @@ class LotteWorker:
             bad_direction = ""
         # GT plate: xe tháng → biển đăng ký; xe lượt → biển nếu PlateIn==PlateOut, else None
         _plate_reg = re.sub(r"[^0-9A-Za-z]", "",
-                            str(rec.get("RegisteredPlate") or rec.get("CardPlate") or "")).upper()
+                            str(rec.get("RegistedPlate") or rec.get("RegisteredPlate") or
+                                rec.get("CardPlate") or "")).upper()
         _plate_in  = re.sub(r"[^0-9A-Za-z]", "", str(rec.get("PlateIn")  or "")).upper()
         _plate_out = re.sub(r"[^0-9A-Za-z]", "", str(rec.get("PlateOut") or "")).upper()
         if _plate_reg:

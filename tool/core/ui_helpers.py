@@ -306,6 +306,82 @@ def _action_btn(parent, text, cmd, color, **kw):
                   relief="flat", cursor="hand2", **kw)
 
 
+class GridPageNav(Frame):
+    """Thanh phân trang dùng chung cho filmstrip/grid panel.
+
+    Layout:  ⏮  ◀ Trước  [Trang [entry] / N  (M ảnh)]  Sau ▶  ⏭  [extra_right...]
+
+    Tham số:
+        on_prev/on_next/on_first/on_last: callback () -> None
+        on_direct: callback () -> None — đọc self.page_var để nhảy trang
+        extra_right: list[dict] — mỗi dict là kwargs truyền vào Button().
+                     Bắt buộc có "text" và "command". Mặc định font/relief/cursor.
+    """
+
+    def __init__(self, parent, *, on_prev, on_next, on_first, on_last, on_direct,
+                 extra_right=None, bg=CARD, **kwargs):
+        super().__init__(parent, bg=bg, pady=5, **kwargs)
+        self.page_var = StringVar(value="1")
+        self._on_direct = on_direct
+
+        # ── LEFT: ⏮  ◀ Trước ────────────────────────────────────────────
+        Button(self, text="⏮", width=3,
+               command=on_first,
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", relief=FLAT, font=F_MAIN,
+               cursor="hand2").pack(side=LEFT, padx=(6, 2))
+        Button(self, text="◀ Trước", width=9,
+               command=on_prev,
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", relief=FLAT, font=F_MAIN,
+               cursor="hand2").pack(side=LEFT, padx=(0, 4))
+
+        # ── RIGHT (pack right-to-left): extra buttons | ⏭ | Sau ▶ ───────
+        for btn_kw in reversed(extra_right or []):
+            kw = dict(font=F_MAIN, relief=FLAT, padx=6, cursor="hand2",
+                      fg="white", activeforeground="white")
+            kw.update(btn_kw)
+            if "activebackground" not in kw:
+                kw["activebackground"] = kw.get("bg", ACCENT2)
+            Button(self, **kw).pack(side=RIGHT, padx=(0, 4))
+        Button(self, text="⏭", width=3,
+               command=on_last,
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", relief=FLAT, font=F_MAIN,
+               cursor="hand2").pack(side=RIGHT, padx=(2, 0))
+        Button(self, text="Sau ▶", width=9,
+               command=on_next,
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", relief=FLAT, font=F_MAIN,
+               cursor="hand2").pack(side=RIGHT, padx=(4, 2))
+
+        # ── CENTER: Trang  [entry]  / N  (M ảnh) ────────────────────────
+        center = Frame(self, bg=bg)
+        center.pack(side=LEFT, expand=True)
+        Label(center, text="Trang", bg=bg, fg=DIM, font=F_MAIN
+              ).pack(side=LEFT, padx=(0, 4))
+        _entry = Entry(center, textvariable=self.page_var,
+                       width=4, font=F_BOLD, justify=CENTER,
+                       bg="#1a1a2e", fg=TEXT, insertbackground=TEXT,
+                       relief=FLAT, bd=0, highlightthickness=1,
+                       highlightcolor=ACCENT, highlightbackground=ACCENT2)
+        _entry.pack(side=LEFT)
+        _entry.bind("<Return>",   lambda e: self._on_direct())
+        _entry.bind("<FocusOut>", lambda e: self._on_direct())
+        self._nav_lbl = Label(center, text="/ —  (0 ảnh)", bg=bg, fg=TEXT,
+                              font=F_BOLD)
+        self._nav_lbl.pack(side=LEFT, padx=(6, 0))
+
+    def update(self, cur_page: int, max_page: int, total: int):
+        """Cập nhật entry và label hiển thị trang. cur_page/max_page là 0-indexed."""
+        if total == 0:
+            self.page_var.set("1")
+            self._nav_lbl.config(text="/ —  (0 ảnh)")
+        else:
+            self.page_var.set(str(cur_page + 1))
+            self._nav_lbl.config(text=f"/ {max_page + 1}   ({total} ảnh)")
+
+
 class DateTimePicker(Frame):
     """Entry + nút lịch cho chọn ngày/giờ.
 

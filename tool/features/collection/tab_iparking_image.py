@@ -381,6 +381,18 @@ class IParkingImageTab(Frame):
                     activebackground=BG, font=F_MAIN).grid(
             row=0, column=0, padx=(0, 20))
 
+        kw_row_l = Frame(f, bg=BG)
+        kw_row_l.pack(fill=X, pady=(6, 0))
+        Label(kw_row_l, text="Keyword:", bg=BG, fg=TEXT, font=F_MAIN).pack(side=LEFT, padx=(0, 6))
+        self.l_keyword_var = StringVar(value="")
+        _bind_cfg("lotte.keyword", self.l_keyword_var)
+        self._l_kw_combo = ttk.Combobox(kw_row_l, textvariable=self.l_keyword_var,
+                                         font=F_MAIN, width=40)
+        self._l_kw_combo.pack(side=LEFT)
+        _bind_history("h.lotte.keyword", self._l_kw_combo)
+        Label(kw_row_l, text="Lọc sự kiện API theo biển số / tên thẻ  ·  bỏ trống = lấy tất cả",
+              bg=BG, fg=DIM, font=("Segoe UI", 8)).pack(side=LEFT, padx=(8, 0))
+
         self._sep(f, "Phân loại phương tiện (từ khóa)")
         fv = Frame(f, bg=BG)
         fv.pack(fill=X)
@@ -451,6 +463,33 @@ class IParkingImageTab(Frame):
               bg=BG, fg=DIM, font=("Segoe UI", 8)).grid(
             row=0, column=2, padx=(8, 0), sticky=W)
 
+        row2 = Frame(f, bg=BG)
+        row2.pack(fill=X, pady=(6, 0))
+        Label(row2, text="Phương thức ảnh:", bg=BG, fg=TEXT, font=F_MAIN).grid(
+            row=0, column=0, padx=(0, 4), sticky=W)
+        self.p8_img_mode_var = StringVar(value="url")
+        _bind_cfg("p8.img_mode", self.p8_img_mode_var)
+        for col, (val, lbl) in enumerate([("url", "URL (PresignedUrl)"), ("base64", "Base64")], 1):
+            Radiobutton(row2, text=lbl, variable=self.p8_img_mode_var, value=val,
+                        bg=BG, fg=TEXT, selectcolor=BG,
+                        activebackground=BG, font=F_MAIN, cursor="hand2").grid(
+                row=0, column=col, padx=(0 if col == 1 else 16, 0), sticky=W)
+        Label(row2, text="URL: tải qua HTTP  ·  Base64: giải mã trực tiếp từ response",
+              bg=BG, fg=DIM, font=("Segoe UI", 8)).grid(
+            row=0, column=3, padx=(16, 0), sticky=W)
+
+        kw_row_p8 = Frame(f, bg=BG)
+        kw_row_p8.pack(fill=X, pady=(6, 0))
+        Label(kw_row_p8, text="Keyword:", bg=BG, fg=TEXT, font=F_MAIN).pack(side=LEFT, padx=(0, 6))
+        self.p8_keyword_var = StringVar(value="")
+        _bind_cfg("p8.keyword", self.p8_keyword_var)
+        self._p8_kw_combo = ttk.Combobox(kw_row_p8, textvariable=self.p8_keyword_var,
+                                          font=F_MAIN, width=40)
+        self._p8_kw_combo.pack(side=LEFT)
+        _bind_history("h.p8.keyword", self._p8_kw_combo)
+        Label(kw_row_p8, text="Lọc theo biển số / mã thẻ / tên thẻ / ghi chú  ·  bỏ trống = lấy tất cả",
+              bg=BG, fg=DIM, font=("Segoe UI", 8)).pack(side=LEFT, padx=(8, 0))
+
         # Advanced (collapsible)
         self._p8_adv_open = False
         self._p8_adv_lbl = Label(f, text="▶ Nâng cao (API / Xác thực)",
@@ -517,6 +556,18 @@ class IParkingImageTab(Frame):
         Label(row, text="both=vào+ra  ·  event-in=vào  ·  event-out=ra",
               bg=BG, fg=DIM, font=("Segoe UI", 8)).grid(
             row=0, column=5, sticky=W, padx=(4, 0))
+
+        kw_row_p6 = Frame(f, bg=BG)
+        kw_row_p6.pack(fill=X, pady=(6, 0))
+        Label(kw_row_p6, text="Keyword:", bg=BG, fg=TEXT, font=F_MAIN).pack(side=LEFT, padx=(0, 6))
+        self.p6_keyword_var = StringVar(value="")
+        _bind_cfg("p6.keyword", self.p6_keyword_var)
+        self._p6_kw_combo = ttk.Combobox(kw_row_p6, textvariable=self.p6_keyword_var,
+                                          font=F_MAIN, width=40)
+        self._p6_kw_combo.pack(side=LEFT)
+        _bind_history("h.p6.keyword", self._p6_kw_combo)
+        Label(kw_row_p6, text="Lọc sự kiện API theo biển số / nhóm thẻ  ·  bỏ trống = lấy tất cả",
+              bg=BG, fg=DIM, font=("Segoe UI", 8)).pack(side=LEFT, padx=(8, 0))
 
         # Advanced (collapsible)
         self._p6_adv_open = False
@@ -960,6 +1011,7 @@ class IParkingImageTab(Frame):
             "kw_xe_may":    self.l_kw_xe_may.get().strip(),
             "kw_xe_dap":    self.l_kw_xe_dap.get().strip(),
             "kw_o_to":      self.l_kw_o_to.get().strip(),
+            "keyword":      self.l_keyword_var.get().strip(),
         })
         self._last_cfg = cfg
         self._log(f"[Lotte] Bắt đầu: {from_t}  →  {to_t}")
@@ -980,6 +1032,7 @@ class IParkingImageTab(Frame):
             "from_date":     from_d,
             "to_date":       to_d,
             "event_source":  self.p8_source_var.get(),
+            "img_mode":      self.p8_img_mode_var.get(),
             "grant_type":    self.p8_grant_var.get(),
             "login_url":     self.p8_login_url.get().strip(),
             "api_url":       self.p8_api_url.get().strip(),
@@ -987,6 +1040,7 @@ class IParkingImageTab(Frame):
             "client_secret": self.p8_client_secret.get().strip(),
             "username":      self.p8_user.get().strip(),
             "password":      self.p8_pass.get().strip(),
+            "keyword":       self.p8_keyword_var.get().strip(),
         })
         n = self.parallel_var.get()
         cfg.update({"parallel": n})
@@ -1024,6 +1078,7 @@ class IParkingImageTab(Frame):
             "minio_bucket": self.p6_mbk.get().strip(),
             "minio_ak":     self.p6_mak.get().strip(),
             "minio_sk":     self.p6_msk.get().strip(),
+            "keyword":      self.p6_keyword_var.get().strip(),
         })
         self._last_cfg = cfg
         self._log(f"[Parkingv6] Bắt đầu: {from_t}  →  {to_t}")
