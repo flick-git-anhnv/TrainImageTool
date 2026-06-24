@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>KZTEK Training Report — kztek_train_2406</title>
+<style>
+  :root {
+    --ground:#12121f;--card:#1a1a2c;--card2:#1f1f35;
+    --border:#2e2e48;--text:#e0e0f0;--dim:#8888a8;
+    --accent:#F05922;--accent2:#4A3F8C;
+  }
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--ground);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+    font-size:13px;line-height:1.6}
+  header{background:var(--card);border-bottom:1px solid var(--border);
+    padding:20px 36px;display:flex;align-items:center;gap:16px}
+  .logo{font-family:'Courier New',monospace;font-size:20px;font-weight:900;color:var(--accent)}
+  .logo span{font-size:9px;display:block;letter-spacing:4px;color:var(--dim)}
+  .hdiv{width:1px;height:32px;background:var(--border)}
+  .htxt h1{font-size:15px;font-weight:700}
+  .htxt p{font-size:11px;color:var(--dim);font-family:'Courier New',monospace}
+  .status-chip{margin-left:auto;padding:6px 16px;background:var(--ground);
+    border:1px solid var(--border);border-radius:4px;font-size:13px}
+  main{padding:24px 36px 50px;max-width:1400px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:16px 18px}
+  .card-title{font-size:10px;font-weight:700;text-transform:uppercase;
+    letter-spacing:1.5px;color:var(--dim);margin-bottom:10px}
+  .big-num{font-family:'Courier New',monospace;font-size:28px;font-weight:900;color:var(--accent)}
+  .big-lbl{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:1px}
+  .sec{margin-bottom:28px}
+  .sec-hdr{display:flex;align-items:center;gap:8px;padding-bottom:6px;
+    border-bottom:1px solid var(--border);margin-bottom:12px}
+  .sec-dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+  .sec-ttl{font-size:11px;font-weight:700;text-transform:uppercase;
+    letter-spacing:2px;color:var(--accent)}
+  .tbl-wrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  thead th{background:var(--card2);color:var(--dim);font-size:10px;font-weight:600;
+    text-transform:uppercase;letter-spacing:1px;padding:7px 10px;
+    text-align:left;border:1px solid var(--border);white-space:nowrap}
+  tbody tr{border-bottom:1px solid var(--border)}
+  tbody tr:hover{background:rgba(255,255,255,.02)}
+  tbody td{padding:7px 10px;border-right:1px solid var(--border)}
+  tbody td:first-child{border-left:1px solid var(--border)}
+  .param-table td:first-child{color:var(--dim);width:200px}
+  .param-table td:last-child{font-family:'Courier New',monospace;color:#a0c0ff}
+  footer{border-top:1px solid var(--border);padding:14px 36px;
+    display:flex;justify-content:space-between;font-size:11px;
+    color:var(--dim);font-family:'Courier New',monospace}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">KZ<span>TEK</span></div>
+  <div class="hdiv"></div>
+  <div class="htxt">
+    <h1>Training Report — kztek_train_2406</h1>
+    <p>yolo11n · PhanLoaiPhuongTien · 90 epochs · 2-Stage · 2026-06-24</p>
+  </div>
+  <div class="status-chip"><span style="color:#f0a922;font-weight:700">🔄 Stage 2 — Epoch 19/60</span></div>
+</header>
+
+<main>
+
+<!-- KPI ROW -->
+<div class="grid3" style="margin-top:20px">
+  <div class="card">
+    <div class="card-title">Stage 1 — Best mAP50</div>
+    <div class="big-num">93.78%</div>
+    <div class="big-lbl">Epoch 30 / 30 · Freeze backbone</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Stage 2 — Best mAP50</div>
+    <div class="big-num" style="color:#3fb950">91.84%</div>
+    <div class="big-lbl">Epoch 17 / 60 · Full fine-tune</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Stage 2 — Best mAP50-95</div>
+    <div class="big-num" style="color:#f0a922">69.35%</div>
+    <div class="big-lbl">Precision 89.76% · Recall 85.34%</div>
+  </div>
+</div>
+
+<!-- INPUT CONFIG -->
+<div class="sec">
+  <div class="sec-hdr"><div class="sec-dot"></div><span class="sec-ttl">Input — Cấu hình Training</span></div>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">Dataset</div>
+      <table class="param-table"><tbody>
+        <tr><td>Path</td><td>K:/Software/PhanLoaiPhuongTien-TrainDataset</td></tr>
+        <tr><td>Train images</td><td>7,226</td></tr>
+        <tr><td>Val images</td><td>1,807</td></tr>
+        <tr><td>Train labels</td><td>7,226</td></tr>
+        <tr><td>Classes (nc=6)</td><td>car · motorcycle · bus · truck · bicycle · license_plate</td></tr>
+        <tr><td>Format</td><td>YOLO normalized (cx,cy,w,h)</td></tr>
+      </tbody></table>
+    </div>
+    <div class="card">
+      <div class="card-title">Model &amp; Output</div>
+      <table class="param-table"><tbody>
+        <tr><td>Base model</td><td>yolo11n.pt (nano, ~2.6M params)</td></tr>
+        <tr><td>Architecture</td><td>YOLO11 — CSP backbone + SPPF + C2f</td></tr>
+        <tr><td>Input size</td><td>640×640</td></tr>
+        <tr><td>Stage 1 output</td><td>K:/Software/1.PhanLoaiPhuongTienChuan/Model/VietAnh/kztek_train_2406_s1/weights/best.pt</td></tr>
+        <tr><td>Stage 2 output</td><td>K:/Software/1.PhanLoaiPhuongTienChuan/Model/VietAnh/kztek_train_2406/weights/best.pt</td></tr>
+      </tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- HYPERPARAMETERS -->
+<div class="sec">
+  <div class="sec-hdr"><div class="sec-dot"></div><span class="sec-ttl">Hyperparameters</span></div>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">Stage 1 — Freeze Backbone (epoch 1–30)</div>
+      <table class="param-table"><tbody>
+        <tr><td>epochs</td><td>30</td></tr>
+        <tr><td>freeze</td><td>10 layers (backbone)</td></tr>
+        <tr><td>lr0</td><td>0.001 (bảo vệ pretrained features)</td></tr>
+        <tr><td>cos_lr</td><td>True</td></tr>
+        <tr><td>amp</td><td>True (FP16)</td></tr>
+        <tr><td>batch</td><td>-1 (auto)</td></tr>
+        <tr><td>label_smoothing</td><td>0.1</td></tr>
+        <tr><td>cls</td><td>1.5</td></tr>
+        <tr><td>warmup_epochs</td><td>3</td></tr>
+        <tr><td>mosaic / mixup / copy_paste</td><td>0 / 0 / 0 (tắt)</td></tr>
+        <tr><td>degrees</td><td>0° (tắt)</td></tr>
+        <tr><td>patience</td><td>30 (early stop)</td></tr>
+      </tbody></table>
+    </div>
+    <div class="card">
+      <div class="card-title">Stage 2 — Full Fine-tune (epoch 1–60)</div>
+      <table class="param-table"><tbody>
+        <tr><td>epochs</td><td>60</td></tr>
+        <tr><td>freeze</td><td>0 (unfreeze toàn bộ)</td></tr>
+        <tr><td>lr0</td><td>0.0005 (thấp hơn stage 1)</td></tr>
+        <tr><td>cos_lr</td><td>True</td></tr>
+        <tr><td>amp</td><td>True (FP16)</td></tr>
+        <tr><td>batch</td><td>-1 (auto)</td></tr>
+        <tr><td>label_smoothing</td><td>0.1</td></tr>
+        <tr><td>cls</td><td>1.5</td></tr>
+        <tr><td>warmup_epochs</td><td>3</td></tr>
+        <tr><td>mosaic / mixup / copy_paste</td><td>1.0 / 0.15 / 0.1</td></tr>
+        <tr><td>degrees</td><td>10° (rotation aug)</td></tr>
+        <tr><td>patience</td><td>30 (early stop)</td></tr>
+      </tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- STAGE 1 RESULTS TABLE -->
+<div class="sec">
+  <div class="sec-hdr"><div class="sec-dot" style="background:#42a5f5"></div>
+    <span class="sec-ttl" style="color:#42a5f5">Stage 1 — Per-epoch Metrics (freeze backbone)</span>
+    <span style="margin-left:auto;font-family:'Courier New',monospace;font-size:11px;color:var(--dim)">30/30 epochs</span>
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr>
+        <th>Epoch</th><th>Train Box↓</th><th>Train Cls↓</th><th>Train DFL↓</th>
+        <th>Precision↑</th><th>Recall↑</th><th>mAP50↑</th><th>mAP50-95↑</th>
+        <th>Val Box↓</th><th>Val Cls↓</th><th>Val DFL↓</th><th>LR</th>
+      </tr></thead>
+      <tbody><tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">1</td>
+          <td>1.0439</td><td>6.0106</td><td>1.1646</td>
+          <td style="color:#42a5f5">80.53%</td>
+          <td style="color:#42a5f5">70.79%</td>
+          <td style="color:#3fb950;font-weight:700">77.81%</td>
+          <td style="color:#f0a922">56.83%</td>
+          <td style="color:#8888a8">0.9500</td>
+          <td style="color:#8888a8">3.0432</td>
+          <td style="color:#8888a8">1.0806</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000333</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">2</td>
+          <td>1.0018</td><td>3.4773</td><td>1.1286</td>
+          <td style="color:#42a5f5">83.70%</td>
+          <td style="color:#42a5f5">77.46%</td>
+          <td style="color:#3fb950;font-weight:700">84.36%</td>
+          <td style="color:#f0a922">60.85%</td>
+          <td style="color:#8888a8">0.9534</td>
+          <td style="color:#8888a8">2.5143</td>
+          <td style="color:#8888a8">1.0948</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000664</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">3</td>
+          <td>0.9928</td><td>2.7354</td><td>1.1210</td>
+          <td style="color:#42a5f5">90.12%</td>
+          <td style="color:#42a5f5">77.06%</td>
+          <td style="color:#3fb950;font-weight:700">86.42%</td>
+          <td style="color:#f0a922">62.15%</td>
+          <td style="color:#8888a8">0.9328</td>
+          <td style="color:#8888a8">2.2810</td>
+          <td style="color:#8888a8">1.0784</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000989</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">4</td>
+          <td>0.9608</td><td>2.4278</td><td>1.1057</td>
+          <td style="color:#42a5f5">89.26%</td>
+          <td style="color:#42a5f5">80.02%</td>
+          <td style="color:#3fb950;font-weight:700">87.08%</td>
+          <td style="color:#f0a922">63.08%</td>
+          <td style="color:#8888a8">0.9324</td>
+          <td style="color:#8888a8">2.2465</td>
+          <td style="color:#8888a8">1.0901</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000976</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">5</td>
+          <td>0.9325</td><td>2.2587</td><td>1.0915</td>
+          <td style="color:#42a5f5">87.77%</td>
+          <td style="color:#42a5f5">79.59%</td>
+          <td style="color:#3fb950;font-weight:700">87.96%</td>
+          <td style="color:#f0a922">64.54%</td>
+          <td style="color:#8888a8">0.8951</td>
+          <td style="color:#8888a8">2.0710</td>
+          <td style="color:#8888a8">1.0614</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000957</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">6</td>
+          <td>0.9025</td><td>2.1132</td><td>1.0737</td>
+          <td style="color:#42a5f5">88.73%</td>
+          <td style="color:#42a5f5">81.28%</td>
+          <td style="color:#3fb950;font-weight:700">88.38%</td>
+          <td style="color:#f0a922">67.24%</td>
+          <td style="color:#8888a8">0.8411</td>
+          <td style="color:#8888a8">1.9673</td>
+          <td style="color:#8888a8">1.0276</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000934</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">7</td>
+          <td>0.8780</td><td>1.9946</td><td>1.0595</td>
+          <td style="color:#42a5f5">91.08%</td>
+          <td style="color:#42a5f5">81.82%</td>
+          <td style="color:#3fb950;font-weight:700">89.29%</td>
+          <td style="color:#f0a922">67.66%</td>
+          <td style="color:#8888a8">0.8327</td>
+          <td style="color:#8888a8">1.8555</td>
+          <td style="color:#8888a8">1.0168</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000905</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">8</td>
+          <td>0.8583</td><td>1.9129</td><td>1.0463</td>
+          <td style="color:#42a5f5">88.79%</td>
+          <td style="color:#42a5f5">82.78%</td>
+          <td style="color:#3fb950;font-weight:700">89.99%</td>
+          <td style="color:#f0a922">69.65%</td>
+          <td style="color:#8888a8">0.8208</td>
+          <td style="color:#8888a8">1.8215</td>
+          <td style="color:#8888a8">1.0180</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000873</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">9</td>
+          <td>0.8392</td><td>1.8401</td><td>1.0359</td>
+          <td style="color:#42a5f5">91.33%</td>
+          <td style="color:#42a5f5">81.14%</td>
+          <td style="color:#3fb950;font-weight:700">89.86%</td>
+          <td style="color:#f0a922">69.28%</td>
+          <td style="color:#8888a8">0.8062</td>
+          <td style="color:#8888a8">1.7895</td>
+          <td style="color:#8888a8">1.0015</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000836</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">10</td>
+          <td>0.8238</td><td>1.7889</td><td>1.0255</td>
+          <td style="color:#42a5f5">91.06%</td>
+          <td style="color:#42a5f5">83.08%</td>
+          <td style="color:#3fb950;font-weight:700">90.80%</td>
+          <td style="color:#f0a922">70.44%</td>
+          <td style="color:#8888a8">0.7914</td>
+          <td style="color:#8888a8">1.6972</td>
+          <td style="color:#8888a8">0.9916</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000796</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">11</td>
+          <td>0.8081</td><td>1.7275</td><td>1.0190</td>
+          <td style="color:#42a5f5">90.26%</td>
+          <td style="color:#42a5f5">82.62%</td>
+          <td style="color:#3fb950;font-weight:700">90.72%</td>
+          <td style="color:#f0a922">71.72%</td>
+          <td style="color:#8888a8">0.7701</td>
+          <td style="color:#8888a8">1.6810</td>
+          <td style="color:#8888a8">0.9835</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000753</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">12</td>
+          <td>0.7885</td><td>1.6764</td><td>1.0091</td>
+          <td style="color:#42a5f5">90.70%</td>
+          <td style="color:#42a5f5">84.04%</td>
+          <td style="color:#3fb950;font-weight:700">91.58%</td>
+          <td style="color:#f0a922">71.95%</td>
+          <td style="color:#8888a8">0.7599</td>
+          <td style="color:#8888a8">1.6370</td>
+          <td style="color:#8888a8">0.9777</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000706</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">13</td>
+          <td>0.7796</td><td>1.6430</td><td>1.0025</td>
+          <td style="color:#42a5f5">91.34%</td>
+          <td style="color:#42a5f5">84.02%</td>
+          <td style="color:#3fb950;font-weight:700">91.82%</td>
+          <td style="color:#f0a922">73.50%</td>
+          <td style="color:#8888a8">0.7436</td>
+          <td style="color:#8888a8">1.5679</td>
+          <td style="color:#8888a8">0.9668</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000658</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">14</td>
+          <td>0.7601</td><td>1.5856</td><td>0.9969</td>
+          <td style="color:#42a5f5">92.64%</td>
+          <td style="color:#42a5f5">84.45%</td>
+          <td style="color:#3fb950;font-weight:700">92.14%</td>
+          <td style="color:#f0a922">73.13%</td>
+          <td style="color:#8888a8">0.7414</td>
+          <td style="color:#8888a8">1.5628</td>
+          <td style="color:#8888a8">0.9648</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000608</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">15</td>
+          <td>0.7522</td><td>1.5476</td><td>0.9887</td>
+          <td style="color:#42a5f5">92.05%</td>
+          <td style="color:#42a5f5">84.94%</td>
+          <td style="color:#3fb950;font-weight:700">91.93%</td>
+          <td style="color:#f0a922">73.65%</td>
+          <td style="color:#8888a8">0.7381</td>
+          <td style="color:#8888a8">1.5431</td>
+          <td style="color:#8888a8">0.9629</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000557</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">16</td>
+          <td>0.7340</td><td>1.5075</td><td>0.9800</td>
+          <td style="color:#42a5f5">90.90%</td>
+          <td style="color:#42a5f5">85.92%</td>
+          <td style="color:#3fb950;font-weight:700">92.41%</td>
+          <td style="color:#f0a922">73.84%</td>
+          <td style="color:#8888a8">0.7279</td>
+          <td style="color:#8888a8">1.5245</td>
+          <td style="color:#8888a8">0.9598</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000505</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">17</td>
+          <td>0.7298</td><td>1.4818</td><td>0.9793</td>
+          <td style="color:#42a5f5">90.47%</td>
+          <td style="color:#42a5f5">86.25%</td>
+          <td style="color:#3fb950;font-weight:700">92.65%</td>
+          <td style="color:#f0a922">75.19%</td>
+          <td style="color:#8888a8">0.7135</td>
+          <td style="color:#8888a8">1.4727</td>
+          <td style="color:#8888a8">0.9511</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000453</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">18</td>
+          <td>0.7170</td><td>1.4435</td><td>0.9720</td>
+          <td style="color:#42a5f5">92.51%</td>
+          <td style="color:#42a5f5">84.83%</td>
+          <td style="color:#3fb950;font-weight:700">92.85%</td>
+          <td style="color:#f0a922">75.40%</td>
+          <td style="color:#8888a8">0.7071</td>
+          <td style="color:#8888a8">1.4595</td>
+          <td style="color:#8888a8">0.9504</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000402</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">19</td>
+          <td>0.7054</td><td>1.4066</td><td>0.9638</td>
+          <td style="color:#42a5f5">91.88%</td>
+          <td style="color:#42a5f5">86.47%</td>
+          <td style="color:#3fb950;font-weight:700">93.33%</td>
+          <td style="color:#f0a922">75.61%</td>
+          <td style="color:#8888a8">0.7037</td>
+          <td style="color:#8888a8">1.4223</td>
+          <td style="color:#8888a8">0.9438</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000352</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">20</td>
+          <td>0.6968</td><td>1.3693</td><td>0.9622</td>
+          <td style="color:#42a5f5">91.80%</td>
+          <td style="color:#42a5f5">86.02%</td>
+          <td style="color:#3fb950;font-weight:700">93.36%</td>
+          <td style="color:#f0a922">76.02%</td>
+          <td style="color:#8888a8">0.6957</td>
+          <td style="color:#8888a8">1.3927</td>
+          <td style="color:#8888a8">0.9392</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000304</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">21</td>
+          <td>0.6814</td><td>1.3365</td><td>0.9503</td>
+          <td style="color:#42a5f5">91.44%</td>
+          <td style="color:#42a5f5">86.81%</td>
+          <td style="color:#3fb950;font-weight:700">93.25%</td>
+          <td style="color:#f0a922">76.53%</td>
+          <td style="color:#8888a8">0.6927</td>
+          <td style="color:#8888a8">1.3978</td>
+          <td style="color:#8888a8">0.9347</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000258</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">22</td>
+          <td>0.6731</td><td>1.3082</td><td>0.9462</td>
+          <td style="color:#42a5f5">91.54%</td>
+          <td style="color:#42a5f5">86.27%</td>
+          <td style="color:#3fb950;font-weight:700">93.39%</td>
+          <td style="color:#f0a922">76.62%</td>
+          <td style="color:#8888a8">0.6832</td>
+          <td style="color:#8888a8">1.3641</td>
+          <td style="color:#8888a8">0.9317</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000214</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">23</td>
+          <td>0.6685</td><td>1.2960</td><td>0.9453</td>
+          <td style="color:#42a5f5">92.42%</td>
+          <td style="color:#42a5f5">87.19%</td>
+          <td style="color:#3fb950;font-weight:700">93.52%</td>
+          <td style="color:#f0a922">77.04%</td>
+          <td style="color:#8888a8">0.6824</td>
+          <td style="color:#8888a8">1.3608</td>
+          <td style="color:#8888a8">0.9304</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000174</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">24</td>
+          <td>0.6550</td><td>1.2638</td><td>0.9404</td>
+          <td style="color:#42a5f5">91.06%</td>
+          <td style="color:#42a5f5">86.83%</td>
+          <td style="color:#3fb950;font-weight:700">93.32%</td>
+          <td style="color:#f0a922">76.71%</td>
+          <td style="color:#8888a8">0.6764</td>
+          <td style="color:#8888a8">1.3513</td>
+          <td style="color:#8888a8">0.9296</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000137</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">25</td>
+          <td>0.6505</td><td>1.2508</td><td>0.9397</td>
+          <td style="color:#42a5f5">91.68%</td>
+          <td style="color:#42a5f5">87.07%</td>
+          <td style="color:#3fb950;font-weight:700">93.47%</td>
+          <td style="color:#f0a922">77.00%</td>
+          <td style="color:#8888a8">0.6710</td>
+          <td style="color:#8888a8">1.3241</td>
+          <td style="color:#8888a8">0.9270</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000105</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">26</td>
+          <td>0.6489</td><td>1.2396</td><td>0.9338</td>
+          <td style="color:#42a5f5">90.48%</td>
+          <td style="color:#42a5f5">87.34%</td>
+          <td style="color:#3fb950;font-weight:700">93.34%</td>
+          <td style="color:#f0a922">77.07%</td>
+          <td style="color:#8888a8">0.6669</td>
+          <td style="color:#8888a8">1.3119</td>
+          <td style="color:#8888a8">0.9244</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000076</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">27</td>
+          <td>0.6384</td><td>1.2093</td><td>0.9316</td>
+          <td style="color:#42a5f5">90.56%</td>
+          <td style="color:#42a5f5">87.91%</td>
+          <td style="color:#3fb950;font-weight:700">93.69%</td>
+          <td style="color:#f0a922">77.47%</td>
+          <td style="color:#8888a8">0.6638</td>
+          <td style="color:#8888a8">1.3000</td>
+          <td style="color:#8888a8">0.9243</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000053</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">28</td>
+          <td>0.6395</td><td>1.2082</td><td>0.9336</td>
+          <td style="color:#42a5f5">90.33%</td>
+          <td style="color:#42a5f5">87.76%</td>
+          <td style="color:#3fb950;font-weight:700">93.64%</td>
+          <td style="color:#f0a922">77.51%</td>
+          <td style="color:#8888a8">0.6605</td>
+          <td style="color:#8888a8">1.2933</td>
+          <td style="color:#8888a8">0.9238</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000034</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">29</td>
+          <td>0.6335</td><td>1.1959</td><td>0.9291</td>
+          <td style="color:#42a5f5">90.39%</td>
+          <td style="color:#42a5f5">87.87%</td>
+          <td style="color:#3fb950;font-weight:700">93.58%</td>
+          <td style="color:#f0a922">77.70%</td>
+          <td style="color:#8888a8">0.6577</td>
+          <td style="color:#8888a8">1.2935</td>
+          <td style="color:#8888a8">0.9214</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000021</td>
+        </tr>
+<tr style="background:rgba(66,165,245,.08)">
+          <td style="font-family:'Courier New',monospace;color:#8888a8">30</td>
+          <td>0.6292</td><td>1.1912</td><td>0.9289</td>
+          <td style="color:#42a5f5">90.98%</td>
+          <td style="color:#42a5f5">87.73%</td>
+          <td style="color:#3fb950;font-weight:700">93.78%</td>
+          <td style="color:#f0a922">77.58%</td>
+          <td style="color:#8888a8">0.6568</td>
+          <td style="color:#8888a8">1.2912</td>
+          <td style="color:#8888a8">0.9210</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000013</td>
+        </tr>
+</tbody>
+    </table>
+  </div>
+</div>
+
+<!-- STAGE 2 RESULTS TABLE -->
+<div class="sec">
+  <div class="sec-hdr"><div class="sec-dot" style="background:#3fb950"></div>
+    <span class="sec-ttl" style="color:#3fb950">Stage 2 — Per-epoch Metrics (full fine-tune)</span>
+    <span style="margin-left:auto;font-family:'Courier New',monospace;font-size:11px;color:var(--dim)">19/60 epochs</span>
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr>
+        <th>Epoch</th><th>Train Box↓</th><th>Train Cls↓</th><th>Train DFL↓</th>
+        <th>Precision↑</th><th>Recall↑</th><th>mAP50↑</th><th>mAP50-95↑</th>
+        <th>Val Box↓</th><th>Val Cls↓</th><th>Val DFL↓</th><th>LR</th>
+      </tr></thead>
+      <tbody><tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">1</td>
+          <td>1.2708</td><td>3.1221</td><td>1.3137</td>
+          <td style="color:#42a5f5">89.69%</td>
+          <td style="color:#42a5f5">75.59%</td>
+          <td style="color:#3fb950;font-weight:700">84.81%</td>
+          <td style="color:#f0a922">52.49%</td>
+          <td style="color:#8888a8">1.3491</td>
+          <td style="color:#8888a8">2.2344</td>
+          <td style="color:#8888a8">1.2795</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000333</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">2</td>
+          <td>1.2491</td><td>3.0976</td><td>1.2953</td>
+          <td style="color:#42a5f5">86.24%</td>
+          <td style="color:#42a5f5">75.36%</td>
+          <td style="color:#3fb950;font-weight:700">83.53%</td>
+          <td style="color:#f0a922">49.08%</td>
+          <td style="color:#8888a8">1.4087</td>
+          <td style="color:#8888a8">2.4521</td>
+          <td style="color:#8888a8">1.3004</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000666</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">3</td>
+          <td>1.2594</td><td>3.1671</td><td>1.3055</td>
+          <td style="color:#42a5f5">84.58%</td>
+          <td style="color:#42a5f5">77.82%</td>
+          <td style="color:#3fb950;font-weight:700">84.97%</td>
+          <td style="color:#f0a922">50.73%</td>
+          <td style="color:#8888a8">1.4013</td>
+          <td style="color:#8888a8">2.3935</td>
+          <td style="color:#8888a8">1.3026</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000997</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">4</td>
+          <td>1.2465</td><td>3.1320</td><td>1.3058</td>
+          <td style="color:#42a5f5">89.16%</td>
+          <td style="color:#42a5f5">79.54%</td>
+          <td style="color:#3fb950;font-weight:700">87.72%</td>
+          <td style="color:#f0a922">56.32%</td>
+          <td style="color:#8888a8">1.2291</td>
+          <td style="color:#8888a8">2.2162</td>
+          <td style="color:#8888a8">1.2176</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000994</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">5</td>
+          <td>1.2252</td><td>2.9995</td><td>1.2852</td>
+          <td style="color:#42a5f5">90.03%</td>
+          <td style="color:#42a5f5">78.24%</td>
+          <td style="color:#3fb950;font-weight:700">87.85%</td>
+          <td style="color:#f0a922">56.03%</td>
+          <td style="color:#8888a8">1.2718</td>
+          <td style="color:#8888a8">2.2191</td>
+          <td style="color:#8888a8">1.2344</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000989</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">6</td>
+          <td>1.2020</td><td>2.9165</td><td>1.2721</td>
+          <td style="color:#42a5f5">90.96%</td>
+          <td style="color:#42a5f5">80.81%</td>
+          <td style="color:#3fb950;font-weight:700">88.57%</td>
+          <td style="color:#f0a922">58.80%</td>
+          <td style="color:#8888a8">1.1870</td>
+          <td style="color:#8888a8">2.1493</td>
+          <td style="color:#8888a8">1.1993</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000983</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">7</td>
+          <td>1.1955</td><td>2.8411</td><td>1.2703</td>
+          <td style="color:#42a5f5">90.65%</td>
+          <td style="color:#42a5f5">80.80%</td>
+          <td style="color:#3fb950;font-weight:700">89.21%</td>
+          <td style="color:#f0a922">58.11%</td>
+          <td style="color:#8888a8">1.1824</td>
+          <td style="color:#8888a8">2.0852</td>
+          <td style="color:#8888a8">1.1812</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000976</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">8</td>
+          <td>1.1755</td><td>2.7912</td><td>1.2516</td>
+          <td style="color:#42a5f5">87.79%</td>
+          <td style="color:#42a5f5">81.31%</td>
+          <td style="color:#3fb950;font-weight:700">88.74%</td>
+          <td style="color:#f0a922">61.36%</td>
+          <td style="color:#8888a8">1.0524</td>
+          <td style="color:#8888a8">2.0736</td>
+          <td style="color:#8888a8">1.1269</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000967</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">9</td>
+          <td>1.1608</td><td>2.7362</td><td>1.2392</td>
+          <td style="color:#42a5f5">88.44%</td>
+          <td style="color:#42a5f5">80.81%</td>
+          <td style="color:#3fb950;font-weight:700">88.92%</td>
+          <td style="color:#f0a922">61.90%</td>
+          <td style="color:#8888a8">1.0123</td>
+          <td style="color:#8888a8">1.9466</td>
+          <td style="color:#8888a8">1.0916</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000957</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">10</td>
+          <td>1.1370</td><td>2.6616</td><td>1.2326</td>
+          <td style="color:#42a5f5">91.00%</td>
+          <td style="color:#42a5f5">80.64%</td>
+          <td style="color:#3fb950;font-weight:700">89.35%</td>
+          <td style="color:#f0a922">63.67%</td>
+          <td style="color:#8888a8">1.0442</td>
+          <td style="color:#8888a8">1.9077</td>
+          <td style="color:#8888a8">1.1103</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000946</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">11</td>
+          <td>1.1210</td><td>2.6096</td><td>1.2202</td>
+          <td style="color:#42a5f5">88.19%</td>
+          <td style="color:#42a5f5">81.81%</td>
+          <td style="color:#3fb950;font-weight:700">89.94%</td>
+          <td style="color:#f0a922">65.76%</td>
+          <td style="color:#8888a8">0.9328</td>
+          <td style="color:#8888a8">1.8402</td>
+          <td style="color:#8888a8">1.0635</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000934</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">12</td>
+          <td>1.1028</td><td>2.5382</td><td>1.2052</td>
+          <td style="color:#42a5f5">87.60%</td>
+          <td style="color:#42a5f5">82.48%</td>
+          <td style="color:#3fb950;font-weight:700">89.10%</td>
+          <td style="color:#f0a922">65.90%</td>
+          <td style="color:#8888a8">0.9268</td>
+          <td style="color:#8888a8">1.8816</td>
+          <td style="color:#8888a8">1.0788</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000920</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">13</td>
+          <td>1.0903</td><td>2.5182</td><td>1.2022</td>
+          <td style="color:#42a5f5">90.10%</td>
+          <td style="color:#42a5f5">80.88%</td>
+          <td style="color:#3fb950;font-weight:700">90.35%</td>
+          <td style="color:#f0a922">65.78%</td>
+          <td style="color:#8888a8">0.9034</td>
+          <td style="color:#8888a8">1.8251</td>
+          <td style="color:#8888a8">1.0606</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000905</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">14</td>
+          <td>1.0875</td><td>2.5003</td><td>1.2022</td>
+          <td style="color:#42a5f5">89.20%</td>
+          <td style="color:#42a5f5">80.91%</td>
+          <td style="color:#3fb950;font-weight:700">89.12%</td>
+          <td style="color:#f0a922">65.66%</td>
+          <td style="color:#8888a8">0.9348</td>
+          <td style="color:#8888a8">1.7853</td>
+          <td style="color:#8888a8">1.0709</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000890</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">15</td>
+          <td>1.0758</td><td>2.4399</td><td>1.1935</td>
+          <td style="color:#42a5f5">88.66%</td>
+          <td style="color:#42a5f5">85.08%</td>
+          <td style="color:#3fb950;font-weight:700">90.81%</td>
+          <td style="color:#f0a922">68.43%</td>
+          <td style="color:#8888a8">0.8692</td>
+          <td style="color:#8888a8">1.6992</td>
+          <td style="color:#8888a8">1.0304</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000873</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">16</td>
+          <td>1.0649</td><td>2.4192</td><td>1.1891</td>
+          <td style="color:#42a5f5">90.69%</td>
+          <td style="color:#42a5f5">84.28%</td>
+          <td style="color:#3fb950;font-weight:700">90.97%</td>
+          <td style="color:#f0a922">68.82%</td>
+          <td style="color:#8888a8">0.8671</td>
+          <td style="color:#8888a8">1.7274</td>
+          <td style="color:#8888a8">1.0385</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000855</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">17</td>
+          <td>1.0544</td><td>2.3764</td><td>1.1811</td>
+          <td style="color:#42a5f5">89.76%</td>
+          <td style="color:#42a5f5">85.34%</td>
+          <td style="color:#3fb950;font-weight:700">91.84%</td>
+          <td style="color:#f0a922">69.35%</td>
+          <td style="color:#8888a8">0.8731</td>
+          <td style="color:#8888a8">1.6979</td>
+          <td style="color:#8888a8">1.0222</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000836</td>
+        </tr>
+<tr >
+          <td style="font-family:'Courier New',monospace;color:#8888a8">18</td>
+          <td>1.0476</td><td>2.3664</td><td>1.1791</td>
+          <td style="color:#42a5f5">90.50%</td>
+          <td style="color:#42a5f5">84.69%</td>
+          <td style="color:#3fb950;font-weight:700">91.63%</td>
+          <td style="color:#f0a922">69.80%</td>
+          <td style="color:#8888a8">0.8495</td>
+          <td style="color:#8888a8">1.6814</td>
+          <td style="color:#8888a8">1.0254</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000817</td>
+        </tr>
+<tr style="background:rgba(63,185,80,.08)">
+          <td style="font-family:'Courier New',monospace;color:#8888a8">19</td>
+          <td>1.0356</td><td>2.3190</td><td>1.1696</td>
+          <td style="color:#42a5f5">91.71%</td>
+          <td style="color:#42a5f5">84.22%</td>
+          <td style="color:#3fb950;font-weight:700">91.66%</td>
+          <td style="color:#f0a922">69.53%</td>
+          <td style="color:#8888a8">0.8415</td>
+          <td style="color:#8888a8">1.6281</td>
+          <td style="color:#8888a8">1.0142</td>
+          <td style="font-family:'Courier New',monospace;font-size:11px;color:#8888a8">0.000796</td>
+        </tr>
+</tbody>
+    </table>
+  </div>
+</div>
+
+<!-- TRAINING STATUS -->
+<div class="sec">
+  <div class="sec-hdr"><div class="sec-dot"></div><span class="sec-ttl">Trạng thái training</span></div>
+  <div class="card" style="max-width:600px">
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #2e2e48"><span style="color:#8888a8">Stage hiện tại</span><span style="color:#e0e0f0;font-family:'Courier New',monospace;font-size:12px">stage2</span></div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #2e2e48"><span style="color:#8888a8">Status</span><span style="color:#e0e0f0;font-family:'Courier New',monospace;font-size:12px">started</span></div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #2e2e48"><span style="color:#8888a8">Timestamp</span><span style="color:#e0e0f0;font-family:'Courier New',monospace;font-size:12px">2026-06-24T08:56:41.350207</span></div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #2e2e48"><span style="color:#8888a8">Stage 1 best weights</span><span style="color:#e0e0f0;font-family:'Courier New',monospace;font-size:12px">—</span></div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #2e2e48"><span style="color:#8888a8">Báo cáo sinh lúc</span><span style="color:#F05922;font-family:'Courier New',monospace;font-size:12px">2026-06-24 08:57:09</span></div>
+  </div>
+</div>
+
+</main>
+<footer>
+  <span>docs/train/train-report-2406.html</span>
+  <span>Generated 2026-06-24 08:57:09</span>
+  <span style="color:var(--accent)">kztek.net</span>
+</footer>
+</body>
+</html>

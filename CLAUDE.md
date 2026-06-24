@@ -353,6 +353,33 @@ Claude: "Thêm nút Clear Log (Ctrl+L). Đề xuất thêm:
 
 ---
 
+### 7. Tài liệu — viết vào `docs/<category>/`, không tạo Artifact
+
+Khi được yêu cầu tạo tài liệu (HTML, Markdown, báo cáo, bảng tổng hợp, changelog…):
+
+- **KHÔNG tạo Artifact** (claude.ai artifact)
+- **Viết vào `docs/<category>/`** ở thư mục gốc dự án (`k:\Software\3.Tools\docs\`)
+- Cấu trúc thư mục con theo chủ đề:
+
+```
+docs/
+  train/       ← training reports, upgrade plans, changelogs
+  analysis/    ← dataset analysis, stats, plate search reports
+  api/         ← API docs, collection endpoints
+  guides/      ← hướng dẫn sử dụng tab
+```
+
+- Đường dẫn: `docs/<category>/<tên-file>.<ext>` — kebab-case, tiếng Anh
+- Sau khi tạo, thông báo đường dẫn đầy đủ cho người dùng
+
+**Loại file:**
+- Báo cáo phân tích, bảng so sánh, changelog: `.html`
+- Hướng dẫn sử dụng, ghi chú kỹ thuật: `.md`
+
+**Ngoại lệ duy nhất:** Người dùng chủ động yêu cầu "tạo artifact" hoặc "share link".
+
+---
+
 ## Quy ước code
 
 ### Settings / persistence

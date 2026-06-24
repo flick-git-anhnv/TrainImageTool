@@ -16,8 +16,7 @@ from ..features.collection.tab_iparking_image import IParkingImageTab
 from ..features.annotation.tab_checker   import CheckerTab
 from ..features.analysis.tab_stats       import StatsTab
 from ..features.analysis.tab_plate_search import PlateSearchTab
-from ..features.detection.tab_yolo         import YoloTab
-from ..features.detection.tab_detect_label import DetectLabelTab
+from ..features.detection.tab_yolo       import YoloTab
 from ..features.training.tab_train       import TrainTab
 from ..features.training.tab_classifier  import ClassifierTrainTab
 from ..features.detection.tab_lpr_tester import LprTesterTab
@@ -121,7 +120,6 @@ class App(_AppBase):
             ("📊 Stats",          StatsTab,          ()),
             ("🔎 Plate Search",   PlateSearchTab,    ()),
             ("🤖 YOLO Detect",    YoloTab,           ()),
-            ("🔍 Detect+Label",   DetectLabelTab,    ()),
             ("🚀 Train",          TrainTab,          ()),
             ("🧠 Classifier",     ClassifierTrainTab,()),
             ("🔬 LPR Tester",     LprTesterTab,      ()),

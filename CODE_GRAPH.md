@@ -1,5 +1,5 @@
 # CODE_GRAPH.md — KZTEK Image Tools
-<!-- Cập nhật: 2026-06-23 | Thêm tool/shared/ + tab_detect_label.py (gộp YoloDetect + BBoxEditor) -->
+<!-- Cập nhật: 2026-06-24 | Thêm IParkingDetectApp: C# WinForms app test model OpenVINO/ONNX -->
 
 ## Hướng dẫn sử dụng
 
@@ -43,6 +43,45 @@ tool/utils/*      → ..core.*    (2 dots)
 | `SlotDetect.py` | `_Cfg`, `SlotDetectApp` | `__init__`, `_build`, `_load`, `_on_click_canvas`, `_detect`, `_update_status` | — |
 | `GetImageApp/RunGetParkingImage.py` | `GetParkingImageApp` | `__init__`, `_bind_shortcuts`, `_on_close` | `tab_iparking_image.IParkingImageTab` |
 | `GetPgsImageApp/RunGetPgsImage.py` | `GetPgsImageApp` | `__init__`, `_bind_shortcuts`, `_on_close` | `tab_pgs_image.PgsImageTab` |
+
+---
+
+### IParkingDetectApp/ (C# .NET 8 WinForms)
+
+**Mục đích:** App C# test model YOLO (OpenVINO IR `.xml` + `.bin` hoặc ONNX `.onnx`) trên tập ảnh iParking. Tính năng tương đương YOLODetect tab trong Python tool.
+
+**Build:** `dotnet build` | **Run:** `dotnet run` hoặc `IParkingDetect.exe`
+
+| File | Class / Type | Hàm / Members chính |
+|---|---|---|
+| `IParkingDetectApp.csproj` | — | Deps: `Sdcb.OpenVINO`, `Sdcb.OpenVINO.runtime.win-x64` |
+| `Program.cs` | — | Entry point |
+| `DetectForm.cs` | `DetectForm : Form` | `BuildUI`, `OnLoadModel`, `OnLoadPath`, `OnDetectAll`, `DetectCurrent`, `NavigateTo`, `RefreshCanvas`, `SetReview`, `UpdateFilmstrip`, `RestoreSession`, `SaveSession` |
+| `UI/Theme.cs` | `Theme` (static) | KZTEK brand colors + font + control factories: `Btn`, `Lbl`, `Cmb`, `Slider`, `Chk`, `Row`, `SectionHdr`, `BboxColor` |
+| `Models/DetectBox.cs` | `DetectBox` (record), `ReviewState` (enum) | `ClassId`, `ClassName`, `Confidence`, `X1/Y1/X2/Y2`, `Width`, `Height`, `Area`, `Rect` |
+| `Inference/YoloRunner.cs` | `YoloRunner : IDisposable` | `LoadModel(path, device)`, `Detect(bmp/path, conf, iou)`, `SetClassNames`, `LoadClassNamesFromYaml` (static); dùng Sdcb.OpenVINO; letterbox preprocess |
+| `Inference/PostProcess.cs` | `PostProcess` (static) | `Decode(span, numCh, anchors, conf, iou, …)` — giải mã YOLOv8/v11 output + NMS |
+| `Helpers/BboxRenderer.cs` | `BboxRenderer` (static) | `DrawBoxes(bmp, boxes)`, `MakeThumb(bmp, boxes, w, h)`, `FitImage` |
+| `Helpers/AppSettings.cs` | `AppSettings` | `Load()`, `Save()`, `PushModelHistory`, `PushImageHistory`; persist vào `%AppData%\KZTEK\IParkingDetect\settings.json` |
+| `Controls/ImageCanvas.cs` | `ImageCanvas : Panel` | `SetImage(bmp, fit)`, `FitToView()`, `ZoomStep(delta)`; zoom bằng mouse wheel, pan bằng drag |
+
+**Luồng dữ liệu:**
+```
+DetectForm → YoloRunner.LoadModel(path) → Sdcb.OpenVINO.OVCore
+DetectForm → YoloRunner.Detect(bmp) → Letterbox → OVCore.Infer → PostProcess.Decode → List<DetectBox>
+DetectForm → BboxRenderer.DrawBoxes → ImageCanvas.SetImage → Display
+```
+
+**Phím tắt:**
+| Phím | Hành động |
+|---|---|
+| `←` / `→` | Ảnh trước / sau |
+| `Enter` | Đánh dấu ĐÚNG |
+| `Delete` | Đánh dấu SAI |
+| `F5` | Detect All |
+| `Escape` | Dừng Detect All |
+| `Ctrl+O` | Mở thư mục ảnh |
+| `Ctrl+M` | Mở model |
 
 ---
 
@@ -355,34 +394,6 @@ Yêu cầu: `_PADDLE_OK`
 ---
 
 ### tool/features/detection/
-
-#### `tab_detect_label.py` → Class `DetectLabelTab(Frame, CanvasZoomMixin)`
-Tab gộp YOLO Detect + BBox Label Editor. Import: `shared.{bbox_renderer, label_io, canvas_zoom, detect_cache, filmstrip}`.
-
-| Method | Mô tả |
-|---|---|
-| `_build_toolbar()` | Model path, conf/iou slider, Detect + Stop button |
-| `_build_left(paned)` | Folder rows, labels, filter panel, FilmstripPanel |
-| `_build_filter(parent)` | Class combo, nDet/size/W/H entries, must-have/not-have listboxes |
-| `_build_canvas(paned)` | Canvas toolbar, Canvas widget, bind zoom/pan/draw events |
-| `_load_folder()` | Scan image folder, load cache từ disk |
-| `_detect_folder()` | Validate + spawn detect thread |
-| `_detect_thread()` | Thread: run YOLO → DetectCache → save disk → update UI |
-| `_load_image(path)` | Load PIL, boxes từ .txt hoặc cache, _zoom_reset, render |
-| `_render(resample)` | Override CanvasZoomMixin: render PIL + draw bbox canvas items |
-| `_get_thumb(path,tw,th)` | Callback filmstrip: PIL + bbox overlay → padded thumb |
-| `_on_press/drag/release` | Draw new bbox bằng click+drag |
-| `_hit_test(cx,cy)` | Trả về index bbox tại canvas coords |
-| `_canvas_to_norm(cx,cy)` | Chuyển canvas px → normalized coords |
-| `_apply_filter()` | Lọc qua DetectCache.filter_files() → reload filmstrip |
-| `_save_labels()` | Ghi self._boxes → .txt (normalized) |
-| `_export_cache()` | Ghi toàn bộ detect cache → .txt files |
-| `_nav(delta)` | Điều hướng prev/next trong filtered list |
-| `_on_numkey(event)` | Phím 0–9: đổi class bbox đang chọn hoặc set cur_class |
-
-Settings keys prefix: `dl.*`
-
----
 
 #### `tab_yolo.py` → Class `YoloTab(Frame)`
 | Method | Mô tả |

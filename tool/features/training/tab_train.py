@@ -71,7 +71,7 @@ class TrainTab(Frame):
 
         self._epochs_var      = StringVar(value="100")
         self._imgsz_var       = StringVar(value="640")
-        self._batch_var       = StringVar(value="16")
+        self._batch_var       = StringVar(value="-1")
         self._device_var      = StringVar(value="0")
         self._project_var     = StringVar()
         self._name_var        = StringVar(value="kztek_train")
@@ -83,12 +83,12 @@ class TrainTab(Frame):
         self._patience_var       = StringVar(value="10")
 
         self._optimizer_var     = StringVar(value="AdamW")
-        self._lr0_var           = StringVar(value="0.01")
+        self._lr0_var           = StringVar(value="0.001")
         self._lrf_var           = StringVar(value="0.01")
         self._close_mosaic_var  = StringVar(value="10")
         self._cache_var         = StringVar(value="False")
         self._workers_var       = StringVar(value="4")
-        self._cos_lr_var        = BooleanVar(value=False)
+        self._cos_lr_var        = BooleanVar(value=True)
         self._weight_decay_var  = StringVar(value="0.0005")
         _bind_cfg("train.optimizer",    self._optimizer_var)
         _bind_cfg("train.lr0",          self._lr0_var)
@@ -98,6 +98,33 @@ class TrainTab(Frame):
         _bind_cfg("train.workers",      self._workers_var)
         _bind_cfg("train.cos_lr",       self._cos_lr_var)
         _bind_cfg("train.weight_decay", self._weight_decay_var)
+
+        # ── Advanced training params ──────────────────────────────────────
+        self._amp_var           = BooleanVar(value=True)
+        self._label_smooth_var  = StringVar(value="0.1")
+        self._mixup_var         = StringVar(value="0.15")
+        self._copy_paste_var    = StringVar(value="0.1")
+        self._degrees_var       = StringVar(value="10.0")
+        self._cls_var           = StringVar(value="1.5")
+        self._momentum_var      = StringVar(value="0.937")
+        self._warmup_var        = StringVar(value="3")
+        # ── 2-Stage training ─────────────────────────────────────────────
+        self._two_stage_var     = BooleanVar(value=False)
+        self._freeze_epochs_var = StringVar(value="30")
+        self._freeze_layers_var = StringVar(value="10")
+        self._freeze_lr_var     = StringVar(value="0.001")
+        _bind_cfg("train.amp",          self._amp_var)
+        _bind_cfg("train.label_smooth", self._label_smooth_var)
+        _bind_cfg("train.mixup",        self._mixup_var)
+        _bind_cfg("train.copy_paste",   self._copy_paste_var)
+        _bind_cfg("train.degrees",      self._degrees_var)
+        _bind_cfg("train.cls",          self._cls_var)
+        _bind_cfg("train.momentum",     self._momentum_var)
+        _bind_cfg("train.warmup",       self._warmup_var)
+        _bind_cfg("train.two_stage",    self._two_stage_var)
+        _bind_cfg("train.freeze_ep",    self._freeze_epochs_var)
+        _bind_cfg("train.freeze_lay",   self._freeze_layers_var)
+        _bind_cfg("train.freeze_lr",    self._freeze_lr_var)
 
         self._proc       = None
         self._out_queue  = queue.Queue()
@@ -202,7 +229,7 @@ class TrainTab(Frame):
         for col, (lbl, var, tip) in enumerate([
             ("Epochs:",  self._epochs_var, "số lần lặp"),
             ("Imgsz:",   self._imgsz_var,  "kích thước ảnh"),
-            ("Batch:",   self._batch_var,  "−1 = auto"),
+            ("Batch:",   self._batch_var,  "−1=auto/0.9=90%VRAM"),
             ("Device:",  self._device_var, "0=GPU, cpu"),
         ]):
             c = (col + 1) * 2
@@ -295,14 +322,69 @@ class TrainTab(Frame):
         Checkbutton(adv2, text="Cosine LR", variable=self._cos_lr_var,
                     bg=CARD, fg=TEXT, activebackground=CARD, activeforeground=TEXT,
                     selectcolor="#16162a", font=F_MAIN).pack(side=LEFT)
+        Checkbutton(adv2, text="AMP", variable=self._amp_var,
+                    bg=CARD, fg=TEXT, activebackground=CARD, activeforeground=TEXT,
+                    selectcolor="#16162a", font=F_MAIN).pack(side=LEFT, padx=(14, 0))
         Label(adv2, text="  Cache:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
         ttk.Combobox(adv2, textvariable=self._cache_var, width=6,
                      state="readonly", font=F_MAIN,
                      values=["False", "ram", "disk"]).pack(side=LEFT, padx=(4, 0))
         Label(adv2,
-              text="   (ram = load toàn bộ ảnh vào RAM, tăng tốc đáng kể)",
+              text="   (AMP: giảm ~40% VRAM, tăng tốc ~30%; ram: load ảnh vào RAM)",
               bg=CARD, fg=DIM,
               font=("Segoe UI", 8, "italic")).pack(side=LEFT, padx=(8, 0))
+
+        # ── Augmentation nâng cao ─────────────────────────────────────────
+        Label(pf, text="Augmentation:", bg=CARD, fg=DIM,
+              font=F_BOLD).grid(row=7, column=0, sticky=W, pady=(8, 2))
+        adv3 = Frame(pf, bg=CARD)
+        adv3.grid(row=7, column=1, columnspan=9, sticky=W, pady=(8, 2))
+        for _lbl, _var, _w, _tip in [
+            ("Label Smooth:", self._label_smooth_var, 5, "0–0.2"),
+            ("Mixup:",        self._mixup_var,         5, "0–0.5"),
+            ("Copy-Paste:",   self._copy_paste_var,    5, "0–0.5"),
+            ("Degrees:",      self._degrees_var,       5, "°rot"),
+            ("CLS weight:",   self._cls_var,           4, "loss"),
+            ("Momentum:",     self._momentum_var,      6, "SGD"),
+            ("Warmup ep:",    self._warmup_var,        3, "ep"),
+        ]:
+            Label(adv3, text=_lbl, bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+            Entry(adv3, textvariable=_var, bg="#16162a", fg=TEXT,
+                  insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4,
+                  width=_w).pack(side=LEFT, padx=(2, 2))
+            Label(adv3, text=_tip, bg=CARD, fg="#606080",
+                  font=("Segoe UI", 7, "italic")).pack(side=LEFT, padx=(0, 8))
+
+        # ── 2-Stage Training ──────────────────────────────────────────────
+        adv4 = Frame(pf, bg=CARD)
+        adv4.grid(row=8, column=0, columnspan=10, sticky=W, pady=(6, 0))
+        Checkbutton(adv4, text="2-Stage Training  (Freeze Backbone → Full Fine-tune)",
+                    variable=self._two_stage_var,
+                    bg=CARD, fg=ACCENT, activebackground=CARD, activeforeground=ACCENT,
+                    selectcolor="#16162a", font=F_BOLD,
+                    command=self._on_two_stage_toggle).pack(side=LEFT)
+
+        self._ts_frame = Frame(pf, bg=CARD)
+        self._ts_frame.grid(row=9, column=0, columnspan=10, sticky=W, pady=(2, 6))
+        Label(self._ts_frame, text="  Stage1 epochs:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        self._ts_ep_e = Entry(self._ts_frame, textvariable=self._freeze_epochs_var,
+                               bg="#16162a", fg=TEXT, insertbackground=TEXT,
+                               relief="flat", font=F_MAIN, bd=4, width=5)
+        self._ts_ep_e.pack(side=LEFT, padx=(2, 10))
+        Label(self._ts_frame, text="Freeze layers:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        self._ts_lay_e = Entry(self._ts_frame, textvariable=self._freeze_layers_var,
+                                bg="#16162a", fg=TEXT, insertbackground=TEXT,
+                                relief="flat", font=F_MAIN, bd=4, width=5)
+        self._ts_lay_e.pack(side=LEFT, padx=(2, 10))
+        Label(self._ts_frame, text="Stage1 LR:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        self._ts_lr_e = Entry(self._ts_frame, textvariable=self._freeze_lr_var,
+                               bg="#16162a", fg=TEXT, insertbackground=TEXT,
+                               relief="flat", font=F_MAIN, bd=4, width=8)
+        self._ts_lr_e.pack(side=LEFT, padx=(2, 10))
+        Label(self._ts_frame,
+              text="→ Stage2: main epochs + main lr0 + full network + mixup/copy-paste",
+              bg=CARD, fg=DIM, font=("Segoe UI", 8, "italic")).pack(side=LEFT, padx=(4, 0))
+        self._on_two_stage_toggle()
 
         # ── Control bar ───────────────────────────────────────────────────
         ctrl = Frame(self, bg=BG, padx=12, pady=6)
@@ -415,6 +497,11 @@ class TrainTab(Frame):
                                 font=F_MAIN, relief="flat", padx=10, cursor="hand2",
                                 state=DISABLED)
         self._open_btn.pack(side=LEFT, padx=4)
+        Button(res, text="⚡ Export Model",
+               command=self._export_model,
+               bg="#1565c0", fg="white",
+               activebackground="#0d47a1", activeforeground="white",
+               font=F_MAIN, relief="flat", padx=10, cursor="hand2").pack(side=LEFT, padx=4)
 
     def _build_subfolder_panel(self):
         sf = LabelFrame(
@@ -671,6 +758,162 @@ class TrainTab(Frame):
         enabled = self._early_stop_var.get()
         state = NORMAL if enabled else DISABLED
         self._patience_entry.config(state=state)
+
+    def _on_two_stage_toggle(self):
+        enabled = self._two_stage_var.get()
+        state = NORMAL if enabled else DISABLED
+        for e in (getattr(self, "_ts_ep_e", None),
+                  getattr(self, "_ts_lay_e", None),
+                  getattr(self, "_ts_lr_e", None)):
+            if e:
+                try:
+                    e.config(state=state)
+                except Exception:
+                    pass
+
+    # ── Export model ──────────────────────────────────────────────────────
+
+    def _export_model(self):
+        """Dialog export best.pt → ONNX / OpenVINO / TensorRT."""
+        best_pt = self._find_best_pt()
+
+        dlg = Toplevel(self.root)
+        dlg.title("KZTEK – Export Model")
+        dlg.configure(bg=BG)
+        dlg.resizable(True, True)
+        dlg.grab_set()
+
+        _pt_var    = StringVar(value=str(best_pt) if best_pt else "")
+        _fmt_var   = StringVar(value="onnx")
+        _imgsz_var = StringVar(value=self._imgsz_var.get())
+        _half_var  = BooleanVar(value=True)
+        _dyn_var   = BooleanVar(value=False)
+
+        Label(dlg, text="Export Model cho Deployment", bg=BG, fg=TEXT,
+              font=F_BOLD, padx=16, pady=10).pack(anchor=W)
+
+        pt_row = Frame(dlg, bg=BG)
+        pt_row.pack(fill=X, padx=16, pady=4)
+        Label(pt_row, text="Model (.pt):", bg=BG, fg=DIM, font=F_MAIN,
+              width=14, anchor=W).pack(side=LEFT)
+        Entry(pt_row, textvariable=_pt_var, bg="#16162a", fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4,
+              width=42).pack(side=LEFT, padx=(4, 4))
+
+        def _browse_pt():
+            p = filedialog.askopenfilename(
+                title="Chọn model .pt",
+                filetypes=[("PyTorch model", "*.pt"), ("All files", "*.*")],
+                initialdir=self._project_var.get().strip() or ".")
+            if p:
+                _pt_var.set(p)
+        Button(pt_row, text="📂", command=_browse_pt,
+               bg=CARD, fg=TEXT, activebackground=ACCENT2, activeforeground="white",
+               font=F_MAIN, relief="flat", padx=6, cursor="hand2").pack(side=LEFT)
+
+        Frame(dlg, bg=DIM, height=1).pack(fill=X, padx=16, pady=6)
+        Label(dlg, text="Format xuất:", bg=BG, fg=TEXT,
+              font=F_BOLD, padx=16).pack(anchor=W)
+        for _lbl, _val, _note in [
+            ("ONNX",           "onnx",      "→ dùng với C# OnnxRuntime, universal"),
+            ("OpenVINO FP16",  "openvino",  "→ Intel CPU/iGPU nhanh nhất (~3× vs PyTorch)"),
+            ("TensorRT",       "engine",    "→ NVIDIA GPU, cần TensorRT cài sẵn"),
+        ]:
+            r = Frame(dlg, bg=BG)
+            r.pack(fill=X, padx=24, pady=2)
+            Radiobutton(r, text=_lbl, variable=_fmt_var, value=_val,
+                        bg=BG, fg=TEXT, activebackground=BG, activeforeground=ACCENT,
+                        selectcolor=CARD, font=F_MAIN, width=16).pack(side=LEFT)
+            Label(r, text=_note, bg=BG, fg=DIM,
+                  font=("Segoe UI", 8, "italic")).pack(side=LEFT)
+
+        Frame(dlg, bg=DIM, height=1).pack(fill=X, padx=16, pady=6)
+        opt = Frame(dlg, bg=BG)
+        opt.pack(fill=X, padx=16, pady=4)
+        Label(opt, text="Imgsz:", bg=BG, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Entry(opt, textvariable=_imgsz_var, bg="#16162a", fg=TEXT,
+              insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4,
+              width=6).pack(side=LEFT, padx=(4, 16))
+        Checkbutton(opt, text="Half / FP16", variable=_half_var,
+                    bg=BG, fg=TEXT, activebackground=BG, activeforeground=TEXT,
+                    selectcolor=CARD, font=F_MAIN).pack(side=LEFT, padx=(0, 12))
+        Checkbutton(opt, text="Dynamic batch", variable=_dyn_var,
+                    bg=BG, fg=TEXT, activebackground=BG, activeforeground=TEXT,
+                    selectcolor=CARD, font=F_MAIN).pack(side=LEFT)
+
+        log_f = Frame(dlg, bg=BG)
+        log_f.pack(fill=BOTH, expand=True, padx=16, pady=(6, 4))
+        vsb = Scrollbar(log_f, orient=VERTICAL)
+        vsb.pack(side=RIGHT, fill=Y)
+        _log_txt = Text(log_f, bg="#16162a", fg=TEXT, font=("Consolas", 8),
+                        height=7, relief="flat", state=DISABLED, wrap=NONE,
+                        yscrollcommand=vsb.set)
+        _log_txt.pack(fill=BOTH, expand=True)
+        vsb.config(command=_log_txt.yview)
+
+        def _append(msg):
+            _log_txt.config(state=NORMAL)
+            _log_txt.insert(END, msg)
+            _log_txt.see(END)
+            _log_txt.config(state=DISABLED)
+            dlg.update_idletasks()
+
+        def _run_export():
+            pt = _pt_var.get().strip()
+            if not pt or not Path(pt).exists():
+                messagebox.showerror("Lỗi", "Chọn file .pt hợp lệ.", parent=dlg)
+                return
+            fmt   = _fmt_var.get()
+            imgsz = _imgsz_var.get().strip() or "640"
+            half  = _half_var.get()
+            dyn   = _dyn_var.get()
+            _append(f"▶ Export {Path(pt).name} → {fmt} (imgsz={imgsz}, half={half})\n")
+
+            script = (
+                "import os, sys\n"
+                "os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')\n"
+                "from ultralytics import YOLO\n"
+                f"model = YOLO({pt!r})\n"
+                f"result = model.export(\n"
+                f"    format={fmt!r},\n"
+                f"    imgsz={imgsz},\n"
+                f"    half={half},\n"
+                f"    dynamic={dyn},\n"
+                f")\n"
+                "print(f'EXPORT_OK: {result}')\n"
+            )
+            tmp = Path(tempfile.gettempdir()) / "kztek_export_job.py"
+            tmp.write_text(script, encoding="utf-8")
+
+            import subprocess as _sp
+            proc = _sp.Popen([sys.executable, str(tmp)],
+                             stdout=_sp.PIPE, stderr=_sp.STDOUT, bufsize=1)
+
+            def _stream():
+                for raw in iter(proc.stdout.readline, b""):
+                    _append(raw.decode("utf-8", errors="replace"))
+                proc.wait()
+                ok = proc.returncode == 0
+                _append("\n✅ Export thành công!\n" if ok else "\n❌ Export thất bại!\n")
+
+            threading.Thread(target=_stream, daemon=True).start()
+
+        btn_row = Frame(dlg, bg=BG)
+        btn_row.pack(fill=X, padx=16, pady=(4, 16))
+        Button(btn_row, text="⚡  Export", command=_run_export,
+               bg="#1565c0", fg="white",
+               activebackground="#0d47a1", activeforeground="white",
+               font=F_BOLD, relief="flat", padx=16, cursor="hand2").pack(side=LEFT)
+        Button(btn_row, text="Đóng", command=dlg.destroy,
+               bg=CARD, fg=DIM, activebackground=ACCENT2, activeforeground="white",
+               font=F_MAIN, relief="flat", padx=12, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+
+        dlg.bind("<Escape>", lambda _: dlg.destroy())
+        dlg.update_idletasks()
+        sw = dlg.winfo_screenwidth(); sh = dlg.winfo_screenheight()
+        w = max(dlg.winfo_reqwidth(), 620); h = max(dlg.winfo_reqheight(), 420)
+        dlg.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+        dlg.lift(); dlg.focus_set()
 
     # ── Chart window ──────────────────────────────────────────────────────
 
@@ -1589,9 +1832,10 @@ class TrainTab(Frame):
         try:
             epochs = int(self._epochs_var.get())
             imgsz  = int(self._imgsz_var.get())
-            batch  = int(self._batch_var.get())
+            _b_raw = self._batch_var.get().strip()
+            batch  = float(_b_raw) if "." in _b_raw else int(_b_raw)
         except ValueError:
-            messagebox.showerror("Lỗi", "Epochs / Imgsz / Batch phải là số nguyên.")
+            messagebox.showerror("Lỗi", "Epochs/Imgsz là số nguyên; Batch: số (−1=auto, 0.9=90%VRAM).")
             return
         device = self._device_var.get().strip() or "0"
 
@@ -1599,7 +1843,7 @@ class TrainTab(Frame):
         try:
             lr0 = float(self._lr0_var.get())
         except ValueError:
-            lr0 = 0.01
+            lr0 = 0.001
         try:
             lrf = float(self._lrf_var.get())
         except ValueError:
@@ -1619,6 +1863,48 @@ class TrainTab(Frame):
         cache_raw = self._cache_var.get().strip()
         cache_py  = "False" if cache_raw == "False" else f"'{cache_raw}'"
         cos_lr    = self._cos_lr_var.get()
+        amp       = self._amp_var.get()
+        try:
+            label_smooth = float(self._label_smooth_var.get())
+        except ValueError:
+            label_smooth = 0.1
+        try:
+            mixup = float(self._mixup_var.get())
+        except ValueError:
+            mixup = 0.15
+        try:
+            copy_paste = float(self._copy_paste_var.get())
+        except ValueError:
+            copy_paste = 0.1
+        try:
+            degrees = float(self._degrees_var.get())
+        except ValueError:
+            degrees = 10.0
+        try:
+            cls = float(self._cls_var.get())
+        except ValueError:
+            cls = 1.5
+        try:
+            momentum = float(self._momentum_var.get())
+        except ValueError:
+            momentum = 0.937
+        try:
+            warmup = int(self._warmup_var.get())
+        except ValueError:
+            warmup = 3
+        two_stage = self._two_stage_var.get()
+        try:
+            freeze_epochs = int(self._freeze_epochs_var.get())
+        except ValueError:
+            freeze_epochs = 30
+        try:
+            freeze_layers = int(self._freeze_layers_var.get())
+        except ValueError:
+            freeze_layers = 10
+        try:
+            freeze_lr = float(self._freeze_lr_var.get())
+        except ValueError:
+            freeze_lr = 0.001
 
         early_stop = self._early_stop_var.get()
         try:
@@ -1631,57 +1917,85 @@ class TrainTab(Frame):
         except Exception as e:
             messagebox.showerror("Lỗi tạo data.yaml", str(e)); return
 
-        early_stop_lines = ""
+        # ── Params chung cho cả 2 stage ──────────────────────────────────
+        _cp = (
+            f"        data={yaml_path!r},\n"
+            f"        imgsz={imgsz},\n"
+            f"        batch={batch},\n"
+            f"        device={device!r},\n"
+            f"        optimizer={optimizer!r},\n"
+            f"        lrf={lrf},\n"
+            f"        close_mosaic={close_mosaic},\n"
+            f"        cache={cache_py},\n"
+            f"        workers={workers},\n"
+            f"        cos_lr={cos_lr},\n"
+            f"        weight_decay={weight_decay},\n"
+            f"        amp={amp},\n"
+            f"        label_smoothing={label_smooth},\n"
+            f"        momentum={momentum},\n"
+            f"        warmup_epochs={warmup},\n"
+        )
+        # Augmentation nâng cao — chỉ dùng cho full fine-tune (stage 2 hoặc 1-stage)
+        _ap = (
+            f"        mixup={mixup},\n"
+            f"        copy_paste={copy_paste},\n"
+            f"        degrees={degrees},\n"
+            f"        cls={cls},\n"
+        )
+        _ekw = ""
+        _xkw = ""
         if early_stop:
-            early_stop_lines = (
-                f"    import inspect\n"
-                f"    _sig = inspect.signature(model.train)\n"
+            _ekw = (
+                f"    import inspect as _insp\n"
+                f"    _sig = _insp.signature(model.train)\n"
                 f"    _kw = {{}}\n"
                 f"    if 'patience' in _sig.parameters:\n"
                 f"        _kw['patience'] = {patience}\n"
             )
+            _xkw = "        **_kw,\n"
+
+        if two_stage:
             train_call = (
-                f"    results = model.train(\n"
-                f"        data={yaml_path!r},\n"
-                f"        epochs={epochs},\n"
-                f"        imgsz={imgsz},\n"
-                f"        batch={batch},\n"
-                f"        device={device!r},\n"
-                f"        project={project!r},\n"
-                f"        name={name!r},\n"
-                f"        exist_ok=True,\n"
-                f"        optimizer={optimizer!r},\n"
-                f"        lr0={lr0},\n"
-                f"        lrf={lrf},\n"
-                f"        close_mosaic={close_mosaic},\n"
-                f"        cache={cache_py},\n"
-                f"        workers={workers},\n"
-                f"        cos_lr={cos_lr},\n"
-                f"        weight_decay={weight_decay},\n"
-                f"        **_kw,\n"
-                f"    )\n"
+                f"    print('===== STAGE 1: FREEZE (layers={freeze_layers}, {freeze_epochs}ep, lr={freeze_lr}) =====')\n"
+                f"    results1 = model.train(\n"
+                + _cp
+                + f"        epochs={freeze_epochs},\n"
+                + f"        project={project!r},\n"
+                + f"        name={name + '_s1'!r},\n"
+                + f"        exist_ok=True,\n"
+                + f"        freeze={freeze_layers},\n"
+                + f"        lr0={freeze_lr},\n"
+                + f"    )\n"
+                + f"    _best1 = str(results1.save_dir) + '/weights/best.pt'\n"
+                + f"    print(f'Stage 1 xong. Best: {{_best1}}')\n"
+                + f"    print('===== STAGE 2: FULL FINE-TUNE ({epochs}ep, lr={lr0}) =====')\n"
+                + f"    model = YOLO(_best1)\n"
+                + _ekw
+                + f"    results = model.train(\n"
+                + _cp
+                + _ap
+                + f"        epochs={epochs},\n"
+                + f"        project={project!r},\n"
+                + f"        name={name!r},\n"
+                + f"        exist_ok=True,\n"
+                + f"        freeze=0,\n"
+                + f"        lr0={lr0},\n"
+                + _xkw
+                + f"    )\n"
             )
         else:
-            early_stop_lines = ""
             train_call = (
-                f"    results = model.train(\n"
-                f"        data={yaml_path!r},\n"
-                f"        epochs={epochs},\n"
-                f"        imgsz={imgsz},\n"
-                f"        batch={batch},\n"
-                f"        device={device!r},\n"
-                f"        project={project!r},\n"
-                f"        name={name!r},\n"
-                f"        exist_ok=True,\n"
-                f"        optimizer={optimizer!r},\n"
-                f"        lr0={lr0},\n"
-                f"        lrf={lrf},\n"
-                f"        close_mosaic={close_mosaic},\n"
-                f"        cache={cache_py},\n"
-                f"        workers={workers},\n"
-                f"        cos_lr={cos_lr},\n"
-                f"        weight_decay={weight_decay},\n"
-                f"    )\n"
+                _ekw
+                + f"    results = model.train(\n"
+                + _cp
+                + _ap
+                + f"        epochs={epochs},\n"
+                + f"        project={project!r},\n"
+                + f"        name={name!r},\n"
+                + f"        exist_ok=True,\n"
+                + f"        lr0={lr0},\n"
+                + _xkw
+                + f"    )\n"
             )
 
         script = (
@@ -1694,8 +2008,7 @@ class TrainTab(Frame):
             "    except ImportError:\n"
             "        print('[LỖI] ultralytics chưa được cài. Chạy: pip install ultralytics')\n"
             "        sys.exit(1)\n"
-            f"    model = YOLO({model!r})\n"
-            + early_stop_lines
+            + f"    model = YOLO({model!r})\n"
             + train_call
             + "    print(f'KZTEK_SAVE_DIR: {results.save_dir}')\n"
             + f"    csv_path = str(results.save_dir) + '/results.csv'\n"
@@ -2026,17 +2339,18 @@ class TrainTab(Frame):
         name = self._name_var.get().strip() or "kztek_train"
 
         try:
-            imgsz = int(self._imgsz_var.get())
-            batch = int(self._batch_var.get())
+            imgsz  = int(self._imgsz_var.get())
+            _b_raw = self._batch_var.get().strip()
+            batch  = float(_b_raw) if "." in _b_raw else int(_b_raw)
         except ValueError:
-            messagebox.showerror("Lỗi", "Imgsz / Batch phải là số nguyên."); return
+            messagebox.showerror("Lỗi", "Imgsz là số nguyên; Batch: số (−1=auto)."); return
 
-        device = self._device_var.get().strip() or "0"
+        device    = self._device_var.get().strip() or "0"
         optimizer = self._optimizer_var.get().strip() or "AdamW"
         try:
             lr0 = float(self._lr0_var.get())
         except ValueError:
-            lr0 = 0.01
+            lr0 = 0.001
         try:
             lrf = float(self._lrf_var.get())
         except ValueError:
@@ -2053,9 +2367,38 @@ class TrainTab(Frame):
             weight_decay = float(self._weight_decay_var.get())
         except ValueError:
             weight_decay = 0.0005
-        cache_raw = self._cache_var.get().strip()
-        cache_py  = "False" if cache_raw == "False" else f"'{cache_raw}'"
-        cos_lr    = self._cos_lr_var.get()
+        cache_raw    = self._cache_var.get().strip()
+        cache_py     = "False" if cache_raw == "False" else f"'{cache_raw}'"
+        cos_lr       = self._cos_lr_var.get()
+        amp          = self._amp_var.get()
+        try:
+            label_smooth = float(self._label_smooth_var.get())
+        except ValueError:
+            label_smooth = 0.1
+        try:
+            mixup = float(self._mixup_var.get())
+        except ValueError:
+            mixup = 0.15
+        try:
+            copy_paste = float(self._copy_paste_var.get())
+        except ValueError:
+            copy_paste = 0.1
+        try:
+            degrees = float(self._degrees_var.get())
+        except ValueError:
+            degrees = 10.0
+        try:
+            cls = float(self._cls_var.get())
+        except ValueError:
+            cls = 1.5
+        try:
+            momentum = float(self._momentum_var.get())
+        except ValueError:
+            momentum = 0.937
+        try:
+            warmup = int(self._warmup_var.get())
+        except ValueError:
+            warmup = 3
 
         script = (
             "import os, sys, multiprocessing\n"
@@ -2085,6 +2428,14 @@ class TrainTab(Frame):
             f"        workers={workers},\n"
             f"        cos_lr={cos_lr},\n"
             f"        weight_decay={weight_decay},\n"
+            f"        amp={amp},\n"
+            f"        label_smoothing={label_smooth},\n"
+            f"        mixup={mixup},\n"
+            f"        copy_paste={copy_paste},\n"
+            f"        degrees={degrees},\n"
+            f"        cls={cls},\n"
+            f"        momentum={momentum},\n"
+            f"        warmup_epochs={warmup},\n"
             f"    )\n"
             "    print(f'KZTEK_SAVE_DIR: {results.save_dir}')\n"
         )

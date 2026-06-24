@@ -55,6 +55,23 @@ runs/
 .idea/
 *.swp
 
+# ── Visual Studio / C# ────────────────────────────────────────────────────────
+.vs/
+*.vsidx
+*.vsidx-shm
+*.vsidx-wal
+*.db
+*.db-shm
+*.db-wal
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.dtbcache.v2
+obj/
+bin/
+*.AssemblyInfo.cs
+
 # ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

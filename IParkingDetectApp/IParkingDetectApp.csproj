@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>IParkingDetect</AssemblyName>
+    <RootNamespace>IParkingDetect</RootNamespace>
+    <Version>1.0.0</Version>
+    <Description>KZTEK — Test model OpenVINO/ONNX cho hệ thống iParking</Description>
+    <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
+  </PropertyGroup>
+
+  <!--
+    Sdcb.OpenVINO: hỗ trợ cả .onnx và OpenVINO IR (.xml + .bin)
+    Cài bằng: dotnet add package Sdcb.OpenVINO
+               dotnet add package Sdcb.OpenVINO.runtime.win-x64
+    Phiên bản: chọn bản mới nhất trên NuGet (ví dụ 2024.5.0.0)
+  -->
+  <ItemGroup>
+    <PackageReference Include="Sdcb.OpenVINO" Version="0.8.1" />
+    <PackageReference Include="Sdcb.OpenVINO.runtime.win-x64" Version="2026.2.0" />
+  </ItemGroup>
+
+</Project>

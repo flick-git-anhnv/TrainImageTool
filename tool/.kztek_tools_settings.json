@@ -120,10 +120,10 @@
     "K:/Software/2.AI-Tranining/1.Images/2.Output-crop1/license_plate"
   ],
   "lotte.kw_xe_may": "xe máy,motor",
-  "ip.out": "K:\\Software\\Lotte-Final3",
+  "ip.out": "K:\\Software\\Lotte-Final2",
   "h.ip.out": [
-    "K:\\Software\\Lotte-Final3",
     "K:\\Software\\Lotte-Final2",
+    "K:\\Software\\Lotte-Final3",
     "K:\\Software\\Lotte-Final",
     "K:\\Software\\Lotte-Final\\15_06",
     "K:\\Software\\Lotte-Miss",
@@ -163,6 +163,8 @@
   ],
   "ip.to": "2026-05-31 23:59:59",
   "h.yolo.model": [
+    "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best.pt",
+    "K:/Software/1.PhanLoaiPhuongTienChuan/Model/VietAnh/kztek_train_2406/weights/best.pt",
     "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best (22).pt",
     "K:/Software/1.PhanLoaiPhuongTienChuan/Model/VietAnh/kztek_train_22062026_4/weights/best.pt",
     "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best (21).pt",
@@ -180,11 +182,9 @@
     "K:/Software/1.PhanLoaiPhuongTienChuan/Model/VietAnh/best.pt",
     "K:/Software/TrainModel/best (16).pt",
     "K:/Software/PhanLoaiPhuongTien/TrainModel/kztek_train_19062026_3/weights/best.pt",
-    "K:/Software/PhanLoaiPhuongTien/TrainModel/kztek_train_18062026_2/weights/best.pt",
-    "K:/Software/PhanLoaiPhuongTien/TrainModel/kztek_train_19062026_2/weights/best.pt",
-    "K:/Software/TrainModel/kztek_train_18062026/weights/best.pt"
+    "K:/Software/PhanLoaiPhuongTien/TrainModel/kztek_train_18062026_2/weights/best.pt"
   ],
-  "yolo.model_path": "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best (22).pt",
+  "yolo.model_path": "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best.pt",
   "yolo.check_folder": "K:/Software/Lotte-Final/xe_may",
   "h.yolo.path": [
     "K:/Software/Lotte-Final/xe_may",
@@ -373,7 +373,7 @@
     "K:/Software/2.AI-Tranining/runs/kztek_train/weights/best.pt"
   ],
   "yolo.conf_thresh": 0.0,
-  "yolo.conf": 0.7867692307692308,
+  "yolo.conf": 0.7715384615384616,
   "yolo.iou": 0.505,
   "cls.optimizer": "auto",
   "cls.epochs": "30",
@@ -488,8 +488,9 @@
     "K:\\Software\\PhanLoaiPhuongTien\\BaoTrong_OK",
     "K:\\Software\\PhanLoaiPhuongTien\\BaoTrong"
   ],
-  "bbox.lbl": "K:/Software/PhanLoaiPhuongTien/XuanCuong",
+  "bbox.lbl": "K:/Software/PhanLoaiPhuongTien/BaoTrong1906",
   "h.bbox.lbl": [
+    "K:/Software/PhanLoaiPhuongTien/BaoTrong1906",
     "K:/Software/PhanLoaiPhuongTien/XuanCuong",
     "K:/Software/PhanLoaiPhuongTien/TruongDinh",
     "K:/Software/PhanLoaiPhuongTien/LotteParking/Car_Motor",
@@ -543,14 +544,22 @@
     "K:/Software/1.PhanLoaiPhuongTienChuan/Dataset-PhanLoaiPhuongTien/HARD_NEGATIVES/1.HAM_XE/car/ngang-trai-phai/sang_binh_thuong",
     "K:/Software/1.PhanLoaiPhuongTienChuan/Dataset-PhanLoaiPhuongTien/HARD_NEGATIVES/1.HAM_XE/car/sang_binh_thuong/sang_binh_thuong"
   ],
-  "bbox.last_image": "K:\\Software\\PhanLoaiPhuongTien\\BaoTrong1906\\192.168.17.154_1_18_36_06_8860294_overview.jpg",
+  "bbox.last_image": "K:\\Software\\PhanLoaiPhuongTien\\BaoTrong1906\\192.168.16.170_1_11_48_50_3460239_overview.jpg",
   "yolo.session.folder": "K:/Software/Lotte-Final/xe_may",
-  "yolo.session.image": "K:/Software/Lotte-Final/xe_may\\anh_toan_canh\\2026-06-15\\sang\\CONG 5-VAO-XM-1\\070733_29Z65694.jpg",
+  "yolo.session.image": "K:/Software/Lotte-Final/xe_may\\anh_toan_canh\\2026-06-15\\sang\\CONG 5-VAO-XM-1\\073558_18F139371.jpg",
   "bbox.show_label": false,
   "bbox.show_size": true,
   "lotte.keyword": "74FA5C4D",
   "h.lotte.keyword": [
     "74FA5C4D"
   ],
-  "dl.lw": 2
+  "dl.lw": 2,
+  "dl.model": "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best (22).pt",
+  "history.dl.model": [
+    "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best (22).pt"
+  ],
+  "dl.folder": "K:/Software/PhanLoaiPhuongTien/BaoTrong1906",
+  "history.dl.folder": [
+    "K:/Software/PhanLoaiPhuongTien/BaoTrong1906"
+  ]
 }
