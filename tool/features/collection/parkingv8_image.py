@@ -460,7 +460,9 @@ class Parkingv8Worker:
                  days_list: list = None,
                  shared: _P8SharedLaneState = None,
                  send_done: bool = True,
-                 global_total_days: int = None):
+                 global_total_days: int = None,
+                 mode: str = 'full',
+                 event_db=None):
         self.cfg    = cfg
         self.log_q  = log_q
         self.stat_q = stat_q
@@ -478,9 +480,11 @@ class Parkingv8Worker:
             "day_idx": 0, "total_days": 0, "day_label": "",
             "thread_id": thread_id,
         }
-        self._lane_cat:    dict = {}   # {(lane, vtype, "YYYY-MM-DD"): count} ← daily
-        self._lane_hourly: dict = {}   # {(lane, "YYYY-MM-DD HH"): count}
-        self._lane_buoi:   dict = {}   # {(lane, "YYYY-MM-DD", buoi): count}
+        self._mode     = mode
+        self._event_db = event_db
+        self._lane_cat:    dict = {}
+        self._lane_hourly: dict = {}
+        self._lane_buoi:   dict = {}
         self._done_days:   set  = set()
         self._vtype_cfg:   dict = self._parse_vtype_cfg()
 
@@ -498,16 +502,45 @@ class Parkingv8Worker:
     def _log(self, msg: str): self.log_q.put(msg)
     def _push(self):          self.stat_q.put(dict(self.stats))
 
+    # ── metadata extraction (scan_only mode) ──────────────────────────────
+
+    def _extract_meta(self, rec: dict) -> dict:
+        """Extract metadata từ API record mà không download ảnh."""
+        event_id = str(rec.get("id") or rec.get("Id") or "")
+        plate    = _p8_safe(re.sub(r"[^0-9A-Za-z]", "",
+                                   str(rec.get("plateNumber") or rec.get("PlateNumber") or "")))
+        dt       = (_p8_parse_dt(rec.get("createdUtc") or rec.get("CreatedUtc"))
+                    or datetime.now())
+        lane     = _p8_safe(
+            _get_nested(rec, "device.name") or
+            _get_nested(rec, "Device.Name") or "unknown_lane")
+        vt_int   = _get_nested(rec, "collection.vehicleType")
+        if vt_int is None:
+            vt_int = _get_nested(rec, "accessKey.collection.vehicleType")
+        vtype    = (_VT_INT_MAP.get(int(vt_int), "o_to")
+                    if isinstance(vt_int, int) else "o_to")
+        _preg    = re.sub(r"[^0-9A-Za-z]", "",
+                          str(_get_nested(rec, "accessKey.collection.plateNumber") or "")).upper()
+        has_gt   = bool(_preg)
+        return {
+            "event_id": event_id, "date": dt.strftime("%Y-%m-%d"),
+            "hour": dt.hour,      "minute": dt.minute,
+            "lane": lane,         "vtype": vtype,
+            "plate": plate,       "has_gt": 1 if has_gt else 0,
+            "image_refs": [],     "scanned_at": datetime.now().isoformat(),
+        }
+
     # ── history ──────────────────────────────────────────────────────────────
 
     def _history_load(self, out: Path):
-        try:
-            f = out / self._HISTORY_FILE
-            if f.exists():
-                self._done_days = set(json.loads(f.read_text(encoding="utf-8")))
-                self._log(f"Lịch sử: {len(self._done_days)} ngày đã tải trước đó.")
-        except Exception:
-            self._done_days = set()
+        with self._shared.hist_lock:
+            try:
+                f = out / self._HISTORY_FILE
+                if f.exists():
+                    self._done_days = set(json.loads(f.read_text(encoding="utf-8")))
+                    self._log(f"Lịch sử: {len(self._done_days)} ngày đã tải trước đó.")
+            except Exception:
+                self._done_days = set()
 
     def _history_mark(self, out: Path, label: str):
         self._done_days.add(label)
@@ -669,12 +702,16 @@ class Parkingv8Worker:
                 f"{len(recs)} sự kiện | {elapsed:.1f}s | tổng={total_count}")
             self.stats["page"]  += 1
             self.stats["event"] += len(recs)
-
+            scan_batch = [] if self._mode == 'scan_only' else None
             for rec in recs:
                 if self._stop.is_set():
                     return
-                self._process(api, rec, endpoint, out)
-
+                if scan_batch is not None:
+                    scan_batch.append(self._extract_meta(rec))
+                else:
+                    self._process(api, rec, endpoint, out)
+            if scan_batch and self._event_db is not None:
+                self._event_db.insert_events('p8', scan_batch)
             self._push()
 
             # Stop if we've fetched all pages
@@ -684,8 +721,9 @@ class Parkingv8Worker:
                 break
 
             page += 1
-            if sleep_s > 0:
-                time.sleep(sleep_s)
+            remaining = max(0.0, min(sleep_s, 5.0) - elapsed)
+            if remaining > 0:
+                time.sleep(remaining)
 
     def _process(self, api: Parkingv8ApiClient, rec: dict, endpoint: str, out: Path):
         event_id = str(rec.get("id") or rec.get("Id") or "")[:8]
@@ -871,6 +909,17 @@ class Parkingv8Worker:
         ok_enc, buf = _cv2_mod.imencode(".jpg", img)
         if ok_enc:
             fpath.write_bytes(buf.tobytes())
+            try:
+                chk = _cv2_mod.imdecode(
+                    _np_mod.frombuffer(fpath.read_bytes(), _np_mod.uint8),
+                    _cv2_mod.IMREAD_UNCHANGED)
+                if chk is None or chk.size < 300:
+                    fpath.unlink(missing_ok=True)
+                    self.stats["error"] += 1
+                    self._log(f"      ✗ Ảnh hỏng sau decode — đã xóa: {fpath.name}")
+                    return False
+            except Exception:
+                pass
             with self._shared._lock:
                 self._shared.lane_total[lane] = self._shared.lane_total.get(lane, 0) + 1
             cat_key  = (lane, vtype, dt.strftime("%Y-%m-%d"))

@@ -238,7 +238,9 @@ class Parkingv6Worker:
                  days_list: list = None,
                  shared: _P6SharedLaneState = None,
                  send_done: bool = True,
-                 global_total_days: int = None):
+                 global_total_days: int = None,
+                 mode: str = 'full',
+                 event_db=None):
         self.cfg                = cfg
         self.log_q              = log_q
         self.stat_q             = stat_q
@@ -256,11 +258,42 @@ class Parkingv6Worker:
             "day_idx": 0, "total_days": 0, "day_label": "",
             "thread_id": thread_id,
         }
+        self._mode     = mode
+        self._event_db = event_db
         self._lane_cat:     dict = {}
         self._lane_hourly:  dict = {}
-        self._lane_buoi:    dict = {}  # {(lane, "YYYY-MM-DD", buoi): count}
+        self._lane_buoi:    dict = {}
         self._done_days:    set  = set()
-        self._vgroup_cache: dict = {}   # {identityGroupId/name (lowercase) → vehicleType int}
+        self._vgroup_cache: dict = {}
+
+    # ── metadata extraction (scan_only mode) ──────────────────────────────
+
+    def _extract_meta(self, rec: dict) -> dict:
+        """Extract metadata từ API record mà không download ảnh."""
+        event_id = str(rec.get("id") or rec.get("Id") or "")
+        plate    = _p6_safe(re.sub(r"[^0-9A-Za-z]", "",
+                                   str(rec.get("plateNumber") or rec.get("PlateNumber") or "")))
+        dt       = (_p6_parse_dt(rec.get("createdUtc") or rec.get("CreatedUtc") or
+                                  rec.get("dateTimeIn") or rec.get("dateTime"))
+                    or datetime.now())
+        lane     = _p6_safe(
+            rec.get("laneName") or _p6_get_nested(rec, "lane.name") or "unknown_lane")
+        group_id   = str(rec.get("identityGroupId") or "").lower()
+        group_name = str(rec.get("identityGroupName") or "").lower()
+        vt_int     = self._vgroup_cache.get(group_id) if group_id else None
+        if vt_int is None and group_name:
+            vt_int = self._vgroup_cache.get(group_name)
+        category   = _p6_vtype_to_category(vt_int if vt_int is not None else -1)
+        file_keys  = list(rec.get("fileKeys") or rec.get("FileKeys") or [])
+        refs       = [str(k) for k in file_keys if k]
+        has_gt     = bool(plate)
+        return {
+            "event_id": event_id, "date": dt.strftime("%Y-%m-%d"),
+            "hour": dt.hour,      "minute": dt.minute,
+            "lane": lane,         "vtype": category,
+            "plate": plate,       "has_gt": 1 if has_gt else 0,
+            "image_refs": refs,   "scanned_at": datetime.now().isoformat(),
+        }
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -308,13 +341,14 @@ class Parkingv6Worker:
     # ── history ──────────────────────────────────────────────────────────────
 
     def _history_load(self, out: Path):
-        try:
-            f = out / self._HISTORY_FILE
-            if f.exists():
-                self._done_days = set(json.loads(f.read_text(encoding="utf-8")))
-                self._log(f"Lịch sử: {len(self._done_days)} ngày đã tải trước đó.")
-        except Exception:
-            self._done_days = set()
+        with self._shared.hist_lock:
+            try:
+                f = out / self._HISTORY_FILE
+                if f.exists():
+                    self._done_days = set(json.loads(f.read_text(encoding="utf-8")))
+                    self._log(f"Lịch sử: {len(self._done_days)} ngày đã tải trước đó.")
+            except Exception:
+                self._done_days = set()
 
     def _history_mark(self, out: Path, label: str):
         self._done_days.add(label)
@@ -481,11 +515,16 @@ class Parkingv6Worker:
                 f"{len(recs)} SK | {elapsed:.1f}s | tổng={total_count}")
             self.stats["page"]  += 1
             self.stats["event"] += len(recs)
-
+            scan_batch = [] if self._mode == 'scan_only' else None
             for rec in recs:
                 if self._stop.is_set():
                     return
-                self._process(api, rec, source, out)
+                if scan_batch is not None:
+                    scan_batch.append(self._extract_meta(rec))
+                else:
+                    self._process(api, rec, source, out)
+            if scan_batch and self._event_db is not None:
+                self._event_db.insert_events('p6', scan_batch)
             self._push()
 
             page += 1
@@ -493,8 +532,9 @@ class Parkingv6Worker:
                 break
             if total_count and self.stats["event"] >= total_count:
                 break
-            if sleep_s > 0:
-                time.sleep(sleep_s)
+            remaining = max(0.0, min(sleep_s, 5.0) - elapsed)
+            if remaining > 0:
+                time.sleep(remaining)
 
     # ── process one record ────────────────────────────────────────────────────
 
@@ -667,6 +707,17 @@ class Parkingv6Worker:
         ok_enc, buf = _cv2_mod.imencode(".jpg", img)
         if ok_enc:
             fpath.write_bytes(buf.tobytes())
+            try:
+                chk = _cv2_mod.imdecode(
+                    _np_mod.frombuffer(fpath.read_bytes(), _np_mod.uint8),
+                    _cv2_mod.IMREAD_UNCHANGED)
+                if chk is None or chk.size < 300:
+                    fpath.unlink(missing_ok=True)
+                    self.stats["error"] += 1
+                    self._log(f"      ✗ Ảnh hỏng sau decode — đã xóa: {fpath.name}")
+                    return False
+            except Exception:
+                pass
             with self._shared._lock:
                 self._shared.lane_total[lane] = (
                     self._shared.lane_total.get(lane, 0) + 1)

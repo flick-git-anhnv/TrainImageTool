@@ -1,5 +1,5 @@
 # CODE_GRAPH.md — KZTEK Image Tools
-<!-- Cập nhật: 2026-06-24 | Thêm IParkingDetectApp: C# WinForms app test model OpenVINO/ONNX -->
+<!-- Cập nhật: 2026-06-24 | Refactor IParkingImageTab → 4 file (mixin pattern); giảm từ 1811 → ~416 dòng -->
 
 ## Hướng dẫn sử dụng
 
@@ -532,7 +532,7 @@ Targets: KZTEK LPR AI Server, OpenALPR
 | `_ask_continue_params` | Dialog chọn best/last/custom .pt + số epochs train thêm |
 | `_continue_train` | Train thêm epochs từ best.pt/last.pt sau khi train đã hoàn tất |
 
-Models: yolo11n/s/m/l/x
+Models: yolo11n/s/m/l/x, rtdetr-l/x (tự chọn class YOLO/RTDETR theo tên model; rtdetr bỏ close_mosaic)
 
 #### `tab_classifier.py` → Class `ClassifierTrainTab(Frame)`
 | Method | Mô tả |
@@ -546,6 +546,142 @@ Models: yolo11n/s/m/l/x
 ---
 
 ### tool/features/collection/
+
+> **Mixin architecture (2026-06-24):** `tab_iparking_image.py` đã được refactor từ 1811 → 416 dòng.
+> Logic được tách thành 4 file; `IParkingImageTab` kế thừa đa (multiple inheritance):
+> ```
+> IParkingImageTab(Frame, IParkingSettingsMixin, IParkingRunnerMixin, IParkingStatsMixin)
+> ```
+
+#### `iparking_constants.py`
+Chỉ hằng số — không có class/function.
+
+| Hằng số | Mô tả |
+|---|---|
+| `_VTYPE_ORDER` | Thứ tự chuẩn của vehicle-type key |
+| `_VTYPE_COLORS` | Màu hex cho từng loại xe (UI chart) |
+| `_LANE_PALETTE` | Màu hex cho từng làn (tối đa 8) |
+| `_THREAD_COLORS` | Màu hex cho từng thread trong log |
+
+Import: stdlib only. ⇢ Được dùng bởi: `iparking_settings_panels.py`, `iparking_stats_ui.py`, `iparking_runner.py`, `tab_iparking_image.py`
+
+---
+
+#### `iparking_settings_panels.py` → Mixin `IParkingSettingsMixin` (575L)
+Chứa tất cả methods build widget cho phần cài đặt.
+
+| Method | Mô tả |
+|---|---|
+| `_sep(p, title)` | Tạo separator đầu mục |
+| `_build_time(p)` | Panel thời gian from/to + threads + sleep |
+| `_build_output(p)` | Panel thư mục đầu ra + nút browse/open |
+| `_build_common_limits(p)` | Giới hạn chung: max/day, max/hour, max/page |
+| `_build_lotte_settings(p)` | Panel cài đặt Lotte (URL, apikey, lane, keyword, vehicle type) |
+| `_build_p8_settings(p)` | Panel cài đặt Parkingv8 (URL, apikey, lane, vehicle type, img mode) |
+| `_build_p6_settings(p)` | Panel cài đặt Parkingv6 (URL, token, lane, keyword, vehicle type) |
+| `_build_phase_controls(p)` | Panel chế độ (Auto / 3-bước) + nút Xem trước/Scan/Phân tích/Tải + DB status label |
+| `_on_phase_mode_change()` | Ẩn/hiện frame 3-nút phase khi mode thay đổi |
+| `_refresh_db_status()` | Cập nhật nhãn trạng thái EventDB (tổng/đã tải/chờ/coverage%) |
+| `_toggle_adv(src)` | Ẩn/hiện advanced settings frame |
+
+Import: `...core.*`, `.iparking_constants._VTYPE_ORDER`, API constants, `DateTimePicker`, `_bind_cfg`, `_bind_history`
+
+---
+
+#### `iparking_stats_ui.py` → Mixin `IParkingStatsMixin`
+Cửa sổ thống kê ảnh (Toplevel).
+
+| Symbol | Mô tả |
+|---|---|
+| `_BUOI_DISP_ORDER` | Class attr — thứ tự hiển thị buổi |
+| `_BUOI_RAW_MAP` | Class attr — map raw-key → tên hiển thị |
+| `_hour_to_buoi_disp(h)` | (static) Giờ → buổi |
+| `_show_stats()` | Mở / lift cửa sổ thống kê |
+| `_stats_rebuild()` | Rescan + repopulate tất cả tabs |
+| `_stats_populate(data)` | Populate 3 tab: Tổng hợp, Theo ngày, Theo buổi |
+| `_scan_stats(out_path)` | (static) Quét thư mục → dict counts |
+| `_make_tree(parent, cols)` | (static) Tạo Treeview có scrollbar |
+| `_make_chart(parent, data)` | Vẽ biểu đồ cột bằng matplotlib |
+| `_stats_tab_summary(nb, data)` | Tab Tổng hợp |
+| `_stats_tab_date(nb, data)` | Tab Theo ngày |
+| `_stats_tab_buoi(nb, data)` | Tab Theo buổi |
+
+Import: `...core.*`, `.iparking_constants._VTYPE_ORDER/_VTYPE_COLORS/_LANE_PALETTE`
+
+---
+
+#### `iparking_runner.py` → Mixin `IParkingRunnerMixin` (580L)
+Điều khiển workers (single + parallel) + polling UI.
+
+| Method | Mô tả |
+|---|---|
+| `_prepare_run()` | Reset state UI trước khi chạy |
+| `_clear_queues()` | Drain `_log_q` và `_stat_q` |
+| `_get_common_cfg()` | Dict cấu hình dùng chung (date range, limits, threads, sleep) |
+| `_split_time_windows(from_str, to_str, n)` | Chia range thời gian thành n windows khi n_days < n_threads |
+| `_start_lotte(from_d, to_d, out)` | Khởi tạo + chạy LotteWorker (single hoặc parallel) |
+| `_start_p8(from_d, to_d, out)` | Khởi tạo + chạy Parkingv8Worker |
+| `_start_p6(from_d, to_d, out)` | Khởi tạo + chạy Parkingv6Worker |
+| `_on_done_reset()` | Reset UI state về "sẵn sàng" |
+| `_run_worker()` | Chạy `self._worker.run()` trong thread |
+| `_retry_failed()` | Thử lại danh sách ảnh thất bại |
+| `_run_parallel_lotte/p6/p8(cfg, n)` | N worker song song, time-slice khi n_days < n |
+| `_poll()` | `root.after()` 100ms: đọc log_q + stat_q → cập nhật UI |
+| `_aggregate_stats()` | Gộp stats từ tất cả shared-state objects |
+| `_update_progress(s)` | Progress bar + ETA |
+| `_log(msg, tag)` / `_log_batch(msgs)` | Ghi dòng log vào Text widget |
+
+Import: `.lotte_image`, `.parkingv8_image`, `.parkingv6_image`, `.iparking_constants._VTYPE_ORDER`
+
+---
+
+#### `iparking_phase_runner.py` → Mixin `IParkingPhaseMixin` (311L)
+3-phase workflow: Scan metadata → Phân tích coverage → Tải theo kế hoạch.
+
+| Method | Mô tả |
+|---|---|
+| `_get_or_create_db()` | Tạo/lấy `EventDB` cho thư mục output hiện tại |
+| `_start_scan()` | Chạy worker ở `mode='scan_only'` → chỉ thu thập metadata vào EventDB |
+| `_show_analysis()` | Toplevel phân tích coverage: tổng scan, đã tải, worst 10 slot |
+| `_start_download_from_plan()` | Tải ảnh theo kế hoạch từ EventPlanner (ưu tiên slot under-represented) |
+| `_show_preview()` | Scan mẫu 1 ngày trong background thread → hiển thị phân phối giờ + ETA |
+
+Import: `.event_db.EventDB`, `.event_planner.EventPlanner`, `.lotte_image`, `.parkingv6_image`
+
+---
+
+#### `event_db.py` → Class `EventDB` (247L)
+SQLite cache cho metadata sự kiện + tracking download progress.
+
+| Method | Mô tả |
+|---|---|
+| `is_scanned(src, date)` | Kiểm tra date đã scan chưa |
+| `mark_scan_start/done(src, date)` | Đánh dấu trạng thái scan |
+| `insert_events(src, records)` | Chèn batch metadata sự kiện |
+| `mark_downloaded(src, event_id)` | Đánh dấu sự kiện đã tải |
+| `get_events(src, downloaded)` | Truy vấn sự kiện (None=all, 0=chưa tải, 1=đã tải) |
+| `get_coverage(src)` | Thống kê coverage theo lane/vtype/hour/slot |
+| `count_summary(src)` | `{total_scanned, downloaded, pending}` |
+| `_migrate_legacy(out)` | Auto-import từ `.lotte_done.json`/`.p8_done.json`/`.p6_done.json` |
+
+Tables: `events(id, source, event_id, plate, dt, date, hour, minute, lane, vtype, image_refs, downloaded)`, `scan_log`
+
+---
+
+#### `event_planner.py` → Class `EventPlanner` (132L)
+Time-Rotating Sampling — lên kế hoạch tải ảnh ưu tiên time-diversity.
+
+| Method | Mô tả |
+|---|---|
+| `analyze()` | Phân tích coverage → gaps, worst_slots, coverage_pct |
+| `make_download_plan(target_per_slot, max_total)` | Sắp xếp events theo priority = 1/(slot_dl+1) |
+| `get_next_batch(batch_size)` | Lấy batch tiếp theo |
+| `slot_label(hour, slot_idx)` | Format nhãn slot (ví dụ `08:00–08:04`) |
+| `coverage_matrix()` | Ma trận coverage để hiển thị UI |
+
+Thuật toán: 5-phút slot, score = `1/(slot_downloaded_count+1)` → slot ít ảnh nhất tải trước
+
+---
 
 #### `lotte_image.py`
 | Class | Mô tả |
@@ -621,37 +757,29 @@ Config keys: `pgs.*` | Camera state: `pgs.cam_list`, `pgs.cam_selected`
 
 Hàm: `_scan_source()` — scan by lane → vehicle type → hour
 
-#### `tab_iparking_image.py` → Class `IParkingImageTab(Frame)`
-Tích hợp 3 nguồn: LotteImage, Parkingv8, Parkingv6.
+#### `tab_iparking_image.py` → Class `IParkingImageTab(Frame, IParkingSettingsMixin, IParkingRunnerMixin, IParkingPhaseMixin, IParkingStatsMixin)`
+**457 dòng** (refactored từ 1811). Chỉ chứa UI skeleton + action handlers. Logic trong 4 mixins.
 
 | Method | Mô tả |
 |---|---|
-| `_build` | Build toàn bộ UI (gọi các `_build_*`) |
-| `_build_time/output/common_limits` | Panel chọn thời gian, thư mục đầu ra, giới hạn chung |
-| `_build_lotte/p8/p6_settings` | Panel cài đặt riêng mỗi nguồn |
-| `_toggle_adv(src)` | Ẩn/hiện advanced settings |
-| `_build_controls/progress/dashboard/log` | Panel điều khiển, progress bar, dashboard, log |
-| `_on_source_change` | Đổi nguồn (Lotte/v8/v6) → ẩn/hiện panel tương ứng |
-| `_browse` | Chọn thư mục đầu ra |
-| `_start` | Validate config rồi bắt đầu download |
-| `_start_lotte/p8/p6` | Khởi tạo config cho từng nguồn |
-| `_run_worker` | Chạy 1 worker (single thread) |
-| `_run_parallel_lotte/p6/p8(cfg, n)` | Chạy N worker song song |
-| `_toggle_pause/_stop` | Tạm dừng / dừng hẳn |
-| `_on_done/_on_done_reset` | Xử lý khi worker hoàn tất |
-| `_poll` | Đọc queue log/progress định kỳ (`after()`) |
-| `_aggregate_stats` | Gộp stats từ tất cả shared-state |
-| `_update_progress(s)/_refresh_stat_lbl(s)` | Cập nhật progress bar & nhãn stats |
-| `_log(msg)` | Ghi log ra Text widget |
-| `_show_dashboard(s)/_hide_dashboard` | Hiện/ẩn lane dashboard |
-| `_show_stats/_stats_rebuild/_stats_populate` | Cửa sổ Stats Toplevel |
-| `_scan_stats(out_path)` | (static) Đếm ảnh theo lane/loại/ngày |
+| `__init__` | Khởi tạo tất cả instance vars, gọi `_build()` + `_poll()` |
+| `_build` | Layout: header → source bar → scrollable canvas → gọi mixin `_build_*` |
+| `_build_controls` | Row nút Start/Stop/Pause/Retry/Stats + Checkbutton + action buttons |
+| `_build_progress` | Progress bar + pct + ETA + item_lbl + stat_lbl |
+| `_build_dashboard` | Frame kết quả (ẩn khi chưa chạy xong) |
+| `_build_log` | Text widget log + scrollbar + nút Xóa log |
+| `_on_source_change` | Đổi nguồn (Lotte/v8/v6) → ẩn/hiện panel tương ứng + cập nhật hint |
+| `_browse` / `_open_out` | Chọn / mở thư mục đầu ra |
+| `_start` | Validate config → gọi `_start_lotte/p8/p6` (từ IParkingRunnerMixin) |
+| `_toggle_pause` / `_stop` | Tạm dừng / dừng hẳn (set pause_event + stop flag) |
+| `_on_done` | Khi tất cả workers xong → cập nhật UI + hiện dashboard |
 | `_show_bad_images` | Mở `BadImageViewer` |
 | `_consolidate` | Mở `ConsolidateWindow` |
 | `_migrate_folder` | Mở UI migrate structure cũ → mới |
-| `_retry_failed` | Retry các lane thất bại |
+| `_clear_progress` | Xóa `.lotte_done.json` / `.p6_done.json` / `.p8_done.json` |
+| `_show_dashboard(s)` / `_hide_dashboard` | Hiện/ẩn box kết quả với counters màu |
 
-Import: `.parkingv8_image`, `.parkingv6_image`, `.lotte_image`, `.lotte_consolidate`, `...utils.bad_image_viewer`, `...utils.migrate_structure`, `...core.ui_helpers.DateTimePicker`
+Import: `.iparking_constants._THREAD_COLORS`, `.iparking_settings_panels.IParkingSettingsMixin`, `.iparking_runner.IParkingRunnerMixin`, `.iparking_phase_runner.IParkingPhaseMixin`, `.iparking_stats_ui.IParkingStatsMixin`, `.lotte_consolidate`, `...utils.bad_image_viewer`, `...utils.migrate_structure`
 
 ---
 

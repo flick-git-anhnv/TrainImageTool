@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using IParkingDetect.Api;
 using IParkingDetect.Controls;
 using IParkingDetect.Helpers;
 using IParkingDetect.Inference;
@@ -50,6 +51,7 @@ public sealed class DetectForm : Form
     // toolbar row 2
     private TrackBar _sldConf = null!, _sldIou = null!;
     private Label    _lblConf = null!, _lblIou = null!;
+    private NumericUpDown _nudParallel = null!;
     private Button   _btnDetectAll = null!, _btnStop = null!;
     private Label    _lblCacheInfo = null!;
     private ProgressBar _pbDetect = null!;
@@ -77,6 +79,20 @@ public sealed class DetectForm : Form
     private Button   _btnOk       = null!, _btnWrong = null!, _btnClearMark = null!;
     private ComboBox _cmbWrongDir = null!;
     private Button   _btnSaveWrong = null!;
+
+    // toolbar row 3 — API
+    private NumericUpDown _nudApiPort    = null!;
+    private Button        _btnApiToggle  = null!;
+    private Label         _lblApiStatus  = null!;
+    private CheckBox      _chkApiAuto    = null!;
+    private ApiHost?      _apiHost;
+
+    // log panel
+    private ListView  _lvLog    = null!;
+    private Label     _lblLogCount = null!;
+    private readonly Dictionary<Guid, ListViewItem>  _logItems = [];
+    private readonly ConcurrentQueue<ApiLogEntry>    _logQueue = new();
+    private System.Windows.Forms.Timer               _logTimer = null!;
 
     // status
     private Label _lblStatus = null!;
@@ -110,8 +126,10 @@ public sealed class DetectForm : Form
         var statusBar = BuildStatusBar();
         var mainPanel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.BG };
         BuildMainPanel(mainPanel);
+        var logPanel = BuildLogPanel();
 
         Controls.Add(mainPanel);
+        Controls.Add(logPanel);
         Controls.Add(toolbar);
         Controls.Add(statusBar);
     }
@@ -122,7 +140,7 @@ public sealed class DetectForm : Form
     {
         var toolbar = new Panel
         {
-            Dock = DockStyle.Top, Height = 106, BackColor = Theme.Card,
+            Dock = DockStyle.Top, Height = 140, BackColor = Theme.Card,
             Padding = new Padding(8, 4, 8, 4),
         };
 
@@ -159,8 +177,12 @@ public sealed class DetectForm : Form
         _lblConf = Theme.Lbl($"{_cfg.Conf:F2}");
         _sldIou  = Theme.Slider(0, 100, (int)(_cfg.Iou  * 100), 120);
         _lblIou  = Theme.Lbl($"{_cfg.Iou:F2}");
+        _nudParallel = Theme.Num(min: 1, max: 16, val: _cfg.Parallelism, w: 52);
+        _nudParallel.Font = Theme.FMain;
+        new ToolTip().SetToolTip(_nudParallel, "Số ảnh detect song song cùng lúc (luồng)");
+
         _btnDetectAll = Theme.Btn("⚡ Detect All");
-        _btnStop      = Theme.Btn("■ Stop",  Theme.Err) ;
+        _btnStop      = Theme.Btn("■ Stop",  Theme.Err);
         _btnStop.Visible = false;
         _pbDetect     = new ProgressBar { Width = 140, Height = 18, Visible = false,
             Style = ProgressBarStyle.Continuous };
@@ -169,11 +191,28 @@ public sealed class DetectForm : Form
         r2.Controls.AddRange([Theme.Lbl("Conf:"), _sldConf, _lblConf,
             Theme.Lbl("  IoU:"), _sldIou, _lblIou,
             new Label { Width = 10, BackColor = Color.Transparent },
+            Theme.Lbl("Luồng:"), _nudParallel,
+            new Label { Width = 6,  BackColor = Color.Transparent },
             _btnDetectAll, _btnStop, _pbDetect, _lblCacheInfo]);
 
-        // Stack rows
-        toolbar.Controls.Add(r2); toolbar.Controls.Add(r1); toolbar.Controls.Add(r0);
-        r0.Dock = r1.Dock = r2.Dock = DockStyle.Top;
+        // Row 3 — API Host
+        var r3 = Theme.Row(); r3.Margin = new Padding(0, 2, 0, 2);
+        _nudApiPort = Theme.Num(1024, 65535, _cfg.ApiPort, w: 64);
+        new ToolTip().SetToolTip(_nudApiPort, "Cổng HTTP API (1024–65535)");
+        _btnApiToggle = Theme.Btn("🌐 Start API");
+        _chkApiAuto   = Theme.Chk("Auto-start", _cfg.ApiAutoStart);
+        _lblApiStatus = Theme.Lbl("● Stopped", fg: Theme.Dim);
+        _lblApiStatus.Font = Theme.FSmB;
+
+        r3.Controls.AddRange([
+            Theme.Lbl("API Host:", Theme.FBold),
+            Theme.Lbl("Port:"), _nudApiPort, _btnApiToggle, _chkApiAuto,
+            new Label { Width = 8, BackColor = Color.Transparent },
+            _lblApiStatus]);
+
+        // Stack rows (thứ tự ngược: Add cuối → DockTop → hiện dưới)
+        toolbar.Controls.Add(r3); toolbar.Controls.Add(r2); toolbar.Controls.Add(r1); toolbar.Controls.Add(r0);
+        r0.Dock = r1.Dock = r2.Dock = r3.Dock = DockStyle.Top;
 
         // Wire events
         btnBrowseModel.Click += OnBrowseModel;
@@ -186,10 +225,15 @@ public sealed class DetectForm : Form
         btnLoad.Click        += OnLoadPath;
         _cmbPath.KeyDown     += (s, e) => { if (e.KeyCode == Keys.Return) OnLoadPath(s, e); };
 
-        _sldConf.ValueChanged += (_, _) => { _cfg.Conf = _sldConf.Value / 100f; _lblConf.Text = $"{_cfg.Conf:F2}"; RefreshCurrentDetect(); };
-        _sldIou.ValueChanged  += (_, _) => { _cfg.Iou  = _sldIou.Value  / 100f; _lblIou.Text  = $"{_cfg.Iou:F2}"; };
-        _btnDetectAll.Click   += OnDetectAll;
-        _btnStop.Click        += (_, _) => _detectCts?.Cancel();
+        _sldConf.ValueChanged     += (_, _) => { _cfg.Conf = _sldConf.Value / 100f; _lblConf.Text = $"{_cfg.Conf:F2}"; RefreshCurrentDetect(); };
+        _sldIou.ValueChanged      += (_, _) => { _cfg.Iou  = _sldIou.Value  / 100f; _lblIou.Text  = $"{_cfg.Iou:F2}"; };
+        _nudParallel.ValueChanged += (_, _) => _cfg.Parallelism = (int)_nudParallel.Value;
+        _btnDetectAll.Click       += OnDetectAll;
+        _btnStop.Click            += (_, _) => _detectCts?.Cancel();
+
+        _nudApiPort.ValueChanged  += (_, _) => _cfg.ApiPort    = (int)_nudApiPort.Value;
+        _chkApiAuto.CheckedChanged += (_, _) => _cfg.ApiAutoStart = _chkApiAuto.Checked;
+        _btnApiToggle.Click       += OnToggleApi;
 
         return toolbar;
     }
@@ -687,6 +731,14 @@ public sealed class DetectForm : Form
         try
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
+            Task.Run(() => _yolo.Detect(_origBmp, _cfg.Conf, _cfg.Iou)); // warm-up
+            Task.Run(() => _yolo.Detect(_origBmp, _cfg.Conf, _cfg.Iou)); // warm-up
+            Task.Run(() => _yolo.Detect(_origBmp, _cfg.Conf, _cfg.Iou)); // warm-up
+            Task.Run(() => _yolo.Detect(_origBmp, _cfg.Conf, _cfg.Iou)); // warm-up
+            Task.Run(() => _yolo.Detect(_origBmp, _cfg.Conf, _cfg.Iou)); // warm-up
+            Task.Run(() => _yolo.Detect(_origBmp, _cfg.Conf, _cfg.Iou)); // warm-up
+            Task.Run(() => _yolo.Detect(_origBmp, _cfg.Conf, _cfg.Iou)); // warm-up
+            Task.Run(() => _yolo.Detect(_origBmp, _cfg.Conf, _cfg.Iou)); // warm-up
             var boxes = _yolo.Detect(_origBmp, _cfg.Conf, _cfg.Iou);
             sw.Stop();
             _lastDetectMs = sw.ElapsedMilliseconds;
@@ -744,7 +796,7 @@ public sealed class DetectForm : Form
         {
             var opts = new ParallelOptions
             {
-                MaxDegreeOfParallelism = _yolo.Parallelism,
+                MaxDegreeOfParallelism = (int)_nudParallel.Value,
                 CancellationToken      = token,
             };
 
@@ -782,7 +834,7 @@ public sealed class DetectForm : Form
                             SetStatus($"Detecting… {p}/{total}  " +
                                       $"avg {avgMs}ms/ảnh  " +
                                       $"({(avgMs > 0 ? 1000f / avgMs : 0):F1} FPS)  " +
-                                      $"[{_yolo.Parallelism} luồng]");
+                                      $"[{(int)_nudParallel.Value} luồng]");
                         });
                     }
                 });
@@ -801,7 +853,7 @@ public sealed class DetectForm : Form
         float fps     = finalAvg > 0 ? 1000f / finalAvg : 0;
         SetStatus($"✓ Detect All: {processed}/{_imageList.Count} ảnh  |  " +
                   $"avg {finalAvg}ms/ảnh  {fps:F1} FPS  |  " +
-                  $"tổng {FormatDuration(batchSw.ElapsedMilliseconds)}  [{_yolo.Parallelism} luồng]");
+                  $"tổng {FormatDuration(batchSw.ElapsedMilliseconds)}  [{(int)_nudParallel.Value} luồng]");
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -1026,6 +1078,17 @@ public sealed class DetectForm : Form
         return $"{ms / 60000}m {(ms % 60000) / 1000}s";
     }
 
+    private static string GetLocalIp()
+    {
+        try
+        {
+            using var sock = new System.Net.Sockets.UdpClient();
+            sock.Connect("8.8.8.8", 80);
+            return ((System.Net.IPEndPoint)sock.Client.LocalEndPoint!).Address.ToString();
+        }
+        catch { return "localhost"; }
+    }
+
     // ═════════════════════════════════════════════════════════════════════
     // KEYBOARD SHORTCUTS
     // ═════════════════════════════════════════════════════════════════════
@@ -1062,6 +1125,8 @@ public sealed class DetectForm : Form
         _chkOrig.Checked = _cfg.ShowOriginal;
         _cmbWrongDir.Text = _cfg.WrongFolder;
 
+        if (_cfg.ApiAutoStart) StartApi();
+
         // Handle cả file path và folder path (openvino_model/)
         if (!string.IsNullOrEmpty(_cfg.ModelPath) &&
             (File.Exists(_cfg.ModelPath) || Directory.Exists(_cfg.ModelPath)))
@@ -1091,14 +1156,187 @@ public sealed class DetectForm : Form
     // DISPOSE
     // ═════════════════════════════════════════════════════════════════════
 
+    // ═════════════════════════════════════════════════════════════════════
+    // API HOST
+    // ═════════════════════════════════════════════════════════════════════
+
+    private void OnToggleApi(object? s, EventArgs e)
+    {
+        if (_apiHost?.IsRunning == true) StopApi();
+        else StartApi();
+    }
+
+    private void StartApi()
+    {
+        int port = (int)_nudApiPort.Value;
+        try
+        {
+            _apiHost?.Dispose();
+            _apiHost = new ApiHost(_yolo, port, () => _cfg.Conf, () => _cfg.Iou);
+            _apiHost.OnLog += AppendLog;
+            _apiHost.Start(port);
+            _nudApiPort.Enabled   = false;
+            _btnApiToggle.Text    = "■ Stop API";
+            var localIp = GetLocalIp();
+            _lblApiStatus.Text    = $"● {localIp}:{port}/detect";
+            _lblApiStatus.ForeColor = Theme.Ok;
+            SetStatus($"API đang chạy tại http://{localIp}:{port}/detect");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Không thể khởi động API:\n{ex.Message}", "Lỗi API",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void StopApi()
+    {
+        _apiHost?.Stop();
+        _nudApiPort.Enabled    = true;
+        _btnApiToggle.Text     = "🌐 Start API";
+        _lblApiStatus.Text     = "● Stopped";
+        _lblApiStatus.ForeColor = Theme.Dim;
+        SetStatus("API đã dừng.");
+    }
+
+    private Panel BuildLogPanel()
+    {
+        var panel = new Panel
+        {
+            Dock = DockStyle.Bottom, Height = 155,
+            BackColor = Theme.Card,
+        };
+
+        // Header
+        var hdr = new Panel { Dock = DockStyle.Top, Height = 26, BackColor = Theme.NavyDk };
+        _lblLogCount = Theme.Lbl("📋 API Log  —  0 yêu cầu", fg: Color.White);
+        _lblLogCount.Font = Theme.FSmB;
+        _lblLogCount.Dock = DockStyle.Left;
+        _lblLogCount.Padding = new Padding(6, 0, 0, 0);
+        _lblLogCount.TextAlign = ContentAlignment.MiddleLeft;
+
+        var btnClear = Theme.Btn("🗑 Xóa");
+        btnClear.Dock = DockStyle.Right;
+        btnClear.Click += (_, _) => { _lvLog.Items.Clear(); _logItems.Clear(); UpdateLogCount(); };
+        hdr.Controls.Add(_lblLogCount);
+        hdr.Controls.Add(btnClear);
+
+        // ListView
+        _lvLog = new ListView
+        {
+            Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true,
+            BackColor = Theme.BG, ForeColor = Theme.Txt, BorderStyle = BorderStyle.None,
+            GridLines = true, Font = Theme.FMain,
+        };
+        _lvLog.Columns.Add("Ảnh",               180);
+        _lvLog.Columns.Add("Trạng thái",         110);
+        _lvLog.Columns.Add("Bắt đầu",             90);
+        _lvLog.Columns.Add("Xử lý xong",          90);
+        _lvLog.Columns.Add("Infer (ms)",           80);
+        _lvLog.Columns.Add("Tổng (ms)",            80);
+
+        // Tooltip full path khi hover
+        var tt = new ToolTip();
+        _lvLog.MouseMove += (_, e) =>
+        {
+            var hit = _lvLog.HitTest(e.Location);
+            if (hit.Item is not null)
+            {
+                var path = hit.Item.Tag as string ?? "";
+                if (tt.GetToolTip(_lvLog) != path) tt.SetToolTip(_lvLog, path);
+            }
+        };
+
+        panel.Controls.Add(_lvLog);
+        panel.Controls.Add(hdr);
+
+        // Timer 200ms — UI thread tự kéo queue, không cần BeginInvoke
+        _logTimer = new System.Windows.Forms.Timer { Interval = 200 };
+        _logTimer.Tick += (_, _) => FlushLogQueue();
+        _logTimer.Start();
+
+        return panel;
+    }
+
+    // AppendLog chỉ enqueue — gọi từ background thread hoàn toàn an toàn
+    private void AppendLog(ApiLogEntry entry)
+    {
+        // Thread-safe: chỉ enqueue, timer UI thread sẽ xử lý
+        _logQueue.Enqueue(entry);
+    }
+
+    private void FlushLogQueue()
+    {
+        if (_logQueue.IsEmpty) return;
+        bool anyNew = false;
+        while (_logQueue.TryDequeue(out var entry))
+        {
+            if (_logItems.TryGetValue(entry.Id, out var item))
+            {
+                item.SubItems[1].Text = StatusText(entry.Status);
+                item.SubItems[3].Text = entry.EndTime?.ToString("HH:mm:ss.fff") ?? "";
+                item.SubItems[4].Text = entry.InferMs.HasValue ? $"{entry.InferMs}" : "";
+                item.SubItems[5].Text = entry.TotalMs.HasValue ? $"{entry.TotalMs}" : "";
+                item.ForeColor        = StatusColor(entry.Status);
+                if (entry.ErrorMsg is not null) item.ToolTipText = entry.ErrorMsg;
+            }
+            else
+            {
+                var lvi = new ListViewItem(entry.ImageName) { Tag = entry.ImagePath };
+                lvi.SubItems.Add(StatusText(entry.Status));
+                lvi.SubItems.Add(entry.StartTime.ToString("HH:mm:ss.fff"));
+                lvi.SubItems.Add("");
+                lvi.SubItems.Add("");
+                lvi.SubItems.Add("");
+                lvi.ForeColor   = StatusColor(entry.Status);
+                lvi.ToolTipText = entry.ImagePath;
+                _logItems[entry.Id] = lvi;
+                _lvLog.Items.Insert(0, lvi);
+
+                while (_lvLog.Items.Count > 500)
+                {
+                    var last = _lvLog.Items[^1];
+                    _logItems.Remove(_logItems.FirstOrDefault(kv => kv.Value == last).Key);
+                    _lvLog.Items.RemoveAt(_lvLog.Items.Count - 1);
+                }
+                anyNew = true;
+            }
+        }
+        if (anyNew) UpdateLogCount();
+    }
+
+    private static string StatusText(ApiLogStatus s) => s switch
+    {
+        ApiLogStatus.Processing => "🔄 Đang xử lý",
+        ApiLogStatus.Done       => "✓ Xong",
+        ApiLogStatus.Error      => "✗ Lỗi",
+        _                       => "",
+    };
+
+    private Color StatusColor(ApiLogStatus s) => s switch
+    {
+        ApiLogStatus.Processing => Theme.Warn,
+        ApiLogStatus.Done       => Theme.Ok,
+        ApiLogStatus.Error      => Theme.Err,
+        _                       => Theme.Txt,
+    };
+
+    private void UpdateLogCount() =>
+        _lblLogCount.Text = $"📋 API Log  —  {_lvLog.Items.Count} yêu cầu";
+
+    // ═════════════════════════════════════════════════════════════════════
+    // DISPOSE
+    // ═════════════════════════════════════════════════════════════════════
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
+            _logTimer.Stop();
             _detectCts?.Dispose();
             _origBmp?.Dispose();
             _yolo.Dispose();
-            foreach (var b in _cache.Values.SelectMany(x => x)) { /* DetectBox is record, no dispose needed */ }
+            _apiHost?.Dispose();
         }
         base.Dispose(disposing);
     }

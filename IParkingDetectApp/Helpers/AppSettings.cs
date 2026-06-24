@@ -23,6 +23,9 @@ public sealed class AppSettings
     public float   Iou            { get; set; } = 0.45f;
     public bool    ScanSubfolders { get; set; } = false;
     public bool    ShowOriginal   { get; set; } = false;
+    public int     Parallelism    { get; set; } = 4;     // số ảnh detect song song
+    public int     ApiPort        { get; set; } = 5000;  // cổng HTTP API host
+    public bool    ApiAutoStart   { get; set; } = false; // tự khởi động API khi mở app
     public int     FilmCols       { get; set; } = 8;
     public int     SplitLeft      { get; set; } = 260;
     public int     SplitRight     { get; set; } = 220;

@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lessons Learned — KZTEK</title>
+<style>
+  :root {
+    --bg:      #1e1e2e;
+    --card:    #2a2a3e;
+    --card2:   #232335;
+    --accent:  #F05922;
+    --navy:    #4A3F8C;
+    --text:    #e0e0f0;
+    --dim:     #9090b0;
+    --success: #4caf50;
+    --warn:    #f5c518;
+    --border:  #3a3a55;
+    --code-bg: #12121e;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.65;
+    padding: 32px 20px 64px;
+  }
+
+  /* ── Header ── */
+  .site-header {
+    max-width: 860px;
+    margin: 0 auto 40px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 24px;
+  }
+  .site-header h1 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    color: var(--text);
+  }
+  .site-header h1 span {
+    color: var(--accent);
+  }
+  .meta {
+    font-size: 12px;
+    color: var(--dim);
+    text-align: right;
+    line-height: 1.8;
+  }
+
+  /* ── Layout ── */
+  .wrapper {
+    max-width: 860px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  /* ── Category label ── */
+  .category-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: rgba(240,89,34,0.12);
+    border: 1px solid rgba(240,89,34,0.25);
+    border-radius: 4px;
+    padding: 3px 10px;
+    margin-bottom: 10px;
+  }
+
+  /* ── Lesson card ── */
+  .lesson {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .lesson-header {
+    padding: 18px 22px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .lesson-header h2 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    text-wrap: balance;
+  }
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .tag {
+    font-size: 11px;
+    color: var(--dim);
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 7px;
+  }
+  .lesson-body {
+    padding: 18px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  /* ── Section trong lesson ── */
+  .section-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--navy);
+    color: #7b70c4;
+    margin-bottom: 10px;
+  }
+
+  /* ── Item rows ── */
+  .items {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .item {
+    display: grid;
+    grid-template-columns: 2fr 3fr;
+    gap: 12px;
+    background: var(--card2);
+    border-radius: 5px;
+    padding: 8px 12px;
+    border-left: 3px solid var(--border);
+  }
+  .item.warn  { border-left-color: var(--warn); }
+  .item.ok    { border-left-color: var(--success); }
+  .item.info  { border-left-color: var(--navy); }
+  .item-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--dim);
+    padding-top: 1px;
+  }
+  .item-value {
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  /* ── Callout ── */
+  .callout {
+    display: flex;
+    gap: 10px;
+    background: rgba(245,197,24,0.07);
+    border: 1px solid rgba(245,197,24,0.2);
+    border-radius: 5px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #ddd;
+  }
+  .callout-icon { color: var(--warn); flex-shrink: 0; font-style: normal; }
+
+  /* ── Code block ── */
+  .code-wrap { overflow-x: auto; }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 12px 16px;
+    font-family: "Cascadia Code", "Consolas", "Fira Code", monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: #c9d1d9;
+    white-space: pre;
+  }
+  .kw  { color: #ff7b72; }
+  .ty  { color: #79c0ff; }
+  .str { color: #a5d6ff; }
+  .cm  { color: #6e7681; font-style: italic; }
+  .num { color: #f2cc60; font-variant-numeric: tabular-nums; }
+
+  /* ── Table ── */
+  .tbl-wrap { overflow-x: auto; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th {
+    background: var(--navy);
+    color: #fff;
+    text-align: left;
+    padding: 7px 12px;
+    font-weight: 600;
+    font-size: 12px;
+  }
+  td {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
+  code {
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 12px;
+    background: rgba(255,255,255,0.07);
+    border-radius: 3px;
+    padding: 1px 5px;
+    color: #a5d6ff;
+  }
+
+  /* ── Divider ── */
+  hr { border: none; border-top: 1px solid var(--border); }
+
+  /* ── Footer ── */
+  footer {
+    max-width: 860px;
+    margin: 48px auto 0;
+    font-size: 12px;
+    color: var(--dim);
+    text-align: center;
+    border-top: 1px solid var(--border);
+    padding-top: 20px;
+  }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div>
+    <h1>Lessons Learned — <span>KZTEK</span></h1>
+    <p style="margin-top:4px;font-size:13px;color:var(--dim);">Kho kinh nghiệm toàn cục · Áp dụng mọi dự án</p>
+  </div>
+  <div class="meta">
+    <div>Cập nhật: 2026-06-24</div>
+    <div>2 lessons · 2 categories</div>
+    <div style="color:var(--accent)">C:\Users\nguye\.claude\lessons\</div>
+  </div>
+</header>
+
+<div class="wrapper">
+
+  <!-- ═══════════════════════════════════════════
+       CATEGORY: AVALONIA
+  ═══════════════════════════════════════════ -->
+  <div>
+    <div class="category-label">avalonia</div>
+
+    <div class="lesson">
+      <div class="lesson-header">
+        <h2>Avalonia Migration từ WinForms: Pitfall và Pattern Bắt Buộc</h2>
+        <div class="tags">
+          <span class="tag">migration</span>
+          <span class="tag">winforms</span>
+          <span class="tag">avalonia</span>
+          <span class="tag">mvvm</span>
+          <span class="tag">binding</span>
+          <span class="tag">severity: high</span>
+          <span class="tag">project: iPGSv4</span>
+        </div>
+      </div>
+
+      <div class="lesson-body">
+
+        <!-- Thread -->
+        <div>
+          <div class="section-title">1 · Thread / Dispatcher</div>
+          <div class="items">
+            <div class="item warn">
+              <div class="item-label">WinForms (SAI)</div>
+              <div class="item-value"><code>this.Invoke(() =&gt; label.Text = value)</code></div>
+            </div>
+            <div class="item ok">
+              <div class="item-label">Avalonia (ĐÚNG)</div>
+              <div class="item-value"><code>Dispatcher.UIThread.Post(() =&gt; label.Content = value)</code></div>
+            </div>
+          </div>
+          <div class="callout" style="margin-top:10px">
+            <em class="callout-icon">⚠</em>
+            <span><code>Control.Invoke</code> không tồn tại trong Avalonia — luôn dùng <code>Dispatcher.UIThread</code>.</span>
+          </div>
+        </div>
+
+        <!-- INotifyPropertyChanged -->
+        <div>
+          <div class="section-title">2 · Binding — Bắt buộc INotifyPropertyChanged</div>
+          <div class="code-wrap"><pre><span class="cm">// ViewModel bắt buộc implement INPC:</span>
+<span class="kw">public class</span> <span class="ty">MyViewModel</span> : <span class="ty">ReactiveObject</span>
+{
+    <span class="kw">private string</span> _name;
+    <span class="kw">public string</span> Name
+    {
+        <span class="kw">get</span> =&gt; _name;
+        <span class="kw">set</span> =&gt; <span class="kw">this</span>.RaiseAndSetIfChanged(<span class="kw">ref</span> _name, value);
+    }
+}</pre></div>
+          <div class="callout" style="margin-top:10px">
+            <em class="callout-icon">⚠</em>
+            <span>Binding không cập nhật UI nếu ViewModel thiếu INPC — lỗi âm thầm, khó debug.</span>
+          </div>
+        </div>
+
+        <!-- MessageBox -->
+        <div>
+          <div class="section-title">3 · MessageBox → MsBox.Avalonia</div>
+          <div class="items">
+            <div class="item warn">
+              <div class="item-label">WinForms (không có)</div>
+              <div class="item-value"><code>MessageBox.Show("msg")</code></div>
+            </div>
+            <div class="item ok">
+              <div class="item-label">Avalonia (ĐÚNG)</div>
+              <div class="item-value"><code>await MessageBoxManager.GetMessageBoxStandard("T","M").ShowAsync()</code></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Controls mapping -->
+        <div>
+          <div class="section-title">4 · Bảng đổi tên Controls</div>
+          <div class="tbl-wrap">
+            <table>
+              <thead><tr><th>WinForms</th><th>Avalonia</th></tr></thead>
+              <tbody>
+                <tr><td><code>Label</code></td><td><code>TextBlock</code> (hiển thị) hoặc <code>Label</code></td></tr>
+                <tr><td><code>PictureBox</code></td><td><code>Image</code></td></tr>
+                <tr><td><code>Panel</code></td><td><code>Panel</code> / <code>StackPanel</code> / <code>Grid</code></td></tr>
+                <tr><td><code>DataGridView</code></td><td><code>DataGrid</code></td></tr>
+                <tr><td><code>Form</code></td><td><code>Window</code></td></tr>
+                <tr><td><code>UserControl</code></td><td><code>UserControl</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Navigation -->
+        <div>
+          <div class="section-title">5 · Navigation — ContentControl + ViewModel Routing</div>
+          <div class="items">
+            <div class="item warn">
+              <div class="item-label">WinForms (tránh)</div>
+              <div class="item-value"><code>new CameraForm().Show()</code></div>
+            </div>
+          </div>
+          <div class="code-wrap" style="margin-top:10px"><pre><span class="cm">// AXAML:</span>
+&lt;ContentControl Content="{Binding CurrentView}" /&gt;
+
+<span class="cm">// MainViewModel:</span>
+CurrentView = <span class="kw">new</span> <span class="ty">CameraViewModel</span>();
+
+<span class="cm">// App.axaml — đăng ký DataTemplate:</span>
+&lt;DataTemplate DataType="vm:CameraViewModel"&gt;
+  &lt;views:CameraView /&gt;
+&lt;/DataTemplate&gt;</pre></div>
+        </div>
+
+        <!-- Cạm bẫy -->
+        <div>
+          <div class="section-title">6 · Cạm bẫy thường gặp</div>
+          <div class="items">
+            <div class="item warn">
+              <div class="item-label">File extension</div>
+              <div class="item-value">Dùng <code>.axaml</code>, không phải <code>.xaml</code></div>
+            </div>
+            <div class="item warn">
+              <div class="item-label">ComboBox binding</div>
+              <div class="item-value">Dùng <code>SelectedItem</code>, KHÔNG dùng <code>SelectedValue</code> như WPF</div>
+            </div>
+            <div class="item warn">
+              <div class="item-label">async void</div>
+              <div class="item-value">Bắt buộc wrap <code>try/catch</code> — exception trong async void crash app</div>
+            </div>
+            <div class="item warn">
+              <div class="item-label">DataContext</div>
+              <div class="item-value">Phải set trong constructor hoặc AXAML — khác WinForms</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       CATEGORY: CAMERA INTEGRATION
+  ═══════════════════════════════════════════ -->
+  <div>
+    <div class="category-label">camera-integration</div>
+
+    <div class="lesson">
+      <div class="lesson-header">
+        <h2>Tích Hợp SDK Milesight: Cấu Hình, Port, Channel</h2>
+        <div class="tags">
+          <span class="tag">milesight</span>
+          <span class="tag">sdk</span>
+          <span class="tag">camera</span>
+          <span class="tag">rtsp</span>
+          <span class="tag">lpr</span>
+          <span class="tag">severity: high</span>
+          <span class="tag">project: iPGSv4</span>
+        </div>
+      </div>
+
+      <div class="lesson-body">
+
+        <!-- Port/Channel type -->
+        <div>
+          <div class="section-title">1 · Port và Channel — dùng kiểu số (int), không dùng string</div>
+          <div class="items">
+            <div class="item warn">
+              <div class="item-label">SAI — silent error</div>
+              <div class="item-value"><code>camera.Port = "554"; camera.Channel = "1";</code></div>
+            </div>
+            <div class="item ok">
+              <div class="item-label">ĐÚNG</div>
+              <div class="item-value"><code>camera.Port = 554; camera.Channel = 1;</code></div>
+            </div>
+          </div>
+          <div class="code-wrap" style="margin-top:10px"><pre><span class="cm">// UI input → phải parse/validate trước:</span>
+<span class="kw">if</span> (!<span class="ty">int</span>.TryParse(txtPort.Text, <span class="kw">out int</span> port))
+{
+    ShowError(<span class="str">"Port phải là số nguyên"</span>);
+    <span class="kw">return</span>;
+}
+camera.Port = port;</pre></div>
+        </div>
+
+        <!-- Port phân biệt -->
+        <div>
+          <div class="section-title">2 · HTTP Port ≠ RTSP Port</div>
+          <div class="items">
+            <div class="item info">
+              <div class="item-label">HTTP Port (config SDK)</div>
+              <div class="item-value">Mặc định <code>80</code> — dùng khi khởi tạo <code>MilesightCameraConfig</code></div>
+            </div>
+            <div class="item info">
+              <div class="item-label">RTSP Port (stream)</div>
+              <div class="item-value">Mặc định <code>554</code> — riêng biệt, dùng trong URL stream</div>
+            </div>
+          </div>
+          <div class="callout" style="margin-top:10px">
+            <em class="callout-icon">⚠</em>
+            <span>Đây là lỗi phổ biến nhất — nhầm HTTP port (80) với RTSP port (554) làm stream không kết nối được.</span>
+          </div>
+        </div>
+
+        <!-- RTSP URL -->
+        <div>
+          <div class="section-title">3 · RTSP URL Format</div>
+          <div class="code-wrap"><pre><span class="cm">rtsp://{username}:{password}@{ip}:{rtsp_port}/main</span>
+<span class="cm">rtsp://{username}:{password}@{ip}:{rtsp_port}/sub</span>
+
+<span class="cm">// Ví dụ:</span>
+rtsp://admin:password@<span class="num">192.168.1.100</span>:<span class="num">554</span>/main</pre></div>
+          <div class="callout" style="margin-top:10px">
+            <em class="callout-icon">⚠</em>
+            <span>Credentials có ký tự đặc biệt phải <strong>URL-encode</strong> trước khi đưa vào RTSP URL.</span>
+          </div>
+        </div>
+
+        <!-- Channel -->
+        <div>
+          <div class="section-title">4 · Channel bắt đầu từ 1 (không phải 0)</div>
+          <div class="items">
+            <div class="item warn">
+              <div class="item-label">SAI</div>
+              <div class="item-value"><code>Channel = 0</code> → stream NULL, không báo lỗi</div>
+            </div>
+            <div class="item ok">
+              <div class="item-label">ĐÚNG</div>
+              <div class="item-value"><code>Channel = 1</code> (1-based index)</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Reconnect -->
+        <div>
+          <div class="section-title">5 · Reconnect Loop</div>
+          <div class="code-wrap"><pre><span class="kw">private async</span> <span class="ty">Task</span> StartWithReconnect(<span class="ty">CancellationToken</span> ct)
+{
+    <span class="kw">while</span> (!ct.IsCancellationRequested)
+    {
+        <span class="kw">try</span>
+        {
+            <span class="kw">await</span> _camera.ConnectAsync();
+            <span class="kw">await</span> _camera.StartStreamAsync();
+            <span class="kw">await</span> WaitForDisconnectAsync(ct);
+        }
+        <span class="kw">catch</span> (<span class="ty">Exception</span> ex)
+        {
+            _logger.LogWarning(<span class="str">"Camera disconnected: {msg}"</span>, ex.Message);
+            <span class="kw">await</span> <span class="ty">Task</span>.Delay(<span class="num">5000</span>, ct); <span class="cm">// Chờ 5s rồi reconnect</span>
+        }
+    }
+}</pre></div>
+        </div>
+
+        <!-- UI Zone -->
+        <div>
+          <div class="section-title">6 · Cho chọn Zone ngay tại màn hình config</div>
+          <div class="items">
+            <div class="item ok">
+              <div class="item-label">Pattern đúng</div>
+              <div class="item-value">Bind <code>ComboBox</code> zone/channel trực tiếp trên form config — không navigate màn hình khác</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       CHƯA CÓ LESSON
+  ═══════════════════════════════════════════ -->
+  <div style="border:1px dashed var(--border);border-radius:8px;padding:18px 22px;color:var(--dim);font-size:13px;">
+    <strong style="color:var(--text)">Categories chưa có lesson:</strong>
+    &nbsp;csharp-winforms · dotnet-general · networking-protocol · database · ui-patterns
+    <br>
+    <span style="font-size:12px">→ Ghi lesson ngay khi gặp gotcha, không đợi hết task.</span>
+  </div>
+
+</div>
+
+<footer>
+  Nguồn: <code>C:\Users\nguye\.claude\lessons\</code> &nbsp;·&nbsp;
+  Index: <code>INDEX.md</code> &nbsp;·&nbsp;
+  Template: <code>_TEMPLATE.md</code>
+</footer>
+
+</body>
+</html>

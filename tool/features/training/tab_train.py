@@ -49,11 +49,13 @@ _C_REC      = _VAL_FG
 
 class TrainTab(Frame):
     _MODELS = [
-        ("yolo11n.pt", "Nano  – nhanh nhất, nhẹ nhất"),
-        ("yolo11s.pt", "Small"),
-        ("yolo11m.pt", "Medium"),
-        ("yolo11l.pt", "Large"),
-        ("yolo11x.pt", "XLarge – chính xác nhất"),
+        ("yolo11n.pt",  "YOLO11 Nano  – nhanh nhất, nhẹ nhất"),
+        ("yolo11s.pt",  "YOLO11 Small"),
+        ("yolo11m.pt",  "YOLO11 Medium"),
+        ("yolo11l.pt",  "YOLO11 Large"),
+        ("yolo11x.pt",  "YOLO11 XLarge – chính xác nhất"),
+        ("rtdetr-l.pt", "RT-DETR L – transformer, độ chính xác cao"),
+        ("rtdetr-x.pt", "RT-DETR X – transformer, độ chính xác tối đa"),
     ]
 
     def __init__(self, master, root):
@@ -312,10 +314,15 @@ class TrainTab(Frame):
             ("Workers:",     self._workers_var,       4),
             ("Weight Decay:",self._weight_decay_var,  9),
         ]:
-            Label(adv1, text=_lbl, bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
-            Entry(adv1, textvariable=_var, bg="#16162a", fg=TEXT,
-                  insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4,
-                  width=_w).pack(side=LEFT, padx=(4, 14))
+            lbl_w = Label(adv1, text=_lbl, bg=CARD, fg=DIM, font=F_MAIN)
+            lbl_w.pack(side=LEFT)
+            ent_w = Entry(adv1, textvariable=_var, bg="#16162a", fg=TEXT,
+                          insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4,
+                          width=_w)
+            ent_w.pack(side=LEFT, padx=(4, 14))
+            if _lbl == "Close Mosaic:":
+                self._close_mosaic_lbl = lbl_w
+                self._close_mosaic_ent = ent_w
 
         adv2 = Frame(pf, bg=CARD)
         adv2.grid(row=6, column=0, columnspan=10, sticky=W, pady=(2, 0))
@@ -1787,9 +1794,16 @@ class TrainTab(Frame):
 
     def _on_model_change(self, _event):
         val = self._model_var.get()
+        is_rtdetr = "rtdetr" in val.lower()
+        suffix = "  ※ không dùng Close Mosaic" if is_rtdetr else ""
         for name, desc in self._MODELS:
             if name == val:
-                self._model_desc.config(text=desc); break
+                self._model_desc.config(text=desc + suffix); break
+        if hasattr(self, "_close_mosaic_lbl"):
+            self._close_mosaic_lbl.config(fg="#555570" if is_rtdetr else DIM)
+            self._close_mosaic_ent.config(
+                state=DISABLED if is_rtdetr else NORMAL,
+                fg="#555570" if is_rtdetr else TEXT)
 
     def _on_split_change(self, *_):
         try:
@@ -1917,6 +1931,9 @@ class TrainTab(Frame):
         except Exception as e:
             messagebox.showerror("Lỗi tạo data.yaml", str(e)); return
 
+        # ── Detect model architecture ─────────────────────────────────────
+        _is_rtdetr = "rtdetr" in model.lower()
+
         # ── Params chung cho cả 2 stage ──────────────────────────────────
         _cp = (
             f"        data={yaml_path!r},\n"
@@ -1925,8 +1942,8 @@ class TrainTab(Frame):
             f"        device={device!r},\n"
             f"        optimizer={optimizer!r},\n"
             f"        lrf={lrf},\n"
-            f"        close_mosaic={close_mosaic},\n"
-            f"        cache={cache_py},\n"
+            + (f"        close_mosaic={close_mosaic},\n" if not _is_rtdetr else "")
+            + f"        cache={cache_py},\n"
             f"        workers={workers},\n"
             f"        cos_lr={cos_lr},\n"
             f"        weight_decay={weight_decay},\n"
@@ -1969,7 +1986,7 @@ class TrainTab(Frame):
                 + f"    _best1 = str(results1.save_dir) + '/weights/best.pt'\n"
                 + f"    print(f'Stage 1 xong. Best: {{_best1}}')\n"
                 + f"    print('===== STAGE 2: FULL FINE-TUNE ({epochs}ep, lr={lr0}) =====')\n"
-                + f"    model = YOLO(_best1)\n"
+                + f"    model = _ModelCls(_best1)\n"
                 + _ekw
                 + f"    results = model.train(\n"
                 + _cp
@@ -1998,17 +2015,19 @@ class TrainTab(Frame):
                 + f"    )\n"
             )
 
+        _model_cls_name = "RTDETR" if _is_rtdetr else "YOLO"
         script = (
             "import os, sys, multiprocessing\n"
             "multiprocessing.freeze_support()\n"
             "if __name__ == '__main__':\n"
             "    os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')\n"
             "    try:\n"
-            "        from ultralytics import YOLO\n"
+            "        from ultralytics import YOLO, RTDETR\n"
             "    except ImportError:\n"
             "        print('[LỖI] ultralytics chưa được cài. Chạy: pip install ultralytics')\n"
             "        sys.exit(1)\n"
-            + f"    model = YOLO({model!r})\n"
+            + f"    _ModelCls = {_model_cls_name}\n"
+            + f"    model = _ModelCls({model!r})\n"
             + train_call
             + "    print(f'KZTEK_SAVE_DIR: {results.save_dir}')\n"
             + f"    csv_path = str(results.save_dir) + '/results.csv'\n"

@@ -21,6 +21,7 @@
     Phiên bản: chọn bản mới nhất trên NuGet (ví dụ 2024.5.0.0)
   -->
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Sdcb.OpenVINO" Version="0.8.1" />
     <PackageReference Include="Sdcb.OpenVINO.runtime.win-x64" Version="2026.2.0" />
   </ItemGroup>

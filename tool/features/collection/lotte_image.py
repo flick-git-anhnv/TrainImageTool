@@ -266,7 +266,9 @@ class LotteWorker:
                  days_list: list = None,
                  shared: '_SharedLaneState' = None,
                  send_done: bool = True,
-                 global_total_days: int = None):
+                 global_total_days: int = None,
+                 mode: str = 'full',
+                 event_db=None):
         self.cfg         = cfg
         self.log_q       = log_q
         self.stat_q      = stat_q
@@ -284,24 +286,57 @@ class LotteWorker:
             "day_idx": 0, "total_days": 0, "day_label": "",
             "thread_id": thread_id,
         }
-        self._lane_cat: dict    = {}  # {(lane, cat, "YYYY-MM-DD"): count}
-        self._lane_hourly: dict = {}  # {(lane, "YYYY-MM-DD HH"): count}
-        self._lane_buoi: dict   = {}  # {(lane, "YYYY-MM-DD", buoi): count}
+        self._mode     = mode
+        self._event_db = event_db
+        self._lane_cat: dict    = {}
+        self._lane_hourly: dict = {}
+        self._lane_buoi: dict   = {}
         self._done_days: set    = set()
         self._vtype_cfg: dict   = self._parse_vtype_cfg()
+
+    # ── metadata extraction (scan_only mode) ──────────────────────────────
+
+    def _extract_meta(self, rec: dict) -> dict:
+        """Extract metadata từ API record mà không download ảnh."""
+        event_id = str(rec.get("Id") or "")
+        lane     = _li_safe(rec.get("InLaneName") or "unknown_lane")
+        plate    = _li_safe(re.sub(r"[^0-9A-Za-z]", "",
+                                   str(rec.get("PlateIn") or rec.get("PlateOut") or "")))
+        dt_in    = _li_parse_dt(rec.get("DatetimeIn")) or datetime.now()
+        cg       = str(rec.get("CardGroupName") or "")
+        imgs_all = list(rec.get("ImagesIn") or []) + list(rec.get("ImagesOut") or [])
+        desc0    = (imgs_all[0].get("Description", "") if imgs_all and
+                    isinstance(imgs_all[0], dict) else "")
+        vtype    = _li_categorize(desc0, cg, self._vtype_cfg)
+        refs     = [i["FilePath"] for i in imgs_all
+                    if isinstance(i, dict) and i.get("FilePath")]
+        _preg = re.sub(r"[^0-9A-Za-z]", "",
+                       str(rec.get("RegistedPlate") or rec.get("RegisteredPlate") or
+                           rec.get("CardPlate") or "")).upper()
+        _pin  = re.sub(r"[^0-9A-Za-z]", "", str(rec.get("PlateIn")  or "")).upper()
+        _pout = re.sub(r"[^0-9A-Za-z]", "", str(rec.get("PlateOut") or "")).upper()
+        has_gt = bool(_preg or (_pin and _pout and _pin == _pout))
+        return {
+            "event_id": event_id, "date": dt_in.strftime("%Y-%m-%d"),
+            "hour": dt_in.hour,   "minute": dt_in.minute,
+            "lane": lane,         "vtype": vtype,
+            "plate": plate,       "has_gt": 1 if has_gt else 0,
+            "image_refs": refs,   "scanned_at": datetime.now().isoformat(),
+        }
 
     # ── lịch sử ngày đã tải ────────────────────────────────────────────────
 
     _HISTORY_FILE = ".lotte_done.json"
 
     def _history_load(self, out: Path):
-        try:
-            f = out / self._HISTORY_FILE
-            if f.exists():
-                self._done_days = set(json.loads(f.read_text(encoding="utf-8")))
-                self._log(f"Lịch sử: {len(self._done_days)} ngày đã tải trước đó.")
-        except Exception:
-            self._done_days = set()
+        with self._shared.hist_lock:
+            try:
+                f = out / self._HISTORY_FILE
+                if f.exists():
+                    self._done_days = set(json.loads(f.read_text(encoding="utf-8")))
+                    self._log(f"Lịch sử: {len(self._done_days)} ngày đã tải trước đó.")
+            except Exception:
+                self._done_days = set()
 
     def _history_mark(self, out: Path, label: str):
         self._done_days.add(label)
@@ -492,14 +527,21 @@ class LotteWorker:
             self._log(f"  [PAGE {page}{total_info}] {len(recs)} sự kiện | {elapsed:.1f}s")
             self.stats["page"]  += 1
             self.stats["event"] += len(recs)
+            scan_batch = [] if self._mode == 'scan_only' else None
             for rec in recs:
                 if self._stop.is_set():
                     return
-                self._process(api, rec, out)
+                if scan_batch is not None:
+                    scan_batch.append(self._extract_meta(rec))
+                else:
+                    self._process(api, rec, out)
+            if scan_batch and self._event_db is not None:
+                self._event_db.insert_events('lotte', scan_batch)
             self._push()
             page += 1
-            if sleep_s > 0:
-                time.sleep(sleep_s)
+            remaining = max(0.0, min(sleep_s, 5.0) - elapsed)
+            if remaining > 0:
+                time.sleep(remaining)
 
     def _process(self, api: LotteApiClient, rec: dict, out: Path):
         event_id = str(rec.get("Id") or "")[:8]
@@ -690,6 +732,17 @@ class LotteWorker:
         ok_enc, buf = _cv2_mod.imencode(".jpg", img)
         if ok_enc:
             fpath.write_bytes(buf.tobytes())
+            try:
+                chk = _cv2_mod.imdecode(
+                    _np_mod.frombuffer(fpath.read_bytes(), _np_mod.uint8),
+                    _cv2_mod.IMREAD_UNCHANGED)
+                if chk is None or chk.size < 300:
+                    fpath.unlink(missing_ok=True)
+                    self.stats["error"] += 1
+                    self._log(f"      ✗ Ảnh hỏng sau decode — đã xóa: {fpath.name}")
+                    return False
+            except Exception:
+                pass
             with self._shared._lock:
                 self._shared.lane_total[lane] = self._shared.lane_total.get(lane, 0) + 1
             cat_key  = (lane, img_type, dt.strftime("%Y-%m-%d"))

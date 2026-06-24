@@ -161,7 +161,7 @@
     "97H43617",
     "37H43617"
   ],
-  "ip.to": "2026-05-31 23:59:59",
+  "ip.to": "2026-05-01 23:59:59",
   "h.yolo.model": [
     "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best.pt",
     "K:/Software/1.PhanLoaiPhuongTienChuan/Model/VietAnh/kztek_train_2406/weights/best.pt",
@@ -561,5 +561,7 @@
   "dl.folder": "K:/Software/PhanLoaiPhuongTien/BaoTrong1906",
   "history.dl.folder": [
     "K:/Software/PhanLoaiPhuongTien/BaoTrong1906"
-  ]
+  ],
+  "ip.target_per_slot": 5,
+  "ip.phase_mode": "3step"
 }
