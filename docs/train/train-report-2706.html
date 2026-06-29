@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>KZTEK Training Report — kztek_test_100ep · 2026-06-27</title>
+<meta name="description" content="Live training report — 100 epoch full fine-tune, 6-class vehicle detection">
+<style>
+  :root {
+    --ground:#12121f;--card:#1a1a2c;--card2:#1f1f35;
+    --border:#2e2e48;--text:#e0e0f0;--dim:#8888a8;
+    --accent:#F05922;--accent2:#4A3F8C;--green:#3fb950;--yellow:#f0a922;
+  }
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--ground);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+    font-size:13px;line-height:1.6}
+  header{background:var(--card);border-bottom:1px solid var(--border);
+    padding:20px 36px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .logo{font-family:'Courier New',monospace;font-size:20px;font-weight:900;color:var(--accent)}
+  .logo span{font-size:9px;display:block;letter-spacing:4px;color:var(--dim)}
+  .hdiv{width:1px;height:32px;background:var(--border);flex-shrink:0}
+  .htxt h1{font-size:15px;font-weight:700}
+  .htxt p{font-size:11px;color:var(--dim);font-family:'Courier New',monospace}
+  .status-chip{margin-left:auto;padding:6px 16px;background:var(--ground);
+    border:1px solid var(--border);border-radius:4px;font-size:13px}
+  main{padding:24px 36px 60px;max-width:1400px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px}
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:16px 18px}
+  .card-title{font-size:10px;font-weight:700;text-transform:uppercase;
+    letter-spacing:1.5px;color:var(--dim);margin-bottom:10px}
+  .big-num{font-family:'Courier New',monospace;font-size:28px;font-weight:900;color:var(--accent)}
+  .big-lbl{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-top:2px}
+  .sec{margin-bottom:28px}
+  .sec-hdr{display:flex;align-items:center;gap:8px;padding-bottom:6px;
+    border-bottom:1px solid var(--border);margin-bottom:12px}
+  .sec-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex-shrink:0}
+  .sec-ttl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:var(--accent)}
+  .tbl-wrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  thead th{background:var(--card2);color:var(--dim);font-size:10px;font-weight:600;
+    text-transform:uppercase;letter-spacing:1px;padding:7px 10px;
+    text-align:left;border:1px solid var(--border);white-space:nowrap}
+  tbody tr{border-bottom:1px solid var(--border)}
+  tbody tr:hover{background:rgba(255,255,255,.03)}
+  tbody td{padding:7px 10px;border-right:1px solid var(--border);font-family:'Courier New',monospace;font-size:12px}
+  tbody td:first-child{border-left:1px solid var(--border)}
+  .param-table td:first-child{color:var(--dim);font-family:inherit;width:200px}
+  .param-table td:last-child{font-family:'Courier New',monospace;color:#a0c0ff}
+  .best{color:var(--green);font-weight:700}
+  .warn{color:var(--yellow)}
+  .bad{color:#ff7070}
+  .ok{color:#a0c0ff}
+  .tag{display:inline-block;padding:1px 7px;border-radius:3px;font-size:10px;font-weight:700;
+    text-transform:uppercase;letter-spacing:.5px}
+  .tag-ok{background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.3)}
+  .tag-warn{background:rgba(240,169,34,.15);color:var(--yellow);border:1px solid rgba(240,169,34,.3)}
+  .tag-bad{background:rgba(255,112,112,.15);color:#ff7070;border:1px solid rgba(255,112,112,.3)}
+  /* chart */
+  .chart-wrap{padding:12px 0 0;overflow-x:auto}
+  .bar-chart{display:flex;align-items:flex-end;gap:6px;height:120px;padding-bottom:24px;position:relative}
+  .bar-col{display:flex;flex-direction:column;align-items:center;gap:3px;flex:1;min-width:36px}
+  .bar{width:100%;border-radius:3px 3px 0 0;position:relative;cursor:default}
+  .bar:hover{filter:brightness(1.25)}
+  .bar-lbl{font-size:9px;color:var(--dim);font-family:'Courier New',monospace;white-space:nowrap}
+  .bar-val{font-size:9px;color:var(--accent);font-family:'Courier New',monospace;font-weight:700}
+  .progress-bar{height:8px;background:var(--card2);border-radius:4px;overflow:hidden;margin-top:4px}
+  .progress-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent2),var(--accent))}
+  footer{border-top:1px solid var(--border);padding:14px 36px;
+    display:flex;justify-content:space-between;font-size:11px;
+    color:var(--dim);font-family:'Courier New',monospace}
+  .note{background:rgba(240,89,34,.07);border-left:3px solid var(--accent);
+    padding:10px 14px;border-radius:0 4px 4px 0;font-size:12px;color:var(--dim);margin-bottom:16px}
+  .note strong{color:var(--accent)}
+  .analysis-row{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:start;
+    padding:7px 0;border-bottom:1px solid var(--border)}
+  .analysis-row:last-child{border-bottom:none}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">KZ<span>TEK</span></div>
+  <div class="hdiv"></div>
+  <div class="htxt">
+    <h1>Training Report — kztek_test_100ep</h1>
+    <p>yolo11n fine-tune · 6 classes · 100 epochs · warmup=30 · 2026-06-27</p>
+  </div>
+  <div class="status-chip" id="status-chip">
+    <span style="color:var(--yellow);font-weight:700">⏳ ĐANG CHẠY — 7/100 epoch</span>
+  </div>
+</header>
+
+<main>
+
+<!-- KPI -->
+<div class="grid4" style="margin-top:20px">
+  <div class="card">
+    <div class="card-title">Best mAP50</div>
+    <div class="big-num" id="kpi-map50">92.00%</div>
+    <div class="big-lbl">Epoch 7 · đang tăng ↑</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Best mAP50-95</div>
+    <div class="big-num" style="color:var(--green)" id="kpi-map5095">64.66%</div>
+    <div class="big-lbl">Epoch 7 · new best ↑↑</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Recall (ep7)</div>
+    <div class="big-num" style="color:var(--yellow)" id="kpi-recall">85.97%</div>
+    <div class="big-lbl">từ 83.56% ep1 → +2.4pt</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Tiến độ</div>
+    <div class="big-num" id="kpi-progress">7%</div>
+    <div class="progress-bar" style="margin-top:8px"><div class="progress-fill" style="width:7%"></div></div>
+    <div class="big-lbl" style="margin-top:6px">7 / 100 epoch · ~10h còn lại</div>
+  </div>
+</div>
+
+<!-- CHART mAP50 -->
+<div class="sec">
+  <div class="sec-hdr"><div class="sec-dot"></div><span class="sec-ttl">mAP50 Trend</span></div>
+  <div class="card">
+    <div class="chart-wrap">
+      <div class="bar-chart" id="map50-chart">
+        <!-- bars generated by inline JS below -->
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--dim);margin-top:4px">* Warmup giai đoạn ep1–30: LR tăng dần → mAP tăng chậm và ổn định. Bứt phá kỳ vọng từ ep30+.</div>
+  </div>
+</div>
+
+<!-- EPOCH TABLE -->
+<div class="sec">
+  <div class="sec-hdr"><div class="sec-dot"></div><span class="sec-ttl">Kết quả từng Epoch</span></div>
+  <div class="tbl-wrap">
+    <table id="epoch-table">
+      <thead>
+        <tr>
+          <th>Ep</th>
+          <th>mAP50 ↑</th>
+          <th>mAP50-95 ↑</th>
+          <th>Precision</th>
+          <th>Recall ↑</th>
+          <th>train/box↓</th>
+          <th>train/cls↓</th>
+          <th>train/dfl↓</th>
+          <th>val/box↓</th>
+          <th>val/cls↓</th>
+          <th>LR</th>
+          <th>Thời gian</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>0.90821</td><td>0.61067</td><td>0.91699</td><td>0.83563</td><td>1.08952</td><td>6.09465</td><td>1.98703</td><td>1.14892</td><td>4.80788</td><td>0.001000</td><td>11m 57s</td></tr>
+        <tr><td>2</td><td>0.91216</td><td>0.62272</td><td>0.90765</td><td>0.85509</td><td>1.06542</td><td>5.85261</td><td>1.96385</td><td>1.11078</td><td>4.64156</td><td>0.001999</td><td>9m 02s</td></tr>
+        <tr><td>3</td><td>0.91722</td><td>0.62676</td><td>0.91444</td><td>0.85328</td><td>1.03984</td><td>5.61549</td><td>1.94551</td><td>1.11350</td><td>4.61321</td><td>0.002996</td><td>8m 25s</td></tr>
+        <tr><td>4</td><td>0.91548</td><td>0.63752</td><td>0.91438</td><td>0.85291</td><td>1.03111</td><td>5.55135</td><td>1.93177</td><td>1.08361</td><td>4.53463</td><td>0.003991</td><td>8m 22s</td></tr>
+        <tr><td>5</td><td>0.91809</td><td>0.63855</td><td>0.90107</td><td>0.85910</td><td>1.02627</td><td>5.43109</td><td>1.91817</td><td>1.08521</td><td>4.54640</td><td>0.004980</td><td>7m 29s</td></tr>
+        <tr><td>6</td><td>0.91863</td><td>0.63173</td><td>0.90105</td><td>0.86151</td><td>1.01466</td><td>5.32098</td><td>1.90946</td><td>1.12073</td><td>4.61495</td><td>0.005962</td><td>7m 13s</td></tr>
+        <tr style="background:rgba(240,89,34,.06)"><td><strong>7</strong></td><td class="best">0.91996</td><td class="best">0.64662</td><td>0.91219</td><td>0.85965</td><td class="best">1.00492</td><td class="best">5.23009</td><td class="best">1.89738</td><td class="best">1.05245</td><td class="best">4.52424</td><td>0.006937</td><td>7m 06s</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div style="font-size:10px;color:var(--dim);margin-top:8px">
+    <span style="background:rgba(240,89,34,.1);padding:2px 6px;border-radius:2px;color:var(--accent)">highlight</span> = row best hiện tại &nbsp;|&nbsp;
+    <span class="best">xanh</span> = best value từng cột
+  </div>
+</div>
+
+<!-- CONFIG -->
+<div class="sec">
+  <div class="sec-hdr"><div class="sec-dot"></div><span class="sec-ttl">Cấu hình Training</span></div>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">Model &amp; Dataset</div>
+      <table class="param-table"><tbody>
+        <tr><td>Base model</td><td>kztek_train_27062026_4/weights/best.pt</td></tr>
+        <tr><td>Architecture</td><td>YOLO11n — fine-tune</td></tr>
+        <tr><td>Input size</td><td>640×640</td></tr>
+        <tr><td>Classes (nc=6)</td><td>car · motorbike · bus · truck · bicycle · license_plate</td></tr>
+        <tr><td>Output dir</td><td>D:/Software/Model/kztek_test_100ep</td></tr>
+        <tr><td>Device</td><td>CUDA:0 (RTX 3050 Ti 4GB)</td></tr>
+        <tr><td>batch</td><td>-1 (AutoBatch → 5)</td></tr>
+        <tr><td>workers</td><td>4</td></tr>
+      </tbody></table>
+    </div>
+    <div class="card">
+      <div class="card-title">LR &amp; Schedule</div>
+      <table class="param-table"><tbody>
+        <tr><td>epochs</td><td>100</td></tr>
+        <tr><td>warmup_epochs</td><td>30</td></tr>
+        <tr><td>lr0</td><td>0.0001</td></tr>
+        <tr><td>lrf</td><td>0.0001</td></tr>
+        <tr><td>cos_lr</td><td>True</td></tr>
+        <tr><td>momentum</td><td>0.937</td></tr>
+        <tr><td>weight_decay</td><td>0.0005</td></tr>
+        <tr><td>optimizer</td><td>auto</td></tr>
+      </tbody></table>
+    </div>
+    <div class="card">
+      <div class="card-title">Loss Weights</div>
+      <table class="param-table"><tbody>
+        <tr><td>cls</td><td>4.0 <span class="tag tag-warn">⚠ 8× default</span></td></tr>
+        <tr><td>box</td><td>7.5 <span class="tag tag-ok">✓ default</span></td></tr>
+        <tr><td>dfl</td><td>2.5 <span class="tag tag-ok">↑ default 1.5</span></td></tr>
+        <tr><td>iou (label assign)</td><td>0.4 <span class="tag tag-ok">↓ default 0.7</span></td></tr>
+        <tr><td>label_smoothing</td><td>0.1</td></tr>
+        <tr><td>amp</td><td>True (FP16)</td></tr>
+        <tr><td>close_mosaic</td><td>10</td></tr>
+        <tr><td>save_period</td><td>10</td></tr>
+      </tbody></table>
+    </div>
+    <div class="card">
+      <div class="card-title">Augmentation</div>
+      <table class="param-table"><tbody>
+        <tr><td>mixup</td><td>0.15</td></tr>
+        <tr><td>copy_paste</td><td>0.1</td></tr>
+        <tr><td>degrees</td><td>10.0 <span class="tag tag-warn">⚠ xem xét giảm</span></td></tr>
+        <tr><td>erasing</td><td>0.4</td></tr>
+        <tr><td>fliplr</td><td>0.5</td></tr>
+        <tr><td>hsv_h / s / v</td><td>0.015 / 0.7 / 0.4</td></tr>
+        <tr><td>perspective</td><td>0.0</td></tr>
+        <tr><td>dropout</td><td>0.0</td></tr>
+      </tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- ANALYSIS -->
+<div class="sec">
+  <div class="sec-hdr"><div class="sec-dot"></div><span class="sec-ttl">Phân tích Hyperparameter</span></div>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">✅ Hợp lý — Giữ nguyên</div>
+      <div class="analysis-row"><span class="tag tag-ok">OK</span><span><strong>box=7.5, dfl=2.5</strong> — val_box_loss giảm đều từ 1.149→1.052. Cân bằng tốt.</span></div>
+      <div class="analysis-row"><span class="tag tag-ok">OK</span><span><strong>iou=0.4</strong> (label assignment) — thấp hơn default 0.7, giúp tách 2 xe gần nhau. Đúng hướng cho bài toán bãi đỗ.</span></div>
+      <div class="analysis-row"><span class="tag tag-ok">OK</span><span><strong>label_smoothing=0.1</strong> — giảm overconfidence, tốt cho generalization.</span></div>
+      <div class="analysis-row"><span class="tag tag-ok">OK</span><span><strong>warmup_epochs=30</strong> — bảo vệ fine-tune với model pretrained. LR đang tăng đúng lịch.</span></div>
+      <div class="analysis-row"><span class="tag tag-ok">OK</span><span><strong>erasing=0.4, copy_paste=0.1</strong> — tăng khả năng chịu occlusion, giúp xe bị che khuất vẫn detect được.</span></div>
+      <div class="analysis-row"><span class="tag tag-ok">OK</span><span><strong>cos_lr=True</strong> — cosine decay chuẩn sau warmup.</span></div>
+    </div>
+    <div class="card">
+      <div class="card-title">⚠️ Cần xem lại — Lần train tiếp</div>
+      <div class="analysis-row"><span class="tag tag-warn">⚠</span><span><strong>cls=4.0</strong> (8× default 0.5) — val_cls_loss vẫn cao (4.52). Đang ép model quá mức với classification. Đề xuất: <strong>cls=2.0</strong> lần tiếp.</span></div>
+      <div class="analysis-row"><span class="tag tag-warn">⚠</span><span><strong>batch=-1 → 5</strong> — AutoBatch chọn batch nhỏ (60% VRAM), gradient noise cao, training chậm (~10h). Đề xuất: <strong>batch=16</strong> → ~3× nhanh hơn.</span></div>
+      <div class="analysis-row"><span class="tag tag-warn">⚠</span><span><strong>degrees=10.0</strong> — camera bãi đỗ cố định, xe không nghiêng 10°. Có thể gây nhiễu. Đề xuất: <strong>degrees=2.0</strong>.</span></div>
+      <div class="analysis-row"><span class="tag tag-warn">⚠</span><span><strong>lr0=0.0001</strong> — LR thực tế tại ep7 là 0.00694 (có thể YOLO đang dùng default 0.01 thay vì giá trị đặt). Cần verify lại.</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- FUTURE PARAMS -->
+<div class="sec">
+  <div class="sec-hdr"><div class="sec-dot"></div><span class="sec-ttl">Tham số nên thêm trong tương lai</span></div>
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Tham số</th>
+          <th>Giá trị đề xuất</th>
+          <th>Ưu tiên</th>
+          <th>Tác dụng</th>
+          <th>Lý do</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>nbs</strong></td>
+          <td>64</td>
+          <td><span class="tag tag-bad">🔥 Cao nhất</span></td>
+          <td>Nominal Batch Size normalization</td>
+          <td>Với batch=5, YOLO không auto-scale weight_decay/momentum. nbs=64 giúp chuẩn hóa gradient — quan trọng nhất khi dùng batch nhỏ.</td>
+        </tr>
+        <tr>
+          <td><strong>patience</strong></td>
+          <td>50</td>
+          <td><span class="tag tag-warn">Cao</span></td>
+          <td>Early stopping</td>
+          <td>Dừng tự động nếu 50 epoch không cải thiện → tiết kiệm thời gian, tránh overfitting cuối.</td>
+        </tr>
+        <tr>
+          <td><strong>cache</strong></td>
+          <td>'ram' hoặc 'disk'</td>
+          <td><span class="tag tag-warn">Cao</span></td>
+          <td>Cache ảnh vào RAM/disk</td>
+          <td>Giảm I/O bottleneck, tăng tốc training đáng kể nếu RAM ≥ 16GB. 'disk' an toàn hơn.</td>
+        </tr>
+        <tr>
+          <td><strong>freeze</strong></td>
+          <td>10</td>
+          <td><span class="tag tag-ok">Trung bình</span></td>
+          <td>Đóng băng N lớp backbone</td>
+          <td>Khi fine-tune từ model tốt: freeze backbone → chỉ train head → hội tụ nhanh hơn, ít phá vỡ features đã học.</td>
+        </tr>
+        <tr>
+          <td><strong>multi_scale</strong></td>
+          <td>True</td>
+          <td><span class="tag tag-ok">Trung bình</span></td>
+          <td>Train với imgsz ngẫu nhiên [320–960]</td>
+          <td>Cải thiện generalization với nhiều góc camera / khoảng cách khác nhau trong bãi đỗ.</td>
+        </tr>
+        <tr>
+          <td><strong>val_period</strong></td>
+          <td>2 hoặc 5</td>
+          <td><span class="tag tag-ok">Thấp</span></td>
+          <td>Tần suất validation</td>
+          <td>Giảm thời gian mỗi epoch nếu dataset val lớn. Mặc định 1 (mỗi epoch đều val).</td>
+        </tr>
+        <tr>
+          <td><strong>warmup_bias_lr</strong></td>
+          <td>0.1</td>
+          <td><span class="tag tag-ok">Thấp</span></td>
+          <td>LR khởi đầu warmup cho bias params</td>
+          <td>Hiện đang dùng default — expose ra UI để kiểm soát rõ hơn khi LR schedule có vấn đề.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- LOG -->
+<div class="sec">
+  <div class="sec-hdr"><div class="sec-dot"></div><span class="sec-ttl">Update Log</span></div>
+  <div class="card">
+    <table>
+      <thead><tr><th>Thời gian</th><th>Epoch</th><th>mAP50</th><th>Ghi chú</th></tr></thead>
+      <tbody>
+        <tr><td>2026-06-27 22:33</td><td>1</td><td>0.90821</td><td>Khởi tạo báo cáo. Warmup bắt đầu.</td></tr>
+        <tr><td>2026-06-27 22:45</td><td>2</td><td>0.91216</td><td>Recall tăng +0.019. Xu hướng tích cực.</td></tr>
+        <tr><td>2026-06-27 23:00</td><td>3–4</td><td>0.91548–0.91722</td><td>mAP50-95 tăng đều. Training ổn định.</td></tr>
+        <tr><td>2026-06-27 23:17</td><td>5–6</td><td>0.91809–0.91863</td><td>Tốc độ tăng 4–5 it/s. Recall best 0.8615.</td></tr>
+        <tr><td>2026-06-27 23:30</td><td>7</td><td class="best">0.91996</td><td>mAP50 &amp; mAP50-95 new best cùng lúc.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+</main>
+
+<footer>
+  <span>KZTEK Image Tools — Training Report</span>
+  <span>kztek_test_100ep · 2026-06-27 · yolo11n · RTX 3050 Ti 4GB</span>
+  <span>Updated: 2026-06-27 23:30</span>
+</footer>
+
+<script>
+// Inline bar chart for mAP50
+(function(){
+  var data = [
+    {ep:1, v:0.90821},
+    {ep:2, v:0.91216},
+    {ep:3, v:0.91722},
+    {ep:4, v:0.91548},
+    {ep:5, v:0.91809},
+    {ep:6, v:0.91863},
+    {ep:7, v:0.91996}
+  ];
+  var minV = 0.900, maxV = 0.925;
+  var chart = document.getElementById('map50-chart');
+  var maxIdx = data.reduce(function(m,d,i){return d.v>data[m].v?i:m;},0);
+  data.forEach(function(d,i){
+    var pct = ((d.v - minV)/(maxV - minV)*100).toFixed(1);
+    var col = document.createElement('div');
+    col.className = 'bar-col';
+    var valEl = document.createElement('div');
+    valEl.className = 'bar-val';
+    valEl.textContent = (d.v*100).toFixed(2)+'%';
+    var bar = document.createElement('div');
+    bar.className = 'bar';
+    bar.style.height = pct + '%';
+    bar.style.background = i===maxIdx
+      ? 'linear-gradient(180deg,#F05922,#c03d10)'
+      : 'linear-gradient(180deg,#4A3F8C,#2e2660)';
+    bar.title = 'Epoch '+d.ep+': '+((d.v*100).toFixed(3))+'%';
+    var lbl = document.createElement('div');
+    lbl.className = 'bar-lbl';
+    lbl.textContent = 'ep'+d.ep;
+    col.appendChild(valEl);
+    col.appendChild(bar);
+    col.appendChild(lbl);
+    chart.appendChild(col);
+  });
+  // placeholder bars for remaining epochs (greyed out)
+  for(var e=8;e<=20;e++){
+    var col2 = document.createElement('div');
+    col2.className = 'bar-col';
+    var bar2 = document.createElement('div');
+    bar2.className = 'bar';
+    bar2.style.height = '10%';
+    bar2.style.background = '#2a2a3e';
+    bar2.style.border = '1px dashed #2e2e48';
+    var lbl2 = document.createElement('div');
+    lbl2.className = 'bar-lbl';
+    lbl2.style.color = '#3a3a5a';
+    lbl2.textContent = 'ep'+e;
+    col2.appendChild(bar2);
+    col2.appendChild(lbl2);
+    chart.appendChild(col2);
+  }
+})();
+</script>
+
+</body>
+</html>

@@ -141,6 +141,31 @@ class BBoxEditorTab(Frame):
         self._film_page         = 0
         self._film_max_page     = 0
 
+        # ── YOLO auto-detect ──────────────────────────────────────────────
+        self._det_model       = None
+        self._det_model_path  = StringVar()
+        self._det_conf_var    = DoubleVar(value=0.25)
+        self._det_replace_var = BooleanVar(value=False)
+        _bind_cfg("bbox.det_model_path", self._det_model_path)
+        _bind_cfg("bbox.det_conf",       self._det_conf_var)
+        _bind_cfg("bbox.det_replace",    self._det_replace_var)
+
+        # ── Verify (so sánh label với model) ──────────────────────────────
+        self._verify_boxes           = []
+        self._verify_matched_gt      = set()
+        self._verify_matched_det     = set()
+        self._verify_gt_iou          = {}   # gi → best IoU achieved (kể cả khi < threshold)
+        self._verify_active          = False
+        self._verify_iou_var         = DoubleVar(value=0.3)
+        self._verify_show_wrong_only = BooleanVar(value=False)
+        _bind_cfg("bbox.verify_iou",        self._verify_iou_var)
+        _bind_cfg("bbox.verify_wrong_only", self._verify_show_wrong_only)
+
+        # ── Batch Relabel ──────────────────────────────────────────────────
+        self._rl_from_var  = StringVar()
+        self._rl_to_var    = StringVar()
+        self._rl_scope_var = StringVar(value="filtered")
+
         self._build()
         self.after(200, self._restore_session)
 
@@ -477,6 +502,103 @@ class BBoxEditorTab(Frame):
                activeforeground="white", font=F_BOLD,
                relief="flat", padx=6, cursor="hand2").pack(side=LEFT, padx=(4, 2))
 
+        # ── YOLO auto-detect row ──────────────────────────────────────────────
+        det_tb = Frame(center, bg=CARD, pady=4, padx=8)
+        det_tb.pack(fill=X)
+
+        Label(det_tb, text="🤖 Model:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+
+        # Combobox ô model có viền ACCENT cam (1px)
+        _det_border = Frame(det_tb, bg=ACCENT, padx=1, pady=1)
+        _det_border.pack(side=LEFT, padx=(4, 0))
+        self._det_combo = ttk.Combobox(_det_border, textvariable=self._det_model_path,
+                                        width=28, font=F_MAIN)
+        self._det_combo.pack()
+        _bind_history("h.bbox.det_model", self._det_combo)
+        self._det_combo.bind("<Return>", lambda e: self._load_det_model(self._det_model_path.get().strip()))
+
+        Button(det_tb, text="📂", command=self._browse_det_model,
+               bg=CARD, fg=TEXT, font=F_MAIN, relief="flat",
+               padx=6, cursor="hand2").pack(side=LEFT, padx=(4, 0))
+
+        self._btn_detect = Button(det_tb, text="⚡ Detect",
+               command=self._run_detect,
+               bg=ACCENT, fg="white", activebackground="#c04010",
+               activeforeground="white", font=F_BOLD,
+               relief="flat", padx=10, cursor="hand2")
+        self._btn_detect.pack(side=LEFT, padx=(6, 0))
+
+        Frame(det_tb, bg=DIM, width=1).pack(side=LEFT, fill=Y, padx=(6, 2))
+        self._btn_verify = Button(det_tb, text="🔍 Kiểm tra",
+               command=self._run_verify,
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", font=F_BOLD,
+               relief="flat", padx=10, cursor="hand2")
+        self._btn_verify.pack(side=LEFT, padx=(2, 0))
+        Label(det_tb, text="IoU≥", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(8, 2))
+        Entry(det_tb, textvariable=self._verify_iou_var, width=4,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MONO, bd=2).pack(side=LEFT)
+        Button(det_tb, text="✕ Xóa KT", command=self._clear_verify,
+               bg=CARD, fg=DIM, activebackground="#333355",
+               font=F_MAIN, relief="flat", cursor="hand2").pack(side=LEFT, padx=(4, 0))
+        Checkbutton(det_tb, text="Chỉ hiện bbox sai",
+                    variable=self._verify_show_wrong_only,
+                    bg=CARD, fg=TEXT, selectcolor="#16162a",
+                    activebackground=CARD, font=F_MAIN,
+                    command=self._on_verify_filter_change).pack(side=LEFT, padx=(6, 0))
+
+        Label(det_tb, text="Conf:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(10, 2))
+        self._det_conf_lbl = Label(det_tb, text=f"{self._det_conf_var.get():.2f}",
+                                    bg=CARD, fg=ACCENT, font=F_MONO, width=4)
+        self._det_conf_lbl.pack(side=LEFT)
+        Scale(det_tb, from_=0.05, to=1.0, resolution=0.05,
+              orient=HORIZONTAL, length=120,
+              variable=self._det_conf_var,
+              command=lambda v: self._det_conf_lbl.config(text=f"{float(v):.2f}"),
+              bg=CARD, fg=TEXT, highlightthickness=0,
+              troughcolor="#16162a", activebackground=ACCENT,
+              relief="flat", bd=0, showvalue=False).pack(side=LEFT, padx=(0, 4))
+
+        Checkbutton(det_tb, text="Thay thế bbox cũ", variable=self._det_replace_var,
+                    bg=CARD, fg=TEXT, selectcolor="#16162a",
+                    activebackground=CARD, font=F_MAIN).pack(side=LEFT, padx=(6, 0))
+
+        self._det_status_lbl = Label(det_tb, text="", bg=CARD, fg=DIM, font=F_MAIN)
+        self._det_status_lbl.pack(side=LEFT, padx=(8, 0))
+
+        self._det_model_lbl = Label(det_tb, text="Chưa load", bg=CARD, fg=DIM, font=F_MAIN)
+        self._det_model_lbl.pack(side=RIGHT, padx=(0, 4))
+
+        # ── Batch Relabel toolbar ────────────────────────────────────────────
+        rl_tb = Frame(center, bg=CARD, pady=4, padx=8)
+        rl_tb.pack(fill=X)
+
+        Label(rl_tb, text="🔄 Đổi nhãn:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Label(rl_tb, text="Từ:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(8, 2))
+        self._rl_from_combo = ttk.Combobox(rl_tb, textvariable=self._rl_from_var,
+                                            state="readonly", font=F_MAIN, width=16)
+        self._rl_from_combo.pack(side=LEFT, padx=(0, 4))
+        Label(rl_tb, text="→", bg=CARD, fg=ACCENT, font=F_BOLD).pack(side=LEFT, padx=2)
+        Label(rl_tb, text="Thành:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(2, 2))
+        self._rl_to_combo = ttk.Combobox(rl_tb, textvariable=self._rl_to_var,
+                                          state="readonly", font=F_MAIN, width=16)
+        self._rl_to_combo.pack(side=LEFT, padx=(0, 8))
+        Frame(rl_tb, bg=DIM, width=1).pack(side=LEFT, fill=Y, padx=(0, 6))
+        Radiobutton(rl_tb, text="Ảnh hiện tại", variable=self._rl_scope_var, value="current",
+                    bg=CARD, fg=TEXT, selectcolor="#16162a",
+                    activebackground=CARD, font=F_MAIN).pack(side=LEFT, padx=(0, 4))
+        Radiobutton(rl_tb, text="Tất cả đang lọc", variable=self._rl_scope_var, value="filtered",
+                    bg=CARD, fg=TEXT, selectcolor="#16162a",
+                    activebackground=CARD, font=F_MAIN).pack(side=LEFT, padx=(0, 8))
+        Button(rl_tb, text="▶ Đổi nhãn",
+               command=self._relabel_batch,
+               bg=ACCENT2, fg="white", activebackground=ACCENT,
+               activeforeground="white", font=F_BOLD,
+               relief="flat", padx=10, cursor="hand2").pack(side=LEFT)
+        self._rl_status_lbl = Label(rl_tb, text="", bg=CARD, fg=DIM, font=F_MAIN)
+        self._rl_status_lbl.pack(side=LEFT, padx=(10, 0))
+
         # ── Attribute bar (shows when 1 bbox selected) ──────────────────────
         self._attr_bar = Frame(center, bg=CARD, pady=4, padx=8)
         self._attr_bar.pack(fill=X)
@@ -737,6 +859,7 @@ class BBoxEditorTab(Frame):
                         bw = max(1e-4, min(1.0, (x2 - x1) / ciw))
                         bh = max(1e-4, min(1.0, (y2 - y1) / cih))
                         lines.append(f"{int(cid)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
+                target_lbl.parent.mkdir(parents=True, exist_ok=True)
                 with open(target_lbl, "w", encoding="utf-8") as f:
                     f.write("\n".join(lines))
                 self._write_attrs_to(self._attrs_path(target_lbl),
@@ -797,6 +920,13 @@ class BBoxEditorTab(Frame):
         self._cls_combo["values"] = combo_vals
         if combo_vals:
             self._cls_combo.current(0)
+
+        if hasattr(self, "_rl_from_combo"):
+            self._rl_from_combo["values"] = combo_vals
+            self._rl_to_combo["values"]   = combo_vals
+            if combo_vals:
+                self._rl_from_var.set(combo_vals[0])
+                self._rl_to_var.set(combo_vals[min(1, len(combo_vals) - 1)])
 
         filter_opts = (["Tất cả", "Không có label"] +
                        [f"{i}: {n}" for i, n in enumerate(self.label_list)])
@@ -884,10 +1014,15 @@ class BBoxEditorTab(Frame):
         self._modified     = False
         self._undo_stack   = []
         self._redo_stack   = []
-        self._zoom_level   = 1.0
-        self._pan_x        = 0
-        self._pan_y        = 0
-        self._render_nw_nh = None
+        self._zoom_level         = 1.0
+        self._pan_x              = 0
+        self._pan_y              = 0
+        self._render_nw_nh       = None
+        self._verify_boxes       = []
+        self._verify_matched_gt  = set()
+        self._verify_matched_det = set()
+        self._verify_gt_iou      = {}
+        self._verify_active      = False
         if self._zoom_settle_after:
             self._canvas.after_cancel(self._zoom_settle_after)
             self._zoom_settle_after = None
@@ -904,6 +1039,10 @@ class BBoxEditorTab(Frame):
                 lbl_path.touch()
             except Exception:
                 pass
+
+        if len(self._bboxes) == 1:
+            self._selected     = 0
+            self._selected_set = {0}
 
         self._render()
         self._refresh_present_labels()
@@ -955,6 +1094,7 @@ class BBoxEditorTab(Frame):
                 bw  = max(1e-4, min(1.0, (x2 - x1) / iw))
                 bh  = max(1e-4, min(1.0, (y2 - y1) / ih))
                 lines.append(f"{int(cid)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
+        path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
 
@@ -997,6 +1137,7 @@ class BBoxEditorTab(Frame):
                 pass
             return
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(
                 json.dumps(attrs, ensure_ascii=False, indent=2),
                 encoding="utf-8")
@@ -1080,6 +1221,7 @@ class BBoxEditorTab(Frame):
         self._canvas.create_image(self._off_x, self._off_y,
                                   anchor=NW, image=self._tk_img)
         self._draw_all_bboxes()
+        self._draw_verify_overlay()
 
         # Update zoom indicator
         pct = int(actual_scale * 100)
@@ -1138,7 +1280,9 @@ class BBoxEditorTab(Frame):
     def _redraw_bboxes_only(self):
         """Xóa và vẽ lại chỉ bbox — không reload ảnh nền."""
         self._canvas.delete("bbox_item")
+        self._canvas.delete("verify_item")
         self._draw_all_bboxes()
+        self._draw_verify_overlay()
 
     def _draw_all_bboxes(self):
         only_cid = self._active_label_filter_id()
@@ -1169,6 +1313,8 @@ class BBoxEditorTab(Frame):
         else:
             only_draw = None
 
+        _wrong_only = (self._verify_active and self._verify_show_wrong_only.get())
+
         for i, ann in enumerate(self._bboxes):
             cid = ann[0]
             is_poly4 = (len(ann) == 9)
@@ -1177,6 +1323,10 @@ class BBoxEditorTab(Frame):
                 continue
 
             if only_cid is not None and cid != only_cid:
+                continue
+
+            # Ẩn bbox đúng (TP) khi chế độ "chỉ hiện bbox sai" đang bật
+            if _wrong_only and i in self._verify_matched_gt:
                 continue
 
             # Tính bounding rect để check filter kích thước
@@ -2040,6 +2190,104 @@ class BBoxEditorTab(Frame):
         self._must_not_lb.selection_clear(0, END)
         self._apply_filters()
 
+    # ── Đổi nhãn hàng loạt ───────────────────────────────────────────────────
+
+    def _relabel_batch(self):
+        from_val = self._rl_from_var.get().strip()
+        to_val   = self._rl_to_var.get().strip()
+        if not from_val or not to_val:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn nhãn nguồn và nhãn đích.")
+            return
+        try:
+            from_id = int(from_val.split(":")[0])
+            to_id   = int(to_val.split(":")[0])
+        except (ValueError, IndexError):
+            messagebox.showerror("Lỗi", "Nhãn không hợp lệ.")
+            return
+        if from_id == to_id:
+            messagebox.showwarning("Cảnh báo", "Nhãn nguồn và đích phải khác nhau.")
+            return
+
+        scope = self._rl_scope_var.get()
+        if scope == "current":
+            if self.current_idx < 0 or not self.image_files:
+                messagebox.showwarning("Cảnh báo", "Chưa mở ảnh nào.")
+                return
+            files = [self.image_files[self.current_idx]]
+        else:
+            files = [fp for _, fp in self._filtered_files]
+            if not files:
+                messagebox.showwarning("Cảnh báo", "Không có ảnh nào trong bộ lọc hiện tại.")
+                return
+
+        from_name = (self.label_list[from_id] if from_id < len(self.label_list) else str(from_id))
+        to_name   = (self.label_list[to_id]   if to_id   < len(self.label_list) else str(to_id))
+        scope_desc = ("ảnh hiện tại" if scope == "current"
+                      else f"{len(files)} ảnh đang lọc")
+        if not messagebox.askyesno(
+                "Xác nhận đổi nhãn",
+                f"Đổi tất cả nhãn:\n"
+                f"  [{from_id}: {from_name}]  →  [{to_id}: {to_name}]\n"
+                f"trong {scope_desc}?\n\n"
+                f"Thao tác sẽ sửa trực tiếp file label (.txt)."):
+            return
+
+        lbl_dir = self.lbl_dir_var.get().strip()
+        changed_files  = 0
+        changed_bboxes = 0
+
+        for fp in files:
+            lbl_path = (Path(lbl_dir) / (fp.stem + ".txt")
+                        if lbl_dir else fp.parent / (fp.stem + ".txt"))
+            if not lbl_path.exists():
+                continue
+            try:
+                raw_lines = lbl_path.read_text(encoding="utf-8").splitlines()
+                out_lines  = []
+                file_changed = False
+                for line in raw_lines:
+                    parts = line.strip().split()
+                    if not parts:
+                        out_lines.append(line)
+                        continue
+                    try:
+                        cid = int(parts[0])
+                    except ValueError:
+                        out_lines.append(line)
+                        continue
+                    if cid == from_id:
+                        parts[0] = str(to_id)
+                        out_lines.append(" ".join(parts))
+                        file_changed   = True
+                        changed_bboxes += 1
+                    else:
+                        out_lines.append(line)
+                if file_changed:
+                    lbl_path.write_text("\n".join(out_lines), encoding="utf-8")
+                    changed_files += 1
+            except Exception:
+                pass
+
+        # Reload ảnh hiện tại nếu bị ảnh hưởng
+        if self.current_idx >= 0 and self._pil_img is not None:
+            fp = self.image_files[self.current_idx]
+            lbl_path = (Path(lbl_dir) / (fp.stem + ".txt")
+                        if lbl_dir else fp.parent / (fp.stem + ".txt"))
+            if lbl_path.exists():
+                self._bboxes     = self._read_yolo(lbl_path)
+                self._bbox_attrs = self._read_attrs(
+                    self._attrs_path(lbl_path), len(self._bboxes))
+            self._modified = False
+            self._render()
+            self._refresh_present_labels()
+
+        self._thumb_cache.clear()
+        self._update_filmstrip()
+        msg = (f"✅ [{from_name}] → [{to_name}]  |  "
+               f"{changed_bboxes} bbox trong {changed_files} ảnh")
+        self._rl_status_lbl.config(text=msg, fg="#4caf50")
+        self._status.config(text=msg)
+
     # ── Kiểm tra ảnh thiếu file label ────────────────────────────────────────
 
     def _check_missing_labels(self):
@@ -2818,4 +3066,324 @@ class BBoxEditorTab(Frame):
                 cell["img_lbl"].config(image=tk_img)
                 break
 
+    # ═══════════════════════════════════════════════════════ YOLO AUTO-DETECT ══
 
+    def _browse_det_model(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            title="Chọn file YOLO model (.pt)",
+            filetypes=[("PyTorch Model", "*.pt"), ("All files", "*.*")],
+            parent=self.root)
+        if not path:
+            return
+        _push_history("h.bbox.det_model", path)
+        self._det_combo["values"] = _get_history("h.bbox.det_model")
+        self._det_model_path.set(path)
+        self._load_det_model(path)
+
+    def _load_det_model(self, path: str):
+        if not path or not os.path.isfile(path):
+            return
+        try:
+            from ultralytics import YOLO as _YOLO
+        except ImportError:
+            messagebox.showerror("Thiếu thư viện", "pip install ultralytics", parent=self.root)
+            return
+        self._det_model_lbl.config(text=f"⏳ {os.path.basename(path)}…", fg=DIM)
+        self._btn_detect.config(state="disabled")
+
+        def _do():
+            try:
+                mdl = _YOLO(path)
+                self.root.after(0, lambda: self._on_det_model_loaded(path, mdl, None))
+            except Exception as e:
+                self.root.after(0, lambda err=str(e): self._on_det_model_loaded(path, None, err))
+
+        import threading
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _on_det_model_loaded(self, path: str, mdl, err):
+        self._btn_detect.config(state="normal")
+        if err:
+            self._det_model_lbl.config(text="✗ Lỗi load", fg=ACCENT)
+            messagebox.showerror("Lỗi load model", err, parent=self.root)
+            return
+        self._det_model = mdl
+        name = os.path.basename(path)
+        classes = ""
+        if hasattr(mdl, "names") and mdl.names:
+            classes = f" [{len(mdl.names)}cls]"
+        self._det_model_lbl.config(text=f"✓ {name}{classes}", fg="#4caf50")
+
+    def _run_detect(self):
+        path = self._det_model_path.get().strip()
+        if not path:
+            messagebox.showwarning("Chưa chọn model",
+                                   "Vui lòng chọn file model YOLO (.pt).", parent=self.root)
+            return
+        if self._pil_img is None:
+            messagebox.showwarning("Chưa có ảnh",
+                                   "Vui lòng tải ảnh trước.", parent=self.root)
+            return
+
+        # Load model nếu chưa có (lần đầu hoặc đổi model)
+        if self._det_model is None:
+            self._load_det_model(path)
+            self._det_status_lbl.config(text="⏳ Đang load model, nhấn Detect lại sau…", fg=DIM)
+            return
+
+        self._btn_detect.config(state="disabled")
+        self._det_status_lbl.config(text="⏳ Đang detect…", fg=DIM)
+
+        import threading
+        import numpy as np
+        conf    = self._det_conf_var.get()
+        model   = self._det_model
+        img_arr = np.array(self._pil_img)
+
+        def _do():
+            try:
+                results = model.predict(img_arr, conf=conf, verbose=False)
+                boxes = []
+                if results and results[0].boxes is not None:
+                    for box in results[0].boxes:
+                        cid = int(box.cls[0])
+                        x1, y1, x2, y2 = box.xyxy[0].tolist()
+                        boxes.append([cid, x1, y1, x2, y2])
+                self.root.after(0, lambda b=boxes: self._on_detect_done(b, None))
+            except Exception as e:
+                self.root.after(0, lambda err=str(e): self._on_detect_done([], err))
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _on_detect_done(self, boxes: list, err: str | None):
+        self._btn_detect.config(state="normal")
+        if err:
+            self._det_status_lbl.config(text=f"✗ {err[:50]}", fg=ACCENT)
+            return
+        if not boxes:
+            self._det_status_lbl.config(text="Không detect được đối tượng nào.", fg=DIM)
+            return
+
+        iw, ih = self._pil_img.size
+        self._push_undo()
+
+        if self._det_replace_var.get():
+            self._bboxes.clear()
+            self._bbox_attrs.clear()
+
+        n_added = 0
+        for b in boxes:
+            cid = int(b[0])
+            x1 = max(0.0, min(float(b[1]), float(iw)))
+            y1 = max(0.0, min(float(b[2]), float(ih)))
+            x2 = max(0.0, min(float(b[3]), float(iw)))
+            y2 = max(0.0, min(float(b[4]), float(ih)))
+            if x2 > x1 and y2 > y1:
+                self._bboxes.append([cid, x1, y1, x2, y2])
+                self._bbox_attrs.append(self._default_attrs())
+                n_added += 1
+
+        self._modified = True
+        self._save_labels()
+        self._redraw_bboxes_only()
+        self._refresh_present_labels()
+
+        mode = "thay thế" if self._det_replace_var.get() else "thêm"
+        self._det_status_lbl.config(
+            text=f"✓ {n_added} bbox ({mode}) · đã lưu label", fg="#4caf50")
+        self.after(5000, lambda: self._det_status_lbl.config(text="", fg=DIM))
+
+    # ═══════════════════════════════════════════════════════ VERIFY OVERLAY ══
+
+    def _run_verify(self):
+        """Chạy model detect rồi so sánh với label hiện tại (không thay đổi label)."""
+        path = self._det_model_path.get().strip()
+        if not path:
+            messagebox.showwarning("Chưa chọn model", "Chọn file model YOLO (.pt).", parent=self.root)
+            return
+        if self._pil_img is None:
+            messagebox.showwarning("Chưa có ảnh", "Vui lòng tải ảnh trước.", parent=self.root)
+            return
+        if self._det_model is None:
+            self._load_det_model(path)
+            self._det_status_lbl.config(text="⏳ Đang load model, nhấn Kiểm tra lại sau…", fg=DIM)
+            return
+
+        self._btn_verify.config(state="disabled")
+        self._btn_detect.config(state="disabled")
+        self._det_status_lbl.config(text="⏳ Đang kiểm tra…", fg=DIM)
+
+        import threading
+        import numpy as np
+        conf    = self._det_conf_var.get()
+        model   = self._det_model
+        img_arr = np.array(self._pil_img)
+
+        def _do():
+            try:
+                results = model.predict(img_arr, conf=conf, verbose=False)
+                boxes = []
+                if results and results[0].boxes is not None:
+                    for box in results[0].boxes:
+                        cid      = int(box.cls[0])
+                        x1, y1, x2, y2 = box.xyxy[0].tolist()
+                        conf_val = float(box.conf[0])
+                        boxes.append([cid, x1, y1, x2, y2, conf_val])
+                self.root.after(0, lambda b=boxes: self._on_verify_done(b, None))
+            except Exception as e:
+                self.root.after(0, lambda err=str(e): self._on_verify_done([], err))
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _on_verify_done(self, det_boxes: list, err):
+        self._btn_verify.config(state="normal")
+        self._btn_detect.config(state="normal")
+        if err:
+            self._det_status_lbl.config(text=f"✗ Lỗi: {err[:50]}", fg=ACCENT)
+            return
+
+        self._verify_boxes  = det_boxes
+        self._verify_active = True
+
+        try:
+            iou_thresh = float(self._verify_iou_var.get())
+        except (ValueError, TypeError):
+            iou_thresh = 0.5
+        iou_thresh = max(0.01, min(1.0, iou_thresh))
+
+        # Chuyển GT bboxes về bounding rect (handle cả poly4)
+        gt_rects = []
+        for ann in self._bboxes:
+            if len(ann) == 9:
+                _, px1, py1, px2, py2, px3, py3, px4, py4 = ann
+                xs = [px1, px2, px3, px4]; ys = [py1, py2, py3, py4]
+                gt_rects.append([ann[0], min(xs), min(ys), max(xs), max(ys)])
+            else:
+                gt_rects.append(list(ann[:5]))
+
+        self._verify_matched_gt, self._verify_matched_det, self._verify_gt_iou = \
+            self._match_verify(det_boxes, gt_rects, iou_thresh)
+
+        n_gt  = len(gt_rects)
+        n_det = len(det_boxes)
+        tp    = len(self._verify_matched_gt)
+        fn    = n_gt  - tp
+        fp    = n_det - len(self._verify_matched_det)
+
+        self._render()
+        all_ok = (fn == 0 and fp == 0)
+        color  = "#4caf50" if all_ok else "#ff9800"
+        self._det_status_lbl.config(
+            text=f"🔍 GT={n_gt}  Det={n_det}  ✓Đúng={tp}  ✗Thiếu={fn}  ⚡Thừa={fp}",
+            fg=color)
+
+    def _on_verify_filter_change(self):
+        """Callback khi toggle 'Chỉ hiện bbox sai' — redraw nếu verify đang active."""
+        if self._verify_active:
+            self._render()
+
+    def _clear_verify(self):
+        self._verify_boxes       = []
+        self._verify_matched_gt  = set()
+        self._verify_matched_det = set()
+        self._verify_gt_iou      = {}
+        self._verify_active      = False
+        self._det_status_lbl.config(text="", fg=DIM)
+        self._render()
+
+    def _compute_iou(self, b1: list, b2: list) -> float:
+        """IoU giữa 2 box dạng [cid, x1, y1, x2, y2, ...]."""
+        ix1 = max(b1[1], b2[1]); iy1 = max(b1[2], b2[2])
+        ix2 = min(b1[3], b2[3]); iy2 = min(b1[4], b2[4])
+        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+        if inter == 0.0:
+            return 0.0
+        a1    = (b1[3] - b1[1]) * (b1[4] - b1[2])
+        a2    = (b2[3] - b2[1]) * (b2[4] - b2[2])
+        union = a1 + a2 - inter
+        return inter / union if union > 0 else 0.0
+
+    def _match_verify(self, det_boxes: list, gt_rects: list, iou_thresh: float):
+        """Greedy matching GT ↔ detection theo IoU giảm dần.
+        Returns: (matched_gt_indices, matched_det_indices, gt_best_iou_dict)
+        gt_best_iou_dict: {gi → best IoU đạt được, kể cả khi < threshold}
+        """
+        matched_gt   = set()
+        matched_det  = set()
+        gt_best_iou  = {}
+        for gi, gt in enumerate(gt_rects):
+            best_iou, best_di = 0.0, -1
+            for di, det in enumerate(det_boxes):
+                if di in matched_det:
+                    continue
+                iou = self._compute_iou(gt, det)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_di  = di
+            gt_best_iou[gi] = best_iou
+            if best_iou >= iou_thresh and best_di >= 0:
+                matched_gt.add(gi)
+                matched_det.add(best_di)
+        return matched_gt, matched_det, gt_best_iou
+
+    def _draw_verify_overlay(self):
+        """Vẽ overlay so sánh: badge ✓/✗ lên GT bbox + detect box màu cyan/cam."""
+        if not self._verify_active or self._pil_img is None:
+            return
+        lw = max(1, self._line_width_var.get())
+
+        # ── Badge ✓/✗ trên mỗi GT bbox ──────────────────────────────────
+        for i, ann in enumerate(self._bboxes):
+            if len(ann) == 9:
+                _, px1, py1, px2, py2, px3, py3, px4, py4 = ann
+                xs = [px1, px2, px3, px4]; ys = [py1, py2, py3, py4]
+                x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+            else:
+                _, x1, y1, x2, y2 = ann
+            cx1 = int(x1 * self._scale) + self._off_x
+            cy1 = int(y1 * self._scale) + self._off_y
+            cx2 = int(x2 * self._scale) + self._off_x
+
+            if i in self._verify_matched_gt:
+                bg   = "#2e7d32"
+                mark = "✓"
+            else:
+                bg       = "#c62828"
+                best_iou = self._verify_gt_iou.get(i, 0.0)
+                mark     = f"✗{best_iou:.2f}" if best_iou > 0 else "✗"
+
+            badge_w = max(20, len(mark) * 7 + 6)
+            bx1, by1, bx2, by2 = cx2 - badge_w, cy1 - 18, cx2, cy1
+            self._canvas.create_rectangle(bx1, by1, bx2, by2,
+                fill=bg, outline="white", width=1, tags="verify_item")
+            self._canvas.create_text((bx1 + bx2) // 2, (by1 + by2) // 2,
+                text=mark, fill="white",
+                font=("Consolas", 7, "bold"), tags="verify_item")
+
+        # ── Detect boxes: cyan = matched, cam = FP ───────────────────────
+        _wrong_only = self._verify_show_wrong_only.get()
+        for di, det in enumerate(self._verify_boxes):
+            # Ẩn detect box đã khớp khi chế độ "chỉ hiện bbox sai"
+            if _wrong_only and di in self._verify_matched_det:
+                continue
+            cid  = det[0]
+            x1, y1, x2, y2 = det[1], det[2], det[3], det[4]
+            conf = det[5] if len(det) > 5 else 0.0
+
+            cx1 = int(x1 * self._scale) + self._off_x
+            cy1 = int(y1 * self._scale) + self._off_y
+            cx2 = int(x2 * self._scale) + self._off_x
+            cy2 = int(y2 * self._scale) + self._off_y
+
+            color    = "#00e5ff" if di in self._verify_matched_det else "#ff9800"
+            cls_name = self.label_list[cid] if cid < len(self.label_list) else str(cid)
+            txt      = f" {cid}:{cls_name} {conf:.2f} "
+            txt_w    = max(len(txt) * 7, 30)
+
+            self._canvas.create_rectangle(cx1, cy1, cx2, cy2,
+                outline=color, width=lw, dash=(6, 3), tags="verify_item")
+            self._canvas.create_rectangle(cx1, cy2, cx1 + txt_w, cy2 + 17,
+                fill=color, outline="", tags="verify_item")
+            self._canvas.create_text(cx1 + 3, cy2 + 8, text=txt, fill="white",
+                font=("Segoe UI", 8, "bold"), anchor=W, tags="verify_item")

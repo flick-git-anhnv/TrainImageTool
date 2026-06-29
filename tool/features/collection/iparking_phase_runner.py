@@ -227,12 +227,14 @@ class IParkingPhaseMixin:
 
         def _do_scan():
             try:
+                import time as _time
                 cfg = self._get_common_cfg()
                 cfg.update({"from_date": sample_from, "to_date": sample_to,
                              "page_size": 200, "max_pages": 5})
                 hour_counts: dict = {}
                 total = 0
                 import queue as _q
+                t0 = _time.monotonic()
 
                 if src == "LotteImage":
                     from .lotte_image import LotteWorker
@@ -269,17 +271,28 @@ class IParkingPhaseMixin:
                         text=f"⚠ Preview chưa hỗ trợ nguồn {src}", fg=DIM))
                     win.after(0, pbar.stop); return
 
+                elapsed_1day = _time.monotonic() - t0
                 n_days  = max(1, (_dt.fromisoformat(
                     self.to_var.get().strip()[:10]) - fd).days)
                 sleep_s = self.sleep_var.get() if hasattr(self, 'sleep_var') else 0.5
-                eta_s   = n_days * total * sleep_s
+                # scan ETA: extrapolate from measured 1-day sample
+                scan_eta = n_days * elapsed_1day
+                # download ETA: min 0.1s/event (API latency) even when sleep=0
+                per_event_s = max(0.1, sleep_s)
+                tgt = self.tgt_var.get() if hasattr(self, 'tgt_var') else 5
+                # ước tính số event thực sự cần tải (có target/slot giới hạn)
+                n_slots = 288  # 24h × 12 slot/h (5-phút)
+                est_downloads = min(total, n_slots * tgt) * n_days
+                download_eta = est_downloads * per_event_s
+                eta_s   = scan_eta + download_eta
                 eta_str = f"{int(eta_s//3600)}h {int((eta_s%3600)//60)}m"
 
                 def _render():
                     pbar.stop(); pbar.pack_forget()
+                    dl_info = f"~{est_downloads:,} ảnh cần tải"
                     lbl_status.config(
-                        text=f"Mẫu: {total} sự kiện/ngày  |  {n_days} ngày  |  "
-                             f"Ước tính ETA ≈ {eta_str}", fg=ACCENT2)
+                        text=f"Mẫu: {total:,} SK/ngày  |  {n_days} ngày  |  "
+                             f"{dl_info}  |  ETA ≈ {eta_str}", fg=ACCENT2)
                     Label(result_frm, text="Phân phối theo giờ:",
                           bg=BG, fg=TEXT, font=F_BOLD).pack(anchor=W, pady=(4, 4))
                     tv = ttk.Treeview(result_frm,

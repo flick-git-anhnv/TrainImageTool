@@ -97,9 +97,13 @@ def _b64decode(s: str) -> bytes:
 
 
 def _looks_b64(s: str) -> bool:
-    """Heuristic: chuỗi đủ dài, chỉ gồm base64 chars, không phải URL."""
-    if len(s) < 64 or s.startswith("http") or s.startswith("/"):
+    """Heuristic: chuỗi đủ dài, chỉ gồm base64 chars, không phải URL.
+
+    JPEG base64 bắt đầu bằng /9j/ (bytes FFD8FF) — không loại chuỗi bắt đầu bằng '/'.
+    """
+    if len(s) < 64 or s.startswith("http"):
         return False
+    # Loại relative paths thực sự: phải chứa ký tự không thuộc base64 alphabet
     return bool(re.match(r'^[A-Za-z0-9+/\r\n]+=*$', s[:256]))
 
 

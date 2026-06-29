@@ -184,4 +184,13 @@
 
 ---
 
+## [E021] icrawler parser crash: `TypeError: 'NoneType' object is not iterable`
+- **File:** `tool/features/collection/web_image.py`
+- **Triệu chứng:** `Exception in thread parser-001: TypeError: 'NoneType' object is not iterable` trong `icrawler/parser.py line 93`
+- **Nguyên nhân:** icrawler's Bing/Google parser không parse được response (HTML structure thay đổi hoặc bị bot-detect). `self.parse(response)` trả về `None` thay vì iterable.
+- **Cách sửa:** Bỏ icrawler, dùng `duckduckgo_search` (pip install duckduckgo-search) + `requests` tải ảnh thủ công. `DDGS().images(keyword, max_results=N)` trả về list URL ổn định, không cần parse HTML.
+- **Ngày:** 2026-06-26
+
+---
+
 *Cập nhật file này mỗi khi gặp lỗi mới. Format: `[Ennn]` tăng dần.*

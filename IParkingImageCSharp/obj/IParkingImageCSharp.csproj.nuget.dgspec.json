@@ -1,20 +1,24 @@
 {
   "format": 1,
   "restore": {
-    "K:\\Software\\3.Tools\\IParkingImageCSharp\\IParkingImageCSharp.csproj": {}
+    "D:\\Tool\\IParkingImageCSharp\\IParkingImageCSharp.csproj": {}
   },
   "projects": {
-    "K:\\Software\\3.Tools\\IParkingImageCSharp\\IParkingImageCSharp.csproj": {
+    "D:\\Tool\\IParkingImageCSharp\\IParkingImageCSharp.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "K:\\Software\\3.Tools\\IParkingImageCSharp\\IParkingImageCSharp.csproj",
+        "projectUniqueName": "D:\\Tool\\IParkingImageCSharp\\IParkingImageCSharp.csproj",
         "projectName": "IParkingImageCSharp",
-        "projectPath": "K:\\Software\\3.Tools\\IParkingImageCSharp\\IParkingImageCSharp.csproj",
+        "projectPath": "D:\\Tool\\IParkingImageCSharp\\IParkingImageCSharp.csproj",
         "packagesPath": "C:\\Users\\nguye\\.nuget\\packages\\",
-        "outputPath": "K:\\Software\\3.Tools\\IParkingImageCSharp\\obj\\",
+        "outputPath": "D:\\Tool\\IParkingImageCSharp\\obj\\",
         "projectStyle": "PackageReference",
+        "fallbackFolders": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
+        ],
         "configFilePaths": [
           "C:\\Users\\nguye\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
           "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
         ],
         "originalTargetFrameworks": [

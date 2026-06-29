@@ -4,6 +4,7 @@ import random
 import re
 import shutil
 import threading
+import unicodedata
 from pathlib import Path
 from tkinter import *
 from tkinter import messagebox, ttk
@@ -11,6 +12,18 @@ from tkinter import messagebox, ttk
 from ...core.constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD, IMAGE_EXTENSIONS, CLASS_NAMES
 from ...core.settings import _bind_cfg, _bind_history, _push_history, _get_history, _cfg_dir
 from ...core.ui_helpers import _folder_row, _pb_row, _make_logbox, _append_log, _set_progress, _action_btn
+
+
+def _normalize_stem(s: str) -> str:
+    """Bỏ dấu tiếng Việt, thay ký tự đặc biệt bằng _ (an toàn cho OpenCV / YOLO).
+    Xử lý riêng đ/Đ vì NFKD không decompose được ký tự này.
+    """
+    s = s.replace('đ', 'd').replace('Đ', 'D')
+    nfkd = unicodedata.normalize('NFKD', s)
+    ascii_only = nfkd.encode('ascii', 'ignore').decode('ascii')
+    clean = re.sub(r'[^\w\-]', '_', ascii_only)
+    clean = re.sub(r'_+', '_', clean).strip('_')
+    return clean or 'file'
 
 
 def _find_label_file(img_path: Path, labels_dir: Path, src_path: Path):
@@ -161,6 +174,17 @@ class SplitTab(Frame):
                                 bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat",
                                 font=F_MAIN)
         self.seed_entry.grid(row=0, column=2, sticky=W)
+
+        # ── Chuẩn hóa tên file ───────────────────────────────────────
+        norm_f = Frame(self, bg=BG, padx=20, pady=2)
+        norm_f.pack(fill=X)
+        self.v_normalize = BooleanVar(value=True)
+        _bind_cfg("split.normalize", self.v_normalize)
+        Checkbutton(norm_f,
+                    text="Chuẩn hóa tên file — bỏ dấu tiếng Việt & ký tự đặc biệt  ⚠ Khuyên dùng khi train YOLO",
+                    variable=self.v_normalize,
+                    bg=BG, fg=TEXT, selectcolor=CARD, activebackground=BG,
+                    font=F_MAIN).grid(row=0, column=0, sticky=W)
 
         # ── Train extra: labels dir + class names ─────────────────────
         self.train_extra = Frame(self, bg=BG, padx=20, pady=4)
@@ -397,12 +421,13 @@ class SplitTab(Frame):
 
         dup_policy = self.v_dup.get()
         move = self.v_move.get()
+        normalize = self.v_normalize.get()
         out_dir = self.v_out.get().strip()
         src_path = Path(src)
 
         # ── TRAIN / VAL (per-folder) ─────────────────────────────────
         if mode == "train":
-            self._run_train(src_path, out_dir, do_shuffle, seed, dup_policy, move)
+            self._run_train(src_path, out_dir, do_shuffle, seed, dup_policy, move, normalize)
             return
 
         # ── COUNT / RATIO modes ──────────────────────────────────────
@@ -455,10 +480,10 @@ class SplitTab(Frame):
                 buckets.append((fname, files[start:start + count]))
                 start += count
 
-        self._start_worker(lambda: self._worker_simple(buckets, out_path, move, dup_policy, seed, do_shuffle))
+        self._start_worker(lambda: self._worker_simple(buckets, out_path, move, dup_policy, seed, do_shuffle, normalize))
 
     # ------------------------------------------------------------------
-    def _run_train(self, src_path, out_dir, do_shuffle, seed, dup_policy, move):
+    def _run_train(self, src_path, out_dir, do_shuffle, seed, dup_policy, move, normalize=False):
         train_ratio = self._parse_train_ratio()
         if train_ratio is None:
             messagebox.showwarning("Tỷ lệ không hợp lệ",
@@ -493,12 +518,12 @@ class SplitTab(Frame):
         self._start_worker(lambda: self._worker_train(
             folders, src_path, labels_dir, out_path,
             train_ratio, do_shuffle, seed, dup_policy, move, class_list,
-            rename_with_folder
+            rename_with_folder, normalize
         ))
 
     def _worker_train(self, folders, src_path, labels_dir, out_path,
                       train_ratio, do_shuffle, seed, dup_policy, move, class_list,
-                      rename_with_folder=False):
+                      rename_with_folder=False, normalize=False):
         """
         Chia train/valid theo từng subfolder độc lập.
         Cấu trúc output (YOLO chuẩn):
@@ -514,6 +539,7 @@ class SplitTab(Frame):
             labels_missing = 0
             skipped = 0
             overwritten = 0
+            normalized_count = 0
             done = 0
             report_train: list = []
             report_valid: list = []
@@ -569,12 +595,17 @@ class SplitTab(Frame):
                                         self.pb_lbl, self.pb, done, total_files, self.root)
 
                         if rename_with_folder:
-                            safe_folder = re.sub(r'[^\w-]', '_', folder_name)
-                            new_stem = f"{safe_folder}_{fp.stem}"
+                            raw_folder = re.sub(r'[^\w-]', '_', folder_name)
+                            safe_folder = _normalize_stem(raw_folder) if normalize else raw_folder
+                            stem = _normalize_stem(fp.stem) if normalize else fp.stem
+                            new_stem = f"{safe_folder}_{stem}"
                             new_img_name = new_stem + fp.suffix.lower()
                         else:
-                            new_stem = fp.stem
-                            new_img_name = fp.name
+                            stem = _normalize_stem(fp.stem) if normalize else fp.stem
+                            new_stem = stem
+                            new_img_name = new_stem + fp.suffix.lower()
+                        if normalize and new_img_name != fp.name:
+                            normalized_count += 1
 
                         dest_img = img_dest / new_img_name
                         if dest_img.exists():
@@ -629,6 +660,8 @@ class SplitTab(Frame):
                     summary += f"  |  Bỏ qua: {skipped}"
                 if overwritten:
                     summary += f"  |  Ghi đè: {overwritten}"
+                if normalized_count:
+                    summary += f"  |  Chuẩn hóa tên: {normalized_count}"
                 self.root.after(0, _append_log, self.log, summary)
                 self.root.after(0, _append_log, self.log,
                                 f"📁  Output: {out_path.resolve()}")
@@ -645,12 +678,13 @@ class SplitTab(Frame):
         finally:
             self.root.after(0, self._done_ui)
 
-    def _worker_simple(self, buckets, out_path, move, dup_policy, seed, do_shuffle):
+    def _worker_simple(self, buckets, out_path, move, dup_policy, seed, do_shuffle, normalize=False):
         try:
             total_files = sum(len(chunk) for _, chunk in buckets)
             done = 0
             skipped = 0
             overwritten = 0
+            normalized_count = 0
             out_path.mkdir(parents=True, exist_ok=True)
 
             self.root.after(0, _append_log, self.log, f"Tổng ảnh: {total_files}")
@@ -669,7 +703,10 @@ class SplitTab(Frame):
                     done += 1
                     self.root.after(0, _set_progress,
                                     self.pb_lbl, self.pb, done, total_files, self.root)
-                    dest = dest_folder / fp.name
+                    fname = (_normalize_stem(fp.stem) + fp.suffix.lower()) if normalize else fp.name
+                    if normalize and fname != fp.name:
+                        normalized_count += 1
+                    dest = dest_folder / fname
                     if dest.exists():
                         if dup_policy == "skip":
                             skipped += 1
@@ -689,6 +726,8 @@ class SplitTab(Frame):
                     msg += f"  |  Bỏ qua: {skipped}"
                 if overwritten:
                     msg += f"  |  Ghi đè: {overwritten}"
+                if normalized_count:
+                    msg += f"  |  Chuẩn hóa tên: {normalized_count}"
                 self.root.after(0, _append_log, self.log, msg)
         except Exception as e:
             self.root.after(0, _append_log, self.log, f"[LỖI] {e}")

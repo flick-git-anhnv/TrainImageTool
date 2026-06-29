@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyDescriptionAttribute("KZTEK — Thu thập ảnh từ hệ thống iParking (LotteImage, Parkingv8, Parkingv6)")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a5fa97deaebcbebfbc2f6686f0d5aef5519413f2")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+0f4862a672aaff1272e404285235d809ced02376")]
 [assembly: System.Reflection.AssemblyProductAttribute("IParkingImageCSharp")]
 [assembly: System.Reflection.AssemblyTitleAttribute("IParkingImageCSharp")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

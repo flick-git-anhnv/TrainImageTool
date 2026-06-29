@@ -33,7 +33,7 @@ public sealed class ApiHost : IDisposable
 
     private static readonly JsonSerializerOptions _jsonOpts = new()
     {
-        WriteIndented        = true,
+        WriteIndented        = false,
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
 
@@ -142,9 +142,9 @@ public sealed class ApiHost : IDisposable
                         ?? form.Files.FirstOrDefault();
                 if (file is not null)
                 {
-                    using var ms = new MemoryStream((int)file.Length);
-                    await file.CopyToAsync(ms);
-                    uploadedBytes    = ms.ToArray();
+                    // Zero-copy: đọc thẳng vào 1 buffer, không double-copy qua MemoryStream.ToArray()
+                    uploadedBytes    = new byte[file.Length];
+                    await file.OpenReadStream().ReadExactlyAsync(uploadedBytes);
                     uploadedFileName = file.FileName;
                     filePath         = null;   // file upload được ưu tiên hơn text path
                 }
@@ -204,12 +204,12 @@ public sealed class ApiHost : IDisposable
                 // File upload: tạo Bitmap thẳng từ bytes, không lưu disk
                 using var imgStream = new MemoryStream(uploadedBytes);
                 using var bmp = new System.Drawing.Bitmap(imgStream);
-                boxes = _yolo.Detect(bmp, conf, iou);
+                boxes = await _yolo.DetectApiAsync(bmp, conf, iou, ctx.RequestAborted);
             }
             else
             {
                 using var bmp = new System.Drawing.Bitmap(filePath!);
-                boxes = _yolo.Detect(bmp, conf, iou);
+                boxes = await _yolo.DetectApiAsync(bmp, conf, iou, ctx.RequestAborted);
             }
         }
         catch (Exception ex)

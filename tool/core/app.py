@@ -12,7 +12,9 @@ from ..features.dataset.tab_rename       import RenameTab
 from ..features.dataset.tab_crop         import CropByLabelTab
 from ..features.dataset.tab_labelnorm    import LabelNormTab
 from ..features.annotation.tab_bbox      import BBoxEditorTab
+from ..features.annotation.tab_bbox2     import BBoxEditorTab2
 from ..features.collection.tab_iparking_image import IParkingImageTab
+from ..features.collection.tab_web_image     import WebImageTab
 from ..features.annotation.tab_checker   import CheckerTab
 from ..features.analysis.tab_stats       import StatsTab
 from ..features.analysis.tab_plate_search import PlateSearchTab
@@ -115,7 +117,9 @@ class App(_AppBase):
             ("🖼 Crop",           CropByLabelTab,    ()),
             ("⚙ LabelNorm",      LabelNormTab,      ()),
             ("🖊 BBox Editor",    BBoxEditorTab,     ()),
+            ("🖊 BBox v2",        BBoxEditorTab2,    ()),
             ("📷 iParking Image", IParkingImageTab,  ()),
+            ("🌐 Web Image",      WebImageTab,       ()),
             ("✔ Checker",        CheckerTab,        (nb,)),
             ("📊 Stats",          StatsTab,          ()),
             ("🔎 Plate Search",   PlateSearchTab,    ()),

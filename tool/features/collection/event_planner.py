@@ -68,33 +68,103 @@ class EventPlanner:
 
     def make_download_plan(self, target_per_slot: int = 5,
                            max_total: int = 0) -> list:
-        """Tạo danh sách event cần tải theo thứ tự ưu tiên time-slot.
+        """Tạo danh sách event cần tải — thuật toán 2 pha.
 
-        priority_score = 1 / (slot_downloaded_count + 1)
-        Sắp xếp descending → slot chưa có ảnh được tải trước.
+        Pha 1 — phân phối đều:
+          Vòng qua tất cả slot, mỗi vòng lấy 1 event/slot cho đến khi
+          slot đạt target_per_slot.  Slot ít ảnh nhất được ưu tiên.
+
+        Pha 2 — bù thiếu (chỉ khi max_total > 0):
+          Nếu tổng < max_total, tiếp tục lấy từ slot còn event (bỏ
+          giới hạn target) cho đến khi đủ max_total hoặc hết event.
+
+        Ví dụ: target=5, max_total=10, slot A có 100 SK, slot B có 1 SK
+          Pha 1 → A×5 + B×1 = 6
+          Pha 2 → A×4 thêm = 10  ✓
+
+        Frontier priority:
+          base=10.0 nếu event sau thời điểm cuối đã tải (mở rộng)
+          base= 0.5 nếu event trước frontier (backfill)
         """
+        from collections import defaultdict
+        frontier_map = self._db.get_frontier(self._source)
         cov    = self._db.get_coverage(self._source)
         by_s   = cov["by_slot"]
         events = self._db.get_events(self._source, downloaded=0)
         if not events:
             return []
-        scored = []
+
+        # Nhóm event theo slot, gán base priority
+        slot_events: dict = defaultdict(list)
         for e in events:
-            mi      = e.get("minute") or 0
-            slot_i  = self.get_slot_idx(mi)
-            key     = (e.get("lane", ""), e.get("vtype", ""),
-                       e.get("date", ""), e.get("hour") or 0, slot_i)
-            slot_dl = by_s.get(key, 0)
-            if slot_dl >= target_per_slot:
-                continue   # slot đã đủ target
-            score = 1.0 / (slot_dl + 1)
-            e["priority_score"] = score
-            e["slot_idx"]       = slot_i
-            scored.append(e)
-        scored.sort(key=lambda x: x["priority_score"], reverse=True)
-        if max_total > 0:
-            scored = scored[:max_total]
-        return scored
+            mi     = e.get("minute") or 0
+            slot_i = self.get_slot_idx(mi)
+            key    = (e.get("lane", ""), e.get("vtype", ""),
+                      e.get("date", ""), e.get("hour") or 0, slot_i)
+            date        = e.get("date", "")
+            event_dt    = e.get("dt", "") or ""
+            frontier_dt = frontier_map.get(date, "")
+            if frontier_dt and event_dt and event_dt <= frontier_dt:
+                base = 0.5
+            else:
+                base = 10.0
+            e["_base"]       = base
+            e["_slot_key"]   = key
+            e["is_backfill"] = bool(frontier_dt and event_dt and event_dt <= frontier_dt)
+            e["slot_idx"]    = slot_i
+            slot_events[key].append(e)
+
+        # Trong mỗi slot: expand trước, backfill sau
+        for v in slot_events.values():
+            v.sort(key=lambda x: x["_base"], reverse=True)
+
+        # Thứ tự slot: slot nhiều event expand → ưu tiên trước
+        def _slot_score(k):
+            es = slot_events[k]
+            return sum(e["_base"] for e in es) / max(1, len(es))
+        all_keys = sorted(slot_events.keys(), key=_slot_score, reverse=True)
+
+        slot_taken = {k: 0 for k in slot_events}
+        result: list = []
+
+        def _take_one(key) -> bool:
+            taken = slot_taken[key]
+            es    = slot_events[key]
+            if taken >= len(es):
+                return False
+            e  = es[taken]
+            dl = by_s.get(key, 0)
+            e["priority_score"] = e["_base"] / (dl + taken + 1)
+            result.append(e)
+            slot_taken[key] = taken + 1
+            return True
+
+        # ── Pha 1: phân phối đều đến target_per_slot ──────────────────
+        progressed = True
+        while progressed:
+            progressed = False
+            for key in all_keys:
+                dl    = by_s.get(key, 0)
+                taken = slot_taken[key]
+                if dl + taken >= target_per_slot:
+                    continue
+                if _take_one(key):
+                    progressed = True
+                if max_total > 0 and len(result) >= max_total:
+                    return result
+
+        # ── Pha 2: bù thiếu nếu max_total chưa đạt ───────────────────
+        if max_total > 0 and len(result) < max_total:
+            progressed = True
+            while progressed:
+                progressed = False
+                for key in all_keys:
+                    if _take_one(key):
+                        progressed = True
+                    if len(result) >= max_total:
+                        return result
+
+        return result
 
     def get_next_batch(self, batch_size: int = 100) -> list:
         """Lấy batch tiếp theo chưa tải, ưu tiên slot under-represented."""

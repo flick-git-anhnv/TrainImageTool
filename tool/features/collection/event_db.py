@@ -171,6 +171,7 @@ class EventDB:
                 d["image_refs"] = json.loads(d.get("image_refs") or "[]")
             except Exception:
                 d["image_refs"] = []
+            d["dt"] = f"{d.get('date', '')} {d.get('hour', 0):02d}:{d.get('minute', 0):02d}"
             result.append(d)
         return result
 
@@ -210,6 +211,22 @@ class EventDB:
             "vtypes":   sorted(vtypes),
             "dates":    sorted(dates),
         }
+
+    def get_frontier(self, source: str) -> dict:
+        """Trả về {date_str: max_dt_str} — thời điểm cuối cùng đã tải theo ngày.
+
+        Dùng để EventPlanner ưu tiên tải events SAU frontier (mở rộng coverage),
+        rồi mới backfill trước frontier (lấp đầy khoảng trống).
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT date, MAX(printf('%s %02d:%02d', date, hour, minute)) "
+                "FROM events "
+                "WHERE source=? AND downloaded=1 AND date IS NOT NULL AND date != '' "
+                "GROUP BY date",
+                (source,)
+            )
+            return {row[0]: row[1] for row in cur.fetchall() if row[0] and row[1]}
 
     def count_summary(self, source: str) -> dict:
         with self._lock:

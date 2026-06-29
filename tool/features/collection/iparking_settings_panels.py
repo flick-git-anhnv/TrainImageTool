@@ -20,11 +20,11 @@ class IParkingSettingsMixin:
 
     def _sep(self, parent, text):
         f = Frame(parent, bg=BG)
-        f.pack(fill=X, pady=(8, 3))
+        f.pack(fill=X, pady=(4, 2))
         Label(f, text=text, font=("Segoe UI", 9, "bold"),
               fg=ACCENT2, bg=BG).pack(side=LEFT)
         Frame(f, bg="#CBCBCB", height=1).pack(side=LEFT, fill=X, expand=True,
-                                               padx=(8, 0), pady=5)
+                                               padx=(8, 0), pady=4)
 
     # ── Thời gian ─────────────────────────────────────────────────────────────
 
@@ -126,8 +126,17 @@ class IParkingSettingsMixin:
         Label(row2, text="(chia ngày cho N luồng chạy đồng thời — áp dụng cho cả 3 nguồn)",
               bg=BG, fg=DIM, font=("Segoe UI", 8)).grid(
             row=0, column=2, padx=(4, 0), sticky=W)
-        Label(f, text="Max SK/làn: tổng cả lần chạy  ·  Max SK/loại: tối đa/ngày/loại/làn  ·  Max SK/buổi: trải đều sáng-trưa-chiều-tối  ·  0 = không giới hạn",
+        Label(f, text="Max SK/làn: tổng cả lần chạy  ·  Max SK/loại: tối đa/ngày/loại/làn  ·  Max SK/buổi: trải đều sáng-trưa-chiều-tối  ·  0 = không giới hạn  ·  SK/buổi > 0 → tự bật 3 bước",
               font=("Segoe UI", 7), fg=DIM, bg=BG, anchor=W).pack(fill=X, pady=(4, 0))
+
+        def _on_buoi_change(*_):
+            try:
+                if self.max_per_buoi_var.get() > 0 and hasattr(self, 'phase_mode_var'):
+                    self.phase_mode_var.set("3step")
+                    self._on_phase_mode_change()
+            except Exception:
+                pass
+        self.max_per_buoi_var.trace_add("write", _on_buoi_change)
 
         _guide_row = Frame(f, bg=BG)
         _guide_row.pack(fill=X, pady=(4, 0))
@@ -191,13 +200,20 @@ class IParkingSettingsMixin:
             "xe_may_bsx_cut":   "Xe máy biển cắt",
             "xe_dap_bsx_cut":   "Xe đạp biển cắt",
         }
+        # mỗi dòng = 1 loại xe, thứ tự: xe gốc → toàn cảnh → biển cắt
+        _VTYPE_ROWS = [
+            ["xe_may",  "toan_canh_xe_may",  "xe_may_bsx_cut"],
+            ["o_to",    "toan_canh_o_to",    "o_to_bsx_cut"],
+            ["xe_dap",  "toan_canh_xe_dap",  "xe_dap_bsx_cut"],
+            ["xe_tai",  "toan_canh"],
+        ]
         self._vtype_vars: dict = {}
         for vt in _VTYPE_ORDER:
             var = BooleanVar(value=True)
             _bind_cfg(f"ip.vtype.{vt}", var)
             self._vtype_vars[vt] = var
         vt_btn_row = Frame(f, bg=BG)
-        vt_btn_row.pack(fill=X, pady=(0, 4))
+        vt_btn_row.pack(fill=X, pady=(0, 2))
         Button(vt_btn_row, text="✔ Chọn tất cả",
                command=lambda: [v.set(True)  for v in self._vtype_vars.values()],
                bg=CARD, fg=TEXT, font=("Segoe UI", 8), relief="flat",
@@ -208,16 +224,16 @@ class IParkingSettingsMixin:
                padx=8, pady=2, cursor="hand2").pack(side=LEFT)
         vt_grid = Frame(f, bg=BG)
         vt_grid.pack(fill=X)
-        for i, vt in enumerate(_VTYPE_ORDER):
-            r, c = divmod(i, 4)
-            Checkbutton(vt_grid,
-                        text=_VTYPE_LABELS.get(vt, vt),
-                        variable=self._vtype_vars[vt],
-                        bg=BG, fg=TEXT, selectcolor="#251C53",
-                        activebackground=BG, font=("Segoe UI", 8),
-                        cursor="hand2").grid(
-                row=r, column=c, sticky=W,
-                padx=(0 if c == 0 else 14, 0), pady=1)
+        for r, row_keys in enumerate(_VTYPE_ROWS):
+            for c, vt in enumerate(row_keys):
+                Checkbutton(vt_grid,
+                            text=_VTYPE_LABELS.get(vt, vt),
+                            variable=self._vtype_vars[vt],
+                            bg=BG, fg=TEXT, selectcolor="#251C53",
+                            activebackground=BG, font=("Segoe UI", 8),
+                            cursor="hand2").grid(
+                    row=r, column=c, sticky=W,
+                    padx=(0 if c == 0 else 20, 0), pady=1)
         Label(f, text="Bỏ check để bỏ qua loại đó  ·  bsx_cut chỉ có Parkingv8/v6",
               font=("Segoe UI", 7), fg=DIM, bg=BG, anchor=W).pack(fill=X, pady=(2, 0))
 
@@ -246,6 +262,30 @@ class IParkingSettingsMixin:
         self._l_kw_combo.pack(side=LEFT)
         _bind_history("h.lotte.keyword", self._l_kw_combo)
         Label(kw_row_l, text="Lọc sự kiện API theo biển số / tên thẻ  ·  bỏ trống = lấy tất cả",
+              bg=BG, fg=DIM, font=("Segoe UI", 8)).pack(side=LEFT, padx=(8, 0))
+
+        lane_row = Frame(f, bg=BG)
+        lane_row.pack(fill=X, pady=(6, 0))
+        Label(lane_row, text="Lane IDs:", bg=BG, fg=TEXT, font=F_MAIN).pack(side=LEFT, padx=(0, 6))
+        self.l_laneid_var = StringVar(value="")
+        _bind_cfg("lotte.lane_ids", self.l_laneid_var)
+        self._l_lane_combo = ttk.Combobox(lane_row, textvariable=self.l_laneid_var,
+                                          font=F_MAIN, width=40)
+        self._l_lane_combo.pack(side=LEFT)
+        _bind_history("h.lotte.lane_ids", self._l_lane_combo)
+        Label(lane_row, text="Lọc theo ID làn (laneIds)  ·  bỏ trống = tất cả làn",
+              bg=BG, fg=DIM, font=("Segoe UI", 8)).pack(side=LEFT, padx=(8, 0))
+
+        cg_row = Frame(f, bg=BG)
+        cg_row.pack(fill=X, pady=(6, 0))
+        Label(cg_row, text="Nhóm thẻ IDs:", bg=BG, fg=TEXT, font=F_MAIN).pack(side=LEFT, padx=(0, 6))
+        self.l_cardgroupid_var = StringVar(value="")
+        _bind_cfg("lotte.cardgroup_ids", self.l_cardgroupid_var)
+        self._l_cg_combo = ttk.Combobox(cg_row, textvariable=self.l_cardgroupid_var,
+                                         font=F_MAIN, width=40)
+        self._l_cg_combo.pack(side=LEFT)
+        _bind_history("h.lotte.cardgroup_ids", self._l_cg_combo)
+        Label(cg_row, text="Lọc theo ID nhóm thẻ (cardgroupIds)  ·  bỏ trống = tất cả nhóm",
               bg=BG, fg=DIM, font=("Segoe UI", 8)).pack(side=LEFT, padx=(8, 0))
 
         self._sep(f, "Phân loại phương tiện (từ khóa)")
@@ -466,13 +506,13 @@ class IParkingSettingsMixin:
 
     def _build_phase_controls(self, p):
         """Thêm khu vực 3-phase (Scan → Phân tích → Tải) phía trên nút Start."""
-        f = Frame(p, bg=BG, padx=10, pady=4)
+        f = Frame(p, bg=BG, padx=10, pady=2)
         f.pack(fill=X)
         self._sep(f, "Chế độ thu thập")
 
-        # Radio chọn mode
+        # Radio chọn mode + nút mở DB (cùng 1 dòng)
         mode_row = Frame(f, bg=BG)
-        mode_row.pack(fill=X, pady=(2, 6))
+        mode_row.pack(fill=X, pady=(2, 2))
         self.phase_mode_var = StringVar(value="auto")
         _bind_cfg("ip.phase_mode", self.phase_mode_var)
         Radiobutton(mode_row, text="Tự động (1 bước)",
@@ -483,7 +523,11 @@ class IParkingSettingsMixin:
         Radiobutton(mode_row, text="3 bước: Scan → Phân tích → Tải",
                     variable=self.phase_mode_var, value="3step",
                     bg=BG, fg=TEXT, selectcolor=CARD, activebackground=BG,
-                    font=F_MAIN, command=self._on_phase_mode_change).pack(side=LEFT)
+                    font=F_MAIN, command=self._on_phase_mode_change).pack(side=LEFT, padx=(0, 16))
+        Button(mode_row, text="📂 Mở DB", command=self._open_db_location,
+               bg=BG, fg=DIM, font=("Segoe UI", 8), relief="flat",
+               cursor="hand2", padx=6, pady=1,
+               activebackground=CARD, activeforeground=TEXT).pack(side=LEFT)
 
         # Frame chứa 3 nút phase (ẩn mặc định)
         self._phase_btn_frm = Frame(f, bg=BG)
@@ -505,32 +549,68 @@ class IParkingSettingsMixin:
                                   command=self._start_download_from_plan, **btn_cfg)
         self.plan_dl_btn.pack(side=LEFT)
 
-        # DB status label
+        # DB status label (dòng riêng, nhỏ)
         self._db_status_lbl = Label(f, text="", bg=BG, fg=DIM,
                                     font=("Segoe UI", 8))
-        self._db_status_lbl.pack(anchor=W, pady=(4, 0))
+        self._db_status_lbl.pack(anchor=W, pady=(0, 2))
 
-        # Target per slot
-        tgt_row = Frame(f, bg=BG)
-        tgt_row.pack(fill=X, pady=(4, 0))
-        Label(tgt_row, text="Target ảnh/slot:", bg=BG, fg=TEXT,
+        # Target per slot (chỉ dùng ở bước 3 — ẩn khi mode auto)
+        self._tgt_row = Frame(f, bg=BG)
+        Label(self._tgt_row, text="Target ảnh/slot:", bg=BG, fg=TEXT,
               font=F_MAIN).pack(side=LEFT, padx=(0, 6))
         self.target_per_slot_var = IntVar(value=5)
         _bind_cfg("ip.target_per_slot", self.target_per_slot_var)
-        Spinbox(tgt_row, from_=1, to=100, textvariable=self.target_per_slot_var,
+        Spinbox(self._tgt_row, from_=1, to=100, textvariable=self.target_per_slot_var,
                 width=5, bg="#16162a", fg=TEXT, relief="flat", font=F_MAIN,
                 buttonbackground=CARD).pack(side=LEFT)
-        Label(tgt_row, text="ảnh mỗi khoảng 5 phút (dùng ở bước 3)",
+        Label(self._tgt_row, text="ảnh mỗi khoảng 5 phút (dùng ở bước 3)",
               bg=BG, fg=DIM, font=("Segoe UI", 8)).pack(side=LEFT, padx=(8, 0))
 
         self._on_phase_mode_change()
 
+    def _open_db_location(self):
+        """Mở Explorer tới thư mục chứa file DB."""
+        import subprocess
+        from pathlib import Path
+        out = self.out_var.get().strip() if hasattr(self, 'out_var') else ""
+        if not out:
+            from tkinter import messagebox
+            messagebox.showwarning("Chưa chọn thư mục", "Vui lòng chọn thư mục lưu trước."); return
+        db_path = Path(out) / ".iparking_cache.db"
+        if db_path.exists():
+            subprocess.Popen(["explorer", "/select,", str(db_path)])
+        else:
+            target = Path(out)
+            if target.exists():
+                subprocess.Popen(["explorer", str(target)])
+            else:
+                from tkinter import messagebox
+                messagebox.showinfo("Chưa có DB", f"DB chưa được tạo.\nSẽ lưu tại:\n{db_path}")
+
+    def _check_auto_3step(self):
+        """Gọi sau khi build xong: nếu max_per_buoi đã lưu > 0 → bật 3-bước."""
+        try:
+            if getattr(self, 'max_per_buoi_var', None) and \
+                    self.max_per_buoi_var.get() > 0 and \
+                    hasattr(self, 'phase_mode_var'):
+                self.phase_mode_var.set("3step")
+                self._on_phase_mode_change()
+        except Exception:
+            pass
+
     def _on_phase_mode_change(self):
-        if getattr(self, 'phase_mode_var', None) and \
-                self.phase_mode_var.get() == "3step":
-            self._phase_btn_frm.pack(fill=X, pady=(4, 0))
-        elif hasattr(self, '_phase_btn_frm'):
-            self._phase_btn_frm.pack_forget()
+        is_3step = (getattr(self, 'phase_mode_var', None) and
+                    self.phase_mode_var.get() == "3step")
+        if is_3step:
+            if hasattr(self, '_phase_btn_frm'):
+                self._phase_btn_frm.pack(fill=X, pady=(4, 0))
+            if hasattr(self, '_tgt_row'):
+                self._tgt_row.pack(fill=X, pady=(4, 0))
+        else:
+            if hasattr(self, '_phase_btn_frm'):
+                self._phase_btn_frm.pack_forget()
+            if hasattr(self, '_tgt_row'):
+                self._tgt_row.pack_forget()
 
     def _refresh_db_status(self):
         """Cập nhật label trạng thái DB (gọi sau mỗi lần scan xong)."""

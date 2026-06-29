@@ -189,7 +189,9 @@ class LotteApiClient:
             return False
 
     def search(self, from_date: str, to_date: str,
-               page: int, size: int, keyword: str = "") -> Tuple[bool, dict, dict, dict]:
+               page: int, size: int, keyword: str = "",
+               lane_ids: str = "",
+               cardgroup_ids: str = "") -> Tuple[bool, dict, dict, dict]:
         import json as _json
         url  = f"{self.base}/api/tblcardevent/byPagingInOut"
         hdrs = {
@@ -198,8 +200,8 @@ class LotteApiClient:
         }
         body = {
             "keyword": keyword, "fromDate": from_date, "toDate": to_date,
-            "cardgroupIds": "", "customergroupIds": "",
-            "laneIds": "", "userIds": "", "plateNumber": "",
+            "cardgroupIds": cardgroup_ids, "customergroupIds": "",
+            "laneIds": lane_ids, "userIds": "", "plateNumber": "",
             "pageIndex": page, "pageSize": size,
         }
         for attempt in range(3):
@@ -484,7 +486,9 @@ class LotteWorker:
             t0 = time.time()
             ok, data, req_body, raw_resp = api.search(
                 d_from, d_to, page, size,
-                keyword=self.cfg.get("keyword", ""))
+                keyword=self.cfg.get("keyword", ""),
+                lane_ids=self.cfg.get("lane_ids", ""),
+                cardgroup_ids=self.cfg.get("cardgroup_ids", ""))
             elapsed = time.time() - t0
             if page == 1:
                 import json as _j

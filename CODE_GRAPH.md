@@ -1,5 +1,5 @@
 # CODE_GRAPH.md — KZTEK Image Tools
-<!-- Cập nhật: 2026-06-24 | Refactor IParkingImageTab → 4 file (mixin pattern); giảm từ 1811 → ~416 dòng -->
+<!-- Cập nhật: 2026-06-26 | Thêm Web Image tab: thu thập ảnh Bing/Google → anh_chua_co/ -->
 
 ## Hướng dẫn sử dụng
 
@@ -20,6 +20,7 @@ tool/core/app.py (App)
     → tool.features.dataset.{tab_split, tab_rename, tab_crop, tab_labelnorm}
     → tool.features.annotation.{tab_bbox, tab_checker, tab_ocr}
     → tool.features.collection.tab_iparking_image
+    → tool.features.collection.tab_web_image
     → tool.features.analysis.{tab_stats, tab_plate_search}
     → tool.features.detection.{tab_yolo, tab_lpr_tester, tab_slot_classifier, tab_classifier_tester}
     → tool.features.training.{tab_train, tab_classifier}
@@ -336,6 +337,7 @@ Tab đã đăng ký (theo thứ tự, 15 tab):
 | `_set_attr_bar_state(state)` | Enable/disable toàn bộ combobox trong attr bar |
 | `_restore_session()` | Khởi động: auto load folder + jump tới ảnh cuối cùng đã mở |
 | `_do_restore_nav()` | Điều hướng đến `_restore_img` sau khi async filter hoàn thành |
+| `_relabel_batch()` | Đổi nhãn hàng loạt: thay class_id từ → đến trong tất cả file label của bộ lọc hiện tại; reload ảnh đang mở nếu bị ảnh hưởng |
 
 ---
 
@@ -435,11 +437,19 @@ Yêu cầu: `_PADDLE_OK`
 | `_schedule_grid_rebuild` | Debounce 200ms trước khi rebuild grid |
 | `_auto_restore_session` | Load lại folder + ảnh từ `yolo.session.*` trong config (chạy 1 lần sau model load) |
 
+| `_test_lpr_connection` | Test kết nối tới LPR server bằng ảnh giả 4×4, cập nhật `_lpr_conn_lbl` |
+| `_lpr_parse_plate` | Trích biển số từ JSON response (hỗ trợ nested Results[0].Plate và flat plate) |
+| `_lpr_call_crop` | POST PIL crop lên LPR URL (field `upload`), trả về plate string |
+| `_lpr_overlay_boxes` | Filter plate class → crop từng bbox → gọi LPR → vẽ nhãn xanh; lưu vào `_last_lpr_plates_result` |
+| `_extract_plate_from_filename` | @static: trích biển số từ tên file dạng `sub_<plate>[_...]` |
+| `_update_gt` | @static: thêm/cập nhật dòng `filename\tplate` trong `gt.txt` (upsert theo filename) |
+| `_save_lpr_error_image` | Lưu ảnh full + crops biển số vào wrong_folder; tạo/cập nhật `gt.txt` với plate GT |
+
 Cache: `_det_cache = {path: {"n": int, "classes": {cid: count}, "boxes": [(cid, cx_n, cy_n, w_n, h_n, w_px, h_px, conf_score)]}}`
 Disk cache: `{folder}/.kztek_det_cache.json` — persist giữa session; validate model path + iou khi load
 `conf_thresh` (slider Ngưỡng) là **display-time filter** — không xóa cache, filter boxes khi render
 Session keys: `yolo.session.folder`, `yolo.session.image`
-Hỗ trợ: YOLO v8/v11, dual-model, drag-drop, detect all + filter class/size + grid thumbnail panel + session restore
+Hỗ trợ: YOLO v8/v11, dual-model, drag-drop, detect all + filter class/size + grid thumbnail panel + session restore + LPR overlay (crop bbox → API → vẽ biển số)
 
 #### `tab_lpr_tester.py` → Class `LprTesterTab(Frame)`
 | Hàm / Method | Mô tả |
@@ -450,6 +460,7 @@ Hỗ trợ: YOLO v8/v11, dual-model, drag-drop, detect all + filter class/size +
 | `_folder_worker` | Test batch hàng loạt |
 | `_export` | Xuất kết quả CSV |
 | `_render_single` | Render `_pil_single` lên Canvas, scale/offset tracking |
+| `_render_bbox_overlay` | Vẽ bbox detect đơn lên canvas (canvas rect, tag `bbox_ov`) |
 | `_sv_toggle_4pt` | Bật/tắt chế độ 4 điểm |
 | `_on_sv_press/drag/release/motion/rclick` | Canvas events cho 4pt |
 | `_sv_pt_hit_test` | Hit-test điểm gần (cx,cy) |
@@ -458,6 +469,8 @@ Hỗ trợ: YOLO v8/v11, dual-model, drag-drop, detect all + filter class/size +
 | `_sv_apply_persp` | Tính warp (thread) |
 | `_sv_persp_done` | Nhận kết quả warp, show preview, auto-detect |
 | `_warp_perspective_lpr` (module) | cv2 → PIL → bbox fallback warp |
+| `_parse_bbox_coords` (module) | Chuẩn hóa bbox dict/list → (x1,y1,x2,y2) |
+| `_draw_bbox_on_pil` (module) | Vẽ bbox lên PIL Image bằng ImageDraw |
 
 Modes: `lprdetect` (vehicle), `DirectLprDetect` (plate crop)
 Targets: KZTEK LPR AI Server, OpenALPR
@@ -805,6 +818,40 @@ Bad image reasons: `"none"` (thiếu biển), `"in_out_mismatch"`, `"register_mi
 | `migrate_image_structure` | `(out_path, log_fn, stop_event)` | Di chuyển cấu trúc thư mục cũ → mới (thêm HH subfolder) |
 | `_remove_empty_dirs` | `(root) → int` | Xóa thư mục rỗng |
 | `open_migrate_window` | `(root_tk, out_path)` | UI wrapper |
+
+---
+
+#### `web_image.py` → `WebImageWorker`
+
+Thu thập ảnh từ Bing/Google theo keyword, lưu vào `anh_chua_co/`.
+
+| Symbol | Mô tả |
+|---|---|
+| `_DEFAULT_KEYWORDS` | Default keywords: viettelpost, taxi mai linh |
+| `_safe_name(kw)` | Chuyển keyword tiếng Việt → tên thư mục ASCII |
+| `_count_images(d)` | Đếm ảnh trong thư mục |
+| `WebImageWorker` | Class chạy trong thread phụ |
+| `WebImageWorker.run()` | Vòng lặp chính: crawl từng keyword |
+| `WebImageWorker.stop()` | Set stop event |
+
+Import: `...core.imports._ICRAWLER_OK`, `_BingCrawler`, `_GoogleCrawler`
+
+---
+
+#### `tab_web_image.py` → `WebImageTab(Frame)`
+
+Tab UI thu thập ảnh web.
+
+| Method | Mô tả |
+|---|---|
+| `__init__` | Khởi tạo, gọi `_build()`, `_poll()` |
+| `_build / _build_content` | Xây dựng layout: output dir, engine, keywords, log |
+| `_start()` | Đọc config → tạo `WebImageWorker` → chạy thread |
+| `_stop()` | Gọi `worker.stop()` |
+| `_poll()` | Drain log_q + stat_q mỗi 300ms |
+| `_update_stat(s)` | Cập nhật thanh trạng thái |
+
+Import: `.web_image.WebImageWorker`, `...core.{constants,imports,settings}`
 
 ---
 

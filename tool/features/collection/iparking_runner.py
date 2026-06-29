@@ -114,6 +114,8 @@ class IParkingRunnerMixin:
             "kw_xe_dap":    self.l_kw_xe_dap.get().strip(),
             "kw_o_to":      self.l_kw_o_to.get().strip(),
             "keyword":      self.l_keyword_var.get().strip(),
+            "lane_ids":      self.l_laneid_var.get().strip(),
+            "cardgroup_ids": self.l_cardgroupid_var.get().strip(),
         })
         self._last_cfg = cfg
         self._log(f"[Lotte] Bắt đầu: {from_t}  →  {to_t}")

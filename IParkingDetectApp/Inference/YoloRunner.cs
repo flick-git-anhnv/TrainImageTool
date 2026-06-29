@@ -1,5 +1,6 @@
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using System.Threading.Channels;
 using IParkingDetect.Models;
 using Sdcb.OpenVINO;
 
@@ -14,18 +15,26 @@ namespace IParkingDetect.Inference;
 public sealed class YoloRunner : IDisposable
 {
     private OVCore?        _core;
+    // Batch model: THROUGHPUT hint — OpenVINO tạo multiple streams, mỗi stream ít threads
+    // → Parallel.ForEach thực sự song song
     private CompiledModel? _compiled;
-    // ThreadLocal: mỗi thread có InferRequest riêng → Parallel.ForEach không chờ nhau
+    // API model: LATENCY hint — dùng nhiều threads nhất cho 1 request → low latency
+    private CompiledModel? _apiCompiled;
+    // ThreadLocal batch pool
     private ThreadLocal<InferRequest>? _reqPool;
+    // Channel pool riêng cho API — không compete với batch
+    private Channel<InferRequest>?     _apiPool;
+    public  int                        ApiParallelism { get; private set; } = 2;
 
-    public bool     IsLoaded    => _compiled is not null;
-    public string   ModelPath   { get; private set; } = "";
-    public int      InputW      { get; private set; } = 640;
-    public int      InputH      { get; private set; } = 640;
-    public int      NumClasses  { get; private set; } = 1;
-    public string[] ClassNames  { get; set; } = [];
+    public bool     IsLoaded      => _compiled is not null;
+    public string   ModelPath     { get; private set; } = "";
+    public string   ActualDevice  { get; private set; } = "";   // thiết bị thực tế sau khi compile
+    public int      InputW        { get; private set; } = 640;
+    public int      InputH        { get; private set; } = 640;
+    public int      NumClasses    { get; private set; } = 1;
+    public string[] ClassNames    { get; set; } = [];
     /// <summary>Số luồng song song tối ưu cho Parallel.ForEach.</summary>
-    public int      Parallelism { get; private set; } = 1;
+    public int      Parallelism   { get; private set; } = 1;
 
     // ── Load model ────────────────────────────────────────────────────────
 
@@ -48,6 +57,14 @@ public sealed class YoloRunner : IDisposable
 
         DisposeModel();
         _core = new OVCore();
+
+        // Cache compiled model → lần 2+ load gần như tức thì (thay vì 5–30s)
+        var cacheDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "KZTEK", "IParkingDetect", "model_cache");
+        Directory.CreateDirectory(cacheDir);
+        // "" = global (tất cả device đều dùng cache)
+        _core.SetDeviceProperty("", PropertyKeys.CacheDir, cacheDir);
 
         Model model;
         if (path.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
@@ -75,17 +92,62 @@ public sealed class YoloRunner : IDisposable
             }
             catch { InputH = InputW = 640; }
 
-            _compiled = _core.CompileModel(model, device);
+            int  total  = Environment.ProcessorCount;
+            bool isCpu  = device.Equals("CPU", StringComparison.OrdinalIgnoreCase);
+
+            // Batch: THROUGHPUT → multiple streams, song song thật sự
+            int batchThreads = Math.Max(1, total * 3 / 4);
+            var batchOpts = new DeviceOptions(device)
+            {
+                PerformanceMode = PerformanceMode.Throughput,
+            };
+            // InferenceNumThreads chỉ có nghĩa với CPU — AUTO/GPU tự quản lý thread
+            if (isCpu) batchOpts.InferenceNumThreads = batchThreads;
+            _compiled = _core.CompileModel(model, batchOpts);
+
+            // API: LATENCY → tối thiểu độ trễ cho 1 request
+            int apiThreads = Math.Max(2, total / 4);
+            var apiOpts = new DeviceOptions(device)
+            {
+                PerformanceMode = PerformanceMode.Latency,
+            };
+            if (isCpu) apiOpts.InferenceNumThreads = apiThreads;
+            _apiCompiled = _core.CompileModel(model, apiOpts);
         }
 
-        // Tạo ThreadLocal pool — factory gọi lazy khi thread đầu tiên access .Value
+        // Batch pool — THROUGHPUT model
         var compiled = _compiled;
         _reqPool = new ThreadLocal<InferRequest>(
             () => compiled.CreateInferRequest(), trackAllValues: true);
 
+        // API pool — LATENCY model, không share với batch
+        ApiParallelism = Math.Clamp(Environment.ProcessorCount / 4, 1, 4);
+        var apiCompiled = _apiCompiled;
+        _apiPool = Channel.CreateBounded<InferRequest>(ApiParallelism);
+        for (int i = 0; i < ApiParallelism; i++)
+            _apiPool.Writer.TryWrite(apiCompiled.CreateInferRequest());
+
         // Số luồng song song: logic core / 2, min 1, max 8
         Parallelism = Math.Clamp(Environment.ProcessorCount / 2, 1, 8);
         ModelPath = path;
+
+        // Query thiết bị thực tế — AUTO plugin có thể chọn CPU hoặc GPU tự động
+        try
+        {
+            var props = _compiled.Properties;
+            if (props.TryGetValue("EXECUTION_DEVICES", out var exec) && !string.IsNullOrWhiteSpace(exec))
+                ActualDevice = device.Equals("AUTO", StringComparison.OrdinalIgnoreCase)
+                    ? $"AUTO→{exec}" : exec;
+            else
+                ActualDevice = device;
+        }
+        catch { ActualDevice = device; }
+
+        // ThreadLocal letterbox canvas — khởi tạo sau khi InputW/H đã xác định
+        int canvasW = InputW, canvasH = InputH;
+        _letterboxCanvas = new ThreadLocal<Bitmap>(
+            () => new Bitmap(canvasW, canvasH, PixelFormat.Format24bppRgb),
+            trackAllValues: true);
 
         // Đọc số class từ output shape: [1, 4+N, anchors]
         try
@@ -113,28 +175,45 @@ public sealed class YoloRunner : IDisposable
     public List<DetectBox> Detect(Bitmap bmp, float conf, float iou, int[]? enabledClasses = null)
     {
         if (_reqPool is null) return [];
-
         // Lấy InferRequest của thread hiện tại (tạo mới nếu lần đầu thread này chạy)
-        var req = _reqPool.Value!;
+        return RunInfer(_reqPool.Value!, bmp, conf, iou, enabledClasses);
+    }
 
+    /// <summary>
+    /// Detect dành riêng cho API — pool InferRequest tách biệt với batch pool.
+    /// Nhiều API request đồng thời: mỗi request lấy 1 slot riêng, không tranh với batch.
+    /// </summary>
+    public async Task<List<DetectBox>> DetectApiAsync(
+        Bitmap bmp, float conf, float iou, CancellationToken ct = default)
+    {
+        if (_apiPool is null) return [];
+        // Lấy 1 InferRequest rảnh từ pool (chờ nếu tất cả đang bận)
+        var req = await _apiPool.Reader.ReadAsync(ct);
+        try   { return RunInfer(req, bmp, conf, iou, null); }
+        finally { _apiPool.Writer.TryWrite(req); }   // trả lại pool
+    }
+
+    // ── Image preprocessing ───────────────────────────────────────────────
+
+    // ThreadLocal canvas: mỗi thread reuse 1 Bitmap 640×640 — không alloc mỗi frame
+    // Bitmap/Graphics không thread-safe nên phải ThreadLocal
+    private ThreadLocal<Bitmap>? _letterboxCanvas;
+
+    // Lõi inference — dùng chung cho cả batch (Detect) và API (DetectApiAsync)
+    private List<DetectBox> RunInfer(
+        InferRequest req, Bitmap bmp, float conf, float iou, int[]? enabledClasses)
+    {
         int origW = bmp.Width, origH = bmp.Height;
 
-        // Letterbox + chuyển NCHW float
-        float[] blob = Letterbox(bmp, InputW, InputH, out float scale, out float padX, out float padY);
-
-        // Set input
+        // Viết thẳng vào OpenVINO input tensor — bỏ float[] 4.9 MB trung gian
         Span<float> inputSpan = req.Inputs[0].GetData<float>();
-        if (blob.Length != inputSpan.Length)
-            throw new InvalidOperationException(
-                $"Input size mismatch: model expects {inputSpan.Length} floats, got {blob.Length}.");
-        blob.AsSpan().CopyTo(inputSpan);
+        LetterboxToSpan(bmp, InputW, InputH, inputSpan,
+            out float scale, out float padX, out float padY);
 
-        // Infer (chỉ req này, các thread khác chạy req của riêng chúng song song)
         req.Run();
 
-        // Đọc output
         Span<float> outData  = req.Outputs[0].GetData<float>();
-        var          outShape = req.Outputs[0].Shape;
+        var         outShape = req.Outputs[0].Shape;
         int numCh      = (int)outShape[1];
         int numAnchors = (int)outShape[2];
 
@@ -142,9 +221,7 @@ public sealed class YoloRunner : IDisposable
             origW, origH, InputW, InputH, scale, padX, padY, ClassNames, enabledClasses);
     }
 
-    // ── Image preprocessing ───────────────────────────────────────────────
-
-    private static float[] Letterbox(Bitmap src, int tW, int tH,
+    private void LetterboxToSpan(Bitmap src, int tW, int tH, Span<float> dst,
         out float scale, out float padX, out float padY)
     {
         float sw = (float)tW / src.Width;
@@ -156,38 +233,40 @@ public sealed class YoloRunner : IDisposable
         padX = (tW - nw) / 2f;
         padY = (tH - nh) / 2f;
 
-        using var canvas = new Bitmap(tW, tH, PixelFormat.Format24bppRgb);
+        // Reuse canvas per-thread — không alloc Bitmap mới mỗi frame
+        var canvas = _letterboxCanvas!.Value!;
         using var g = Graphics.FromImage(canvas);
         g.Clear(Color.FromArgb(114, 114, 114));
         g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
         g.DrawImage(src, (int)padX, (int)padY, nw, nh);
 
-        return BitmapToNCHW(canvas, tW, tH);
+        // Viết pixel thẳng vào dst span — không alloc float[]
+        WriteBitmapToNCHW(canvas, tW, tH, dst);
     }
 
-    private static unsafe float[] BitmapToNCHW(Bitmap bmp, int w, int h)
+    private static unsafe void WriteBitmapToNCHW(Bitmap bmp, int w, int h, Span<float> dst)
     {
-        float[] blob = new float[3 * h * w];
         var bits = bmp.LockBits(new Rectangle(0, 0, w, h),
             ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
 
         byte* ptr    = (byte*)bits.Scan0;
         int   stride = bits.Stride;
+        int   plane  = h * w;
 
         for (int y = 0; y < h; y++)
         {
             byte* row = ptr + y * stride;
+            int   yOff = y * w;
             for (int x = 0; x < w; x++)
             {
                 int i3 = x * 3;
-                blob[0 * h * w + y * w + x] = row[i3 + 2] / 255f; // R
-                blob[1 * h * w + y * w + x] = row[i3 + 1] / 255f; // G
-                blob[2 * h * w + y * w + x] = row[i3 + 0] / 255f; // B
+                dst[0 * plane + yOff + x] = row[i3 + 2] / 255f; // R
+                dst[1 * plane + yOff + x] = row[i3 + 1] / 255f; // G
+                dst[2 * plane + yOff + x] = row[i3 + 0] / 255f; // B
             }
         }
 
         bmp.UnlockBits(bits);
-        return blob;
     }
 
     // ── YAML class name loader ────────────────────────────────────────────
@@ -293,9 +372,21 @@ public sealed class YoloRunner : IDisposable
             _reqPool.Dispose();
             _reqPool = null;
         }
+        if (_apiPool is not null)
+        {
+            while (_apiPool.Reader.TryRead(out var r)) r.Dispose();
+            _apiPool = null;
+        }
+        if (_letterboxCanvas is not null)
+        {
+            foreach (var bmp in _letterboxCanvas.Values) bmp?.Dispose();
+            _letterboxCanvas.Dispose();
+            _letterboxCanvas = null;
+        }
         _compiled?.Dispose();
+        _apiCompiled?.Dispose();
         _core?.Dispose();
-        _compiled = null; _core = null;
+        _compiled = null; _apiCompiled = null; _core = null;
     }
 
     public void Dispose() => DisposeModel();

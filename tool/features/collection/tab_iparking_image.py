@@ -117,6 +117,7 @@ class IParkingImageTab(Frame, IParkingSettingsMixin, IParkingRunnerMixin,
         self._build_p6_settings(self._p6_frm)
 
         self._build_phase_controls(p)
+        self._check_auto_3step()
         self._build_controls(p)
         self._build_progress(p)
         self._build_dashboard(p)

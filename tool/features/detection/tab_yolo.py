@@ -38,12 +38,25 @@ try:
 except ImportError:
     _DND_OK = False
 
+try:
+    import requests as _requests
+    _REQ_OK = True
+except ImportError:
+    _REQ_OK = False
+
 _REVIEW_ICON = {"correct": "✓", "incorrect": "✗", "": "○"}
 
 _THUMB_PALETTE = [
     "#F05922", "#4caf50", "#2196f3", "#9c27b0", "#ff9800",
     "#00bcd4", "#e91e63", "#8bc34a", "#ff5722", "#607d8b",
 ]
+
+
+def _contrast_text(bg_rgb: tuple) -> tuple:
+    """Trả về (0,0,0) hoặc (255,255,255) tuỳ độ sáng của màu nền."""
+    r, g, b = bg_rgb
+    lum = 0.299 * r + 0.587 * g + 0.114 * b
+    return (0, 0, 0) if lum > 150 else (255, 255, 255)
 
 
 class YoloTab(Frame):
@@ -66,6 +79,8 @@ class YoloTab(Frame):
         self.v_show_original = BooleanVar(value=False)
         self.v_check_folder  = StringVar()
         self.v_wrong_folder  = StringVar()
+        self._v_wf_segs  = [StringVar() for _ in range(5)]
+        self._wf_combos  = []
         self.v_conf_thresh   = DoubleVar(value=0.25)
         self.v_conf          = DoubleVar(value=0.30)
         self.v_iou           = DoubleVar(value=0.45)
@@ -128,6 +143,24 @@ class YoloTab(Frame):
         self._grid_reflow_after  = None
         self._session_restored = False
 
+        # LPR check (kiểm tra biển số sau detect)
+        self.v_check_lpr      = BooleanVar(value=False)
+        self._lpr_timeout_var = IntVar(value=10)
+        self._lpr_url_vars    = [StringVar(value="http://localhost:8000/alpr"),
+                                 StringVar(value=""),
+                                 StringVar(value="")]
+        self._lpr_url_combos  = [None, None, None]  # set in _build_toolbar
+        self._lpr_fullimg_vars = [BooleanVar(value=False),
+                                  BooleanVar(value=False),
+                                  BooleanVar(value=False)]
+        self._lpr_conn_lbl           = None   # set in _build_toolbar
+        self._lpr_font_size_var      = IntVar(value=28)
+        self.v_lpr_batch             = BooleanVar(value=False)
+        self._lpr_cache              = {}     # {path: [(x1,y1,x2,y2,plate),...]}
+        self._lpr_cache_lock         = threading.Lock()
+        self._flt_lpr_var            = StringVar(value="Tất cả")
+        self._last_lpr_plates_result = []     # [(x1,y1,x2,y2,plate), ...] từ lần overlay gần nhất
+
         _bind_cfg("yolo.model_path",    self.v_model_path)
         _bind_cfg("yolo.check_folder",  self.v_check_folder)
         _bind_cfg("yolo.conf_thresh",   self.v_conf_thresh)
@@ -142,7 +175,22 @@ class YoloTab(Frame):
         _bind_cfg("yolo.export_rename", self.v_export_rename)
         _bind_cfg("yolo.grid_cols",     self._grid_cols_var)
         _bind_cfg("yolo.grid_rows",     self._grid_rows_var)
-        _bind_cfg("yolo.wrong_folder",  self.v_wrong_folder)
+        _bind_cfg("yolo.check_lpr",      self.v_check_lpr)
+        _bind_cfg("yolo.lpr_timeout",    self._lpr_timeout_var)
+        _bind_cfg("yolo.lpr_font_size",  self._lpr_font_size_var)
+        _bind_cfg("yolo.lpr_batch",      self.v_lpr_batch)
+        for i, v in enumerate(self._lpr_fullimg_vars):
+            _bind_cfg(f"yolo.lpr_fullimg{i+1}", v)
+        for i, sv in enumerate(self._v_wf_segs):
+            _bind_cfg(f"yolo.wf_s{i+1}", sv)
+        # Migrate cài đặt cũ (1 ô) sang ô đầu tiên
+        if not any(_CFG.get(f"yolo.wf_s{i+1}", "") for i in range(5)):
+            old = _CFG.get("yolo.wrong_folder", "")
+            if old:
+                self._v_wf_segs[0].set(old)
+        self._update_wrong_path()
+        for sv in self._v_wf_segs:
+            sv.trace_add("write", lambda *_: self._update_wrong_path())
 
         self._build()
         self.after(200, self._auto_load_model)
@@ -251,18 +299,30 @@ class YoloTab(Frame):
         Label(r0a, text="→ ✓ true/   ✗ false/",
               font=F_MAIN, bg=CARD, fg=DIM).pack(side=LEFT)
 
-        # Row 0b — folder lưu ảnh sai
+        # Row 0b — folder lưu ảnh sai (5 ô ghép path)
         r0b = Frame(top, bg=CARD)
         r0b.pack(fill=X, pady=(4, 0))
 
         Label(r0b, text="📁 Lưu ảnh sai:", font=F_MAIN, bg=CARD, fg=DIM).pack(side=LEFT, padx=(0, 4))
-        self.combo_wrong_folder = ttk.Combobox(r0b, textvariable=self.v_wrong_folder, font=F_MAIN)
-        self.combo_wrong_folder.pack(side=LEFT, fill=X, expand=True, padx=(0, 4))
-        _bind_history("h.yolo.wrong_folder", self.combo_wrong_folder)
+
+        # 5 ô: ô 1 expand (base path), ô 2-5 fixed width (sub-path)
+        self._wf_combos = []
+        _WF_WIDTHS = [0, 14, 14, 14, 12]  # 0 = expand
+        _WF_KEYS   = [f"h.yolo.wf.s{i+1}" for i in range(5)]
+        for i in range(5):
+            if i > 0:
+                Label(r0b, text="/", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+            cb = ttk.Combobox(r0b, textvariable=self._v_wf_segs[i], font=F_MAIN,
+                              width=_WF_WIDTHS[i] or None)
+            expand = (i == 0)
+            cb.pack(side=LEFT, fill=X if expand else None,
+                    expand=expand, padx=(0, 0))
+            _bind_history(_WF_KEYS[i], cb)
+            self._wf_combos.append(cb)
 
         Button(r0b, text="Chọn…", command=self._browse_wrong_folder,
                bg="#3a3a5a", fg=TEXT, font=F_MAIN, relief="flat",
-               padx=8, cursor="hand2").pack(side=LEFT, padx=(0, 4))
+               padx=8, cursor="hand2").pack(side=LEFT, padx=(4, 4))
         Button(r0b, text="📂", command=self._open_wrong_folder,
                bg=CARD, fg=TEXT, font=F_MAIN, relief="flat",
                padx=6, cursor="hand2",
@@ -426,6 +486,60 @@ class YoloTab(Frame):
         fs_spn.bind("<FocusOut>", lambda e: self._on_plot_param_change())
         fs_spn.pack(side=LEFT, padx=(2, 0))
 
+        # Row 4 — LPR server config (kiểm tra biển số sau YOLO detect)
+        r4 = Frame(top, bg=CARD)
+        r4.pack(fill=X, pady=(6, 0))
+
+        # Sub-row 4a: checkboxes + params + test btn
+        r4a = Frame(r4, bg=CARD)
+        r4a.pack(fill=X)
+        Checkbutton(r4a, text="🔍 Kiểm tra biển số", variable=self.v_check_lpr,
+                    bg=CARD, fg=TEXT, activebackground=CARD,
+                    activeforeground=TEXT, selectcolor="#16162a",
+                    font=F_MAIN, cursor="hand2",
+                    ).pack(side=LEFT, padx=(0, 6))
+        Checkbutton(r4a, text="📦 Gọi khi batch", variable=self.v_lpr_batch,
+                    bg=CARD, fg=DIM, activebackground=CARD,
+                    activeforeground=TEXT, selectcolor="#16162a",
+                    font=F_MAIN, cursor="hand2",
+                    ).pack(side=LEFT, padx=(0, 10))
+        Label(r4a, text="Timeout:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Spinbox(r4a, from_=1, to=120, textvariable=self._lpr_timeout_var,
+                width=4, bg="#16162a", fg=TEXT, insertbackground=TEXT,
+                buttonbackground=ACCENT2, relief="flat", font=F_MAIN,
+                ).pack(side=LEFT, padx=(4, 2))
+        Label(r4a, text="s", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(0, 10))
+        Label(r4a, text="Cỡ chữ:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Spinbox(r4a, from_=12, to=72, textvariable=self._lpr_font_size_var,
+                width=4, bg="#16162a", fg=TEXT, insertbackground=TEXT,
+                buttonbackground=ACCENT2, relief="flat", font=F_MAIN,
+                ).pack(side=LEFT, padx=(4, 2))
+        Label(r4a, text="px", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(0, 10))
+        Button(r4a, text="🔌 Test", command=self._test_lpr_connection,
+               bg=ACCENT2, fg="white", font=F_MAIN, relief="flat",
+               padx=8, cursor="hand2",
+               activebackground=ACCENT, activeforeground="white",
+               ).pack(side=LEFT, padx=(0, 6))
+        self._lpr_conn_lbl = Label(r4a, text="", bg=CARD, fg=DIM,
+                                    font=F_MAIN, width=24, anchor=W)
+        self._lpr_conn_lbl.pack(side=LEFT)
+
+        # Sub-row 4b: 3 URL comboboxes + checkbox ảnh gốc
+        r4b = Frame(r4, bg=CARD)
+        r4b.pack(fill=X, pady=(3, 0))
+        _LPR_HIST_KEYS = ["h.yolo.lpr_url1", "h.yolo.lpr_url2", "h.yolo.lpr_url3"]
+        for i in range(3):
+            Label(r4b, text=f"LPR{i+1}:", bg=CARD, fg=DIM,
+                  font=F_MAIN).pack(side=LEFT, padx=(0 if i == 0 else 8, 2))
+            cb = ttk.Combobox(r4b, textvariable=self._lpr_url_vars[i],
+                              width=30, font=F_MAIN)
+            cb.pack(side=LEFT)
+            _bind_history(_LPR_HIST_KEYS[i], cb)
+            self._lpr_url_combos[i] = cb
+            Checkbutton(r4b, text="Ảnh gốc", variable=self._lpr_fullimg_vars[i],
+                        bg=CARD, fg=DIM, selectcolor=CARD,
+                        font=F_MAIN).pack(side=LEFT, padx=(3, 0))
+
 
     def _build_content(self):
         content = Frame(self, bg=BG)
@@ -443,16 +557,24 @@ class YoloTab(Frame):
         search_row = Frame(sidebar, bg=CARD)
         search_row.pack(fill=X, padx=4, pady=(0, 3))
         Label(search_row, text="🔍", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
-        _search_entry = Entry(search_row, textvariable=self._v_search,
-              bg="#16162a", fg=TEXT, insertbackground=TEXT,
-              relief="flat", font=F_MONO, bd=2)
-        _search_entry.pack(side=LEFT, fill=X, expand=True, padx=(2, 4))
-        _search_entry.bind("<Return>", lambda e: self._apply_filter(self._active_filter))
-        Button(search_row, text="Tìm", command=lambda: self._apply_filter(self._active_filter),
+        self._search_combo = ttk.Combobox(
+            search_row, textvariable=self._v_search,
+            font=F_MONO, height=12)
+        self._search_combo.pack(side=LEFT, fill=X, expand=True, padx=(2, 4))
+        _bind_history("h.yolo.search", self._search_combo)
+        self._search_combo.bind("<Return>", lambda e: self._do_search())
+        self._search_combo.bind("<<ComboboxSelected>>",
+                                lambda e: self._do_search())
+        Button(search_row, text="Tìm", command=self._do_search,
                bg=ACCENT2, fg="white", font=F_MAIN, relief="flat",
                padx=6, cursor="hand2").pack(side=LEFT)
+        self._hint_toggle_btn = Button(
+            search_row, text="?", command=self._toggle_search_hint,
+            bg=CARD, fg="#6060a0", font=("Segoe UI", 8),
+            relief="flat", cursor="hand2", padx=3)
+        self._hint_toggle_btn.pack(side=LEFT, padx=(2, 0))
 
-        # Search hint
+        # Search hint — collapsed by default to preserve space for file list
         hint_lines = [
             "Cách dùng ô tìm kiếm:",
             "• Nhiều từ = AND:  sang cong 5",
@@ -461,13 +583,14 @@ class YoloTab(Frame):
             "• Kết hợp:  sang 07*",
             "• Enter hoặc nút Tìm để áp dụng",
         ]
-        hint_frame = Frame(sidebar, bg="#12122a", bd=0)
-        hint_frame.pack(fill=X, padx=4, pady=(0, 3))
+        self._search_row_ref = search_row
+        self._hint_frame = Frame(sidebar, bg="#12122a", bd=0)
         for line in hint_lines:
-            Label(hint_frame, text=line,
+            Label(self._hint_frame, text=line,
                   bg="#12122a", fg="#6060a0",
                   font=("Segoe UI", 7), anchor=W,
                   justify=LEFT).pack(fill=X, padx=4, pady=0)
+        self._hint_shown = False  # ẩn mặc định
 
         # Filter buttons
         filter_row = Frame(sidebar, bg=CARD)
@@ -606,6 +729,20 @@ class YoloTab(Frame):
 
         Frame(sidebar, bg=DIM, height=1).pack(fill=X, padx=6, pady=(2, 2))
 
+        # ── LPR filter ──────────────────────────────────────────────────────
+        lpr_flt_row = Frame(sidebar, bg=CARD)
+        lpr_flt_row.pack(fill=X, padx=6, pady=(1, 3))
+        Label(lpr_flt_row, text="🔍 LPR:", bg=CARD, fg=DIM,
+              font=F_MAIN).pack(side=LEFT, padx=(0, 4))
+        self._flt_lpr_combo = ttk.Combobox(
+            lpr_flt_row, textvariable=self._flt_lpr_var, state="readonly",
+            values=["Tất cả", "Có biển số", "Không biển số", "Chưa nhận dạng"],
+            width=16, font=F_MAIN)
+        self._flt_lpr_combo.pack(side=LEFT, fill=X, expand=True)
+        self._flt_lpr_var.trace_add("write", lambda *_: self._schedule_det_filter())
+
+        Frame(sidebar, bg=DIM, height=1).pack(fill=X, padx=6, pady=(0, 2))
+
         tree_frame = Frame(sidebar, bg=CARD)
         tree_frame.pack(fill=BOTH, expand=True, padx=2, pady=(0, 6))
 
@@ -665,10 +802,26 @@ class YoloTab(Frame):
                command=self._mark_page_correct,
                bg="#0d2a1a", fg="#4caf50", font=F_MAIN, relief="flat",
                padx=6, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+        Button(mark_row, text="✗✗ Sai trang",
+               command=self._mark_page_incorrect,
+               bg="#2a0d0d", fg=ACCENT, font=F_MAIN, relief="flat",
+               padx=6, cursor="hand2").pack(side=LEFT, padx=(4, 0))
         Button(mark_row, text="💾 Lưu ảnh sai",
                command=self._save_wrong_image,
                bg="#2a1a0a", fg="#ffaa55", font=F_MAIN, relief="flat",
                padx=6, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+        Button(mark_row, text="💾💾 Sai trang",
+               command=self._save_wrong_page,
+               bg="#2a1a0a", fg="#ffaa55", font=F_MAIN, relief="flat",
+               padx=6, cursor="hand2").pack(side=LEFT, padx=(4, 0))
+        Button(mark_row, text="📋 Lưu lỗi+GT",
+               command=self._save_lpr_error_image,
+               bg="#0d2a1a", fg="#4cdf80", font=F_MAIN, relief="flat",
+               padx=6, cursor="hand2").pack(side=LEFT, padx=(8, 0))
+        Button(mark_row, text="📂 GT",
+               command=self._open_gt_folder,
+               bg=CARD, fg="#4cdf80", font=F_MAIN, relief="flat",
+               padx=6, cursor="hand2").pack(side=LEFT, padx=(2, 0))
         self.lbl_mark_state = Label(mark_row, text="", font=F_MONO,
                                      bg=BG, fg=DIM)
         self.lbl_mark_state.pack(side=LEFT, padx=(12, 0))
@@ -742,6 +895,59 @@ class YoloTab(Frame):
         Label(self, textvariable=self.v_status,
               font=F_MAIN, bg=CARD, fg=DIM, anchor=W, padx=8,
               ).pack(fill=X, side=BOTTOM)
+
+    # ============================================================= LPR CONFIG ==
+
+    def _test_lpr_connection(self):
+        """Test kết nối LPR server bằng cách gửi ảnh 4×4 pixel."""
+        if not _REQ_OK:
+            messagebox.showerror("Thiếu thư viện",
+                                  "pip install requests", parent=self.root)
+            return
+        if not _PIL_OK:
+            messagebox.showerror("Thiếu thư viện",
+                                  "pip install Pillow", parent=self.root)
+            return
+        # Test tất cả URL có giá trị
+        urls_to_test = [(i, v.get().strip())
+                        for i, v in enumerate(self._lpr_url_vars)
+                        if v.get().strip()]
+        if not urls_to_test:
+            messagebox.showwarning("Chưa nhập URL",
+                                    "Vui lòng nhập ít nhất 1 URL LPR.", parent=self.root)
+            return
+        _HIST_KEYS = ["h.yolo.lpr_url1", "h.yolo.lpr_url2", "h.yolo.lpr_url3"]
+        for i, url in urls_to_test:
+            _push_history(_HIST_KEYS[i], url)
+            if self._lpr_url_combos[i]:
+                self._lpr_url_combos[i]["values"] = _get_history(_HIST_KEYS[i])
+        if self._lpr_conn_lbl:
+            self._lpr_conn_lbl.config(text="Đang kiểm tra…", fg="#f0c040")
+
+        def _do():
+            from io import BytesIO
+            buf = BytesIO()
+            Image.new("RGB", (4, 4), (0, 0, 0)).save(buf, "JPEG")
+            data = buf.getvalue()
+            parts = []
+            for i, url in urls_to_test:
+                try:
+                    resp = _requests.post(
+                        url,
+                        files={"upload": ("test.jpg", data, "image/jpeg")},
+                        timeout=5)
+                    ok = resp.status_code < 500
+                    parts.append(f"LPR{i+1}:{'✔' if ok else '✗'}{resp.status_code}")
+                except Exception as ex:
+                    parts.append(f"LPR{i+1}:✗{str(ex)[:12]}")
+            msg   = "  ".join(parts)
+            color = SUCCESS if all("✔" in p for p in parts) else ACCENT
+            self.root.after(0, lambda m=msg, c=color: (
+                self._lpr_conn_lbl and
+                self._lpr_conn_lbl.config(text=m, fg=c)
+            ))
+
+        threading.Thread(target=_do, daemon=True).start()
 
     # ============================================================= DRAG-DROP ==
 
@@ -984,6 +1190,8 @@ class YoloTab(Frame):
     def _load_image_list(self, files: list):
         self._all_images = list(files)
         self._det_cache.clear()
+        with self._lpr_cache_lock:
+            self._lpr_cache.clear()
         self._grid_rendered_cache.clear()
         self._grid_page = 0
         if hasattr(self, "lbl_cache_info"):
@@ -1071,6 +1279,24 @@ class YoloTab(Frame):
             self.after_cancel(self._search_after)
         self._search_after = self.after(300,
             lambda: self._apply_filter(self._active_filter))
+
+    def _toggle_search_hint(self):
+        if self._hint_shown:
+            self._hint_frame.pack_forget()
+            self._hint_toggle_btn.config(text="?", fg="#6060a0")
+        else:
+            self._hint_frame.pack(fill=X, padx=4, pady=(0, 3),
+                                   after=self._search_row_ref)
+            self._hint_toggle_btn.config(text="▲", fg=ACCENT2)
+        self._hint_shown = not self._hint_shown
+
+    def _do_search(self):
+        """Push keyword vào history rồi áp dụng filter."""
+        val = self._v_search.get().strip()
+        if val:
+            _push_history("h.yolo.search", val)
+            self._search_combo["values"] = _get_history("h.yolo.search")
+        self._apply_filter(self._active_filter)
 
     def _apply_filter(self, filter_type: str):
         self._active_filter = filter_type
@@ -1256,6 +1482,63 @@ class YoloTab(Frame):
         self.lbl_mark_state.config(text=f"✓ {changed} ảnh", fg=SUCCESS)
         self.after(2500, lambda: self.lbl_mark_state.config(text=""))
 
+    def _mark_page_incorrect(self):
+        """Batch-đánh dấu sai toàn trang — move file vào false/ + ghi label."""
+        if not self._grid_cells:
+            return
+        paths = [c["path"] for c in self._grid_cells if c.get("path")]
+        if not paths:
+            return
+
+        icon  = _REVIEW_ICON.get("incorrect", "✗")
+        moved = []
+        marked = []
+
+        self.tree_images.unbind("<<TreeviewSelect>>")
+        try:
+            for p in paths:
+                if self._base_folder:
+                    ok = self._save_image_and_label(p, "incorrect")
+                    if ok:
+                        moved.append(p)
+                    else:
+                        self._review_state[p] = "incorrect"
+                        marked.append(p)
+                else:
+                    self._review_state[p] = "incorrect"
+                    marked.append(p)
+
+                iid = self._path_to_iid.get(p)
+                if iid:
+                    try:
+                        if self.tree_images.exists(iid):
+                            old  = self.tree_images.item(iid, "text")
+                            bare = old[2:] if len(old) > 2 else old
+                            self.tree_images.item(iid,
+                                                  text=f"{icon} {bare}",
+                                                  tags=("incorrect",))
+                    except Exception:
+                        pass
+        finally:
+            self.tree_images.bind("<<TreeviewSelect>>", self._on_image_select)
+
+        for p in moved:
+            self._review_state.pop(p, None)
+            if p in self._all_images:
+                self._all_images.remove(p)
+            with self._det_cache_lock:
+                self._det_cache.pop(p, None)
+
+        changed = len(moved) + len(marked)
+        if changed:
+            _CFG["yolo.review_states"] = self._review_state
+            _cfg_save()
+            self._apply_filter(self._active_filter)
+            self._update_filter_counts()
+
+        self.lbl_mark_state.config(text=f"✗ {changed} ảnh", fg=ACCENT)
+        self.after(2500, lambda: self.lbl_mark_state.config(text=""))
+
     def _mark_review(self, state: str):
         path = self.current_image_path
         if not path:
@@ -1357,10 +1640,28 @@ class YoloTab(Frame):
                     return "break"
             return _inner
 
+        _INPUT_TYPES = (Entry, Text, Spinbox, ttk.Combobox, ttk.Entry, ttk.Spinbox)
+
+        def _input_focused():
+            try:
+                return isinstance(self.root.focus_get(), _INPUT_TYPES)
+            except Exception:
+                return False
+
+        def _space_handler(*_):
+            if not self._is_active() or _input_focused():
+                return
+            self._toggle_autoplay()
+            return "break"
+
         self.root.bind("<Return>",    _guard(lambda: self._mark_review("correct")), "+")
         self.root.bind("<Delete>",    _guard(lambda: self._mark_review("incorrect")), "+")
-        self.root.bind("<space>",     _guard(lambda: self._toggle_autoplay()), "+")
-        self.root.bind("<Control-c>", _guard(lambda: self._copy_path()), "+")
+        self.root.bind("<space>",     _space_handler, "+")
+        def _copy_handler(*_):
+            if self._is_active() and not _input_focused():
+                self._copy_path()
+                return "break"
+        self.root.bind("<Control-c>", _copy_handler, "+")
 
     # ── Aliases cho app.py global routing ────────────────────────────────
     def _prev_image(self): self._nav_image(-1)
@@ -1386,17 +1687,54 @@ class YoloTab(Frame):
             self._mark_review("correct")
 
     def _copy_path(self):
-        """Copy đường dẫn ảnh hiện tại vào clipboard (Ctrl+C)."""
-        if not self.current_image_path:
+        """Copy ảnh hiện tại vào clipboard dưới dạng bitmap (Ctrl+C)."""
+        if not self.current_image_path or not _PIL_OK:
             return
         try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(self.current_image_path)
-            self.lbl_result.config(text=f"📋 Đã copy: {os.path.basename(self.current_image_path)}",
-                                    fg=DIM)
+            import io, ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            user32   = ctypes.windll.user32
+
+            # Khai báo đầy đủ argtypes + restype cho mọi hàm nhận/trả handle 64-bit
+            kernel32.GlobalAlloc.argtypes  = [ctypes.c_uint, ctypes.c_size_t]
+            kernel32.GlobalAlloc.restype   = ctypes.c_void_p
+            kernel32.GlobalLock.argtypes   = [ctypes.c_void_p]
+            kernel32.GlobalLock.restype    = ctypes.c_void_p
+            kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+            kernel32.GlobalUnlock.restype  = ctypes.c_bool
+            user32.OpenClipboard.argtypes  = [ctypes.c_void_p]
+            user32.OpenClipboard.restype   = ctypes.c_bool
+            user32.EmptyClipboard.argtypes = []
+            user32.EmptyClipboard.restype  = ctypes.c_bool
+            user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+            user32.SetClipboardData.restype  = ctypes.c_void_p
+            user32.CloseClipboard.argtypes = []
+            user32.CloseClipboard.restype  = ctypes.c_bool
+
+            img = Image.open(self.current_image_path).convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, "BMP")
+            data = buf.getvalue()[14:]  # bỏ 14-byte BMP file header, giữ DIB
+            buf.close()
+
+            CF_DIB = 8
+            GMEM_MOVEABLE = 0x0002
+            h = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+            p = kernel32.GlobalLock(h)
+            ctypes.memmove(p, data, len(data))
+            kernel32.GlobalUnlock(h)
+            user32.OpenClipboard(None)
+            user32.EmptyClipboard()
+            user32.SetClipboardData(CF_DIB, h)
+            user32.CloseClipboard()
+
+            self.lbl_result.config(
+                text=f"📋 Đã copy ảnh: {os.path.basename(self.current_image_path)}",
+                fg=DIM)
             self.after(2000, self._restore_result_label)
-        except Exception:
-            pass
+        except Exception as e:
+            self.v_status.set(f"Lỗi copy ảnh: {e}")
 
     def _restore_result_label(self):
         if self._last_n_det < 0:
@@ -1788,10 +2126,35 @@ class YoloTab(Frame):
                                   "pip install ultralytics opencv-python", parent=self.root)
             return
 
-        # Chỉ detect ảnh chưa có trong cache
-        with self._det_cache_lock:
-            pending = [p for p in self._all_images if p not in self._det_cache]
+        if hasattr(self, "lbl_cache_info"):
+            self.lbl_cache_info.config(text="⏳…")
 
+        all_images = list(self._all_images)
+        sel_cls = self._get_sel_classes()
+        conf    = max(self.v_conf_thresh.get(), self.v_conf.get())
+        iou     = self.v_iou.get()
+
+        def _prepare():
+            # Load disk cache nếu bộ nhớ rỗng — chạy ở background để không block UI
+            with self._det_cache_lock:
+                cache_empty = not self._det_cache
+            if cache_empty:
+                self._load_det_cache_from_disk()
+
+            # Tính pending: O(n) set lookup, không I/O
+            with self._det_cache_lock:
+                cached_nc = {os.path.normcase(k) for k in self._det_cache}
+            pending = [p for p in all_images
+                       if os.path.normcase(p) not in cached_nc]
+
+            self.root.after(0, lambda: self._detect_all_run(
+                pending, all_images, sel_cls, conf, iou))
+
+        threading.Thread(target=_prepare, daemon=True).start()
+
+    def _detect_all_run(self, pending: list, all_images: list,
+                        sel_cls, conf: float, iou: float):
+        """Tiếp tục detect sau khi pending list đã được tính trên background thread."""
         if not pending:
             n = len(self._det_cache)
             if hasattr(self, "lbl_cache_info"):
@@ -1801,16 +2164,19 @@ class YoloTab(Frame):
         self._det_stop_flag = False
         self._det_running = True
         self.btn_detect_all.config(text="■ Dừng", bg=ACCENT, fg="white")
-        n_already = len(self._all_images) - len(pending)
-        n_total   = len(self._all_images)
-        sel_cls   = self._get_sel_classes()
-        conf      = max(self.v_conf_thresh.get(), self.v_conf.get())
-        iou       = self.v_iou.get()
+        n_already   = len(all_images) - len(pending)
+        n_total     = len(all_images)
+        do_lpr      = (self.v_lpr_batch.get() and self.v_check_lpr.get()
+                       and _REQ_OK and _PIL_OK)
+        lpr_urls_b  = ([v.get().strip() for v in self._lpr_url_vars
+                        if v.get().strip()] if do_lpr else [])
+        lpr_tmout_b = self._lpr_timeout_var.get() if do_lpr else 10
+        lpr_full_b  = [v.get() for v in self._lpr_fullimg_vars] if do_lpr else []
 
         def run():
             import time
-            BATCH   = 8
-            last_ui = time.monotonic()
+            BATCH     = 8
+            last_ui   = time.monotonic()
             n_pending = len(pending)
 
             for batch_start in range(0, n_pending, BATCH):
@@ -1842,6 +2208,13 @@ class YoloTab(Frame):
                                 "classes": classes_count,
                                 "boxes": box_list,
                             }
+                        # ── LPR batch ──────────────────────────────────────
+                        if do_lpr and lpr_urls_b and box_list:
+                            lpr_res = self._lpr_batch_for_path(
+                                img_path, box_list, lpr_urls_b, lpr_tmout_b,
+                                lpr_full_b)
+                            with self._lpr_cache_lock:
+                                self._lpr_cache[img_path] = lpr_res
                 except Exception:
                     pass
 
@@ -1876,12 +2249,18 @@ class YoloTab(Frame):
         if not page_paths:
             return
 
-        total = len(page_paths)
+        total       = len(page_paths)
         self.btn_detect_page.config(text="■ …", bg=ACCENT, fg="white")
         self.lbl_cache_info.config(text=f"0/{total}")
-        sel_cls = self._get_sel_classes()
-        conf    = max(self.v_conf_thresh.get(), self.v_conf.get())
-        iou     = self.v_iou.get()
+        sel_cls     = self._get_sel_classes()
+        conf        = max(self.v_conf_thresh.get(), self.v_conf.get())
+        iou         = self.v_iou.get()
+        do_lpr      = (self.v_lpr_batch.get() and self.v_check_lpr.get()
+                       and _REQ_OK and _PIL_OK)
+        lpr_urls_p  = ([v.get().strip() for v in self._lpr_url_vars
+                        if v.get().strip()] if do_lpr else [])
+        lpr_tmout_p = self._lpr_timeout_var.get() if do_lpr else 10
+        lpr_full_p  = [v.get() for v in self._lpr_fullimg_vars] if do_lpr else []
 
         def run():
             import time
@@ -1911,6 +2290,13 @@ class YoloTab(Frame):
                             self._det_cache[img_path] = {
                                 "n": n_det, "classes": classes_count, "boxes": box_list,
                             }
+                        # ── LPR batch ──────────────────────────────────────
+                        if do_lpr and lpr_urls_p and box_list:
+                            lpr_res = self._lpr_batch_for_path(
+                                img_path, box_list, lpr_urls_p, lpr_tmout_p,
+                                lpr_full_p)
+                            with self._lpr_cache_lock:
+                                self._lpr_cache[img_path] = lpr_res
                 except Exception:
                     pass
                 done = min(batch_start + BATCH, total)
@@ -1969,8 +2355,7 @@ class YoloTab(Frame):
     # ================================================= CACHE DISK PERSISTENCE ==
 
     def _save_det_cache_to_disk(self):
-        """Lưu _det_cache ra file JSON trong folder để restore khi mở lại app."""
-        import json as _json
+        """Lưu _det_cache ra file JSON trong folder (background thread, atomic write)."""
         folder = self._base_folder
         if not folder or not os.path.isdir(folder):
             return
@@ -1978,28 +2363,56 @@ class YoloTab(Frame):
         model_path = self.v_model_path.get()
         conf = max(self.v_conf_thresh.get(), self.v_conf.get())
         iou  = self.v_iou.get()
-        with self._det_cache_lock:
-            data = {
-                k: {
-                    "n": v["n"],
-                    "classes": {str(ck): cv for ck, cv in v["classes"].items()},
-                    "boxes": [list(b) for b in v["boxes"]],
+
+        # Snapshot toàn bộ cache trên main thread (thread-safe)
+        try:
+            with self._det_cache_lock:
+                data = {
+                    k: {
+                        "n": v["n"],
+                        "classes": {str(ck): cv for ck, cv in v["classes"].items()},
+                        "boxes": [list(b) for b in v["boxes"]],
+                    }
+                    for k, v in self._det_cache.items()
                 }
-                for k, v in self._det_cache.items()
-            }
+        except Exception as e:
+            if hasattr(self, "v_status"):
+                self.v_status.set(f"⚠ Snapshot cache lỗi: {e}")
+            return
+
         payload = {
             "meta": {"model": model_path, "conf": round(conf, 4),
                      "iou": round(iou, 4), "version": 1},
             "data": data,
         }
-        try:
-            with open(cache_file, "w", encoding="utf-8") as f:
-                _json.dump(payload, f, ensure_ascii=False)
-            n = len(data)
-            if hasattr(self, "lbl_cache_info"):
-                self.lbl_cache_info.config(text=f"✓{n} (đã lưu)")
-        except Exception:
-            pass
+        n = len(data)
+
+        def _write():
+            import json as _json
+            tmp_file = cache_file + ".tmp"
+            try:
+                with open(tmp_file, "w", encoding="utf-8") as f:
+                    _json.dump(payload, f, ensure_ascii=False)
+                # Atomic rename — tránh corrupt nếu crash giữa chừng
+                try:
+                    os.replace(tmp_file, cache_file)
+                except Exception:
+                    os.rename(tmp_file, cache_file)
+                self.root.after(0, lambda: (
+                    hasattr(self, "lbl_cache_info") and
+                    self.lbl_cache_info.config(text=f"✓{n} (đã lưu)")))
+            except Exception as e:
+                try:
+                    if os.path.isfile(tmp_file):
+                        os.remove(tmp_file)
+                except Exception:
+                    pass
+                err = str(e)
+                self.root.after(0, lambda msg=err: (
+                    hasattr(self, "v_status") and
+                    self.v_status.set(f"⚠ Lưu cache thất bại: {msg}")))
+
+        threading.Thread(target=_write, daemon=True).start()
 
     def _load_det_cache_from_disk(self) -> bool:
         """Load _det_cache từ file JSON nếu model + iou khớp.
@@ -2024,9 +2437,11 @@ class YoloTab(Frame):
             if abs(meta.get("iou", 0.0) - self.v_iou.get()) > 0.005:
                 return False
             data = payload.get("data", {})
+            # Dùng set từ _all_images thay vì os.path.isfile() để tránh 16k I/O calls
+            valid_nc = {os.path.normcase(p) for p in self._all_images} if self._all_images else None
             loaded = {}
             for img_path, v in data.items():
-                if not os.path.isfile(img_path):
+                if valid_nc is not None and os.path.normcase(img_path) not in valid_nc:
                     continue
                 loaded[img_path] = {
                     "n": v["n"],
@@ -2078,6 +2493,7 @@ class YoloTab(Frame):
             self._must_have_lb.selection_clear(0, END)
         if hasattr(self, "_must_not_lb"):
             self._must_not_lb.selection_clear(0, END)
+        self._flt_lpr_var.set("Tất cả")
         self._apply_filter(self._active_filter)
 
     def _get_must_have_ids(self) -> set:
@@ -2148,8 +2564,9 @@ class YoloTab(Frame):
         h_max         = _fv(self._flt_h_max_var)
         must_have_ids = self._get_must_have_ids()
         must_not_ids  = self._get_must_not_have_ids()
+        lpr_filter    = self._flt_lpr_var.get()
 
-        has_filter = (
+        has_det_filter = (
             cls_filter not in ("Tất cả", "") or
             any(v is not None for v in (ndet_min, ndet_max,
                                         area_min, area_max,
@@ -2157,14 +2574,18 @@ class YoloTab(Frame):
             bool(must_have_ids) or
             bool(must_not_ids)
         )
-        if not has_filter or not self._det_cache:
+        has_lpr_filter = lpr_filter not in ("Tất cả", "")
+
+        if not has_det_filter and not has_lpr_filter:
+            return files
+        if has_det_filter and not self._det_cache and not has_lpr_filter:
             return files
 
         result = []
         for f in files:
             data = self._det_cache.get(f)
             if data is None:
-                # Chưa detect → ẩn nếu có filter tích cực
+                # Chưa detect → ẩn nếu có filter detect tích cực
                 if ndet_min is not None and ndet_min > 0:
                     continue
                 if cls_filter not in ("Tất cả", ""):
@@ -2174,6 +2595,21 @@ class YoloTab(Frame):
                     continue
                 if must_have_ids or must_not_ids:
                     continue
+                # Filter LPR cho ảnh chưa detect
+                if has_lpr_filter:
+                    with self._lpr_cache_lock:
+                        _lpr_e = self._lpr_cache.get(f)
+                    if lpr_filter == "Chưa nhận dạng":
+                        if _lpr_e is not None:
+                            continue
+                    elif lpr_filter == "Có biển số":
+                        if not (_lpr_e is not None
+                                and any(p for _, _, _, _, p in _lpr_e)):
+                            continue
+                    elif lpr_filter == "Không biển số":
+                        if not (_lpr_e is not None
+                                and not any(p for _, _, _, _, p in _lpr_e)):
+                            continue
                 result.append(f)
                 continue
 
@@ -2225,6 +2661,22 @@ class YoloTab(Frame):
                 continue
             if must_not_ids and must_not_ids.intersection(detected_cls):
                 continue
+
+            # Filter LPR
+            if has_lpr_filter:
+                with self._lpr_cache_lock:
+                    _lpr_entry = self._lpr_cache.get(f)  # None = chưa chạy
+                if lpr_filter == "Chưa nhận dạng":
+                    if _lpr_entry is not None:
+                        continue
+                elif lpr_filter == "Có biển số":
+                    if not (_lpr_entry is not None
+                            and any(p for _, _, _, _, p in _lpr_entry)):
+                        continue
+                elif lpr_filter == "Không biển số":
+                    if not (_lpr_entry is not None
+                            and not any(p for _, _, _, _, p in _lpr_entry)):
+                        continue
 
             result.append(f)
         return result
@@ -2473,7 +2925,7 @@ class YoloTab(Frame):
         tw, th      = self._grid_thumb_w, self._grid_thumb_h
         in_cache    = img_path in self._det_cache
         lw          = max(1, self.v_line_width.get())
-        conf_thresh = self.v_conf_thresh.get()
+        conf_thresh = max(self.v_conf_thresh.get(), self.v_conf.get())
         cache_key   = (img_path, tw, th, in_cache, lw, conf_thresh)
         if cache_key in self._grid_rendered_cache:
             return self._grid_rendered_cache[cache_key]
@@ -2549,10 +3001,16 @@ class YoloTab(Frame):
     def _on_slider_change(self, _=None):
         self.lbl_conf.config(text=f"{self.v_conf.get():.2f}")
         self.lbl_iou.config(text=f"{self.v_iou.get():.2f}")
-        if self.current_image_path:
-            # Xóa cache ảnh hiện tại → force re-detect với params mới
-            with self._det_cache_lock:
-                self._det_cache.pop(self.current_image_path, None)
+        if not self.current_image_path:
+            return
+        with self._det_cache_lock:
+            in_cache = self.current_image_path in self._det_cache
+        if in_cache:
+            # Ảnh đã có cache → filter conf từ cache, không re-detect
+            self._grid_rendered_cache.clear()
+            self._detect_and_display()
+        else:
+            # Không có cache → chạy detect với params mới
             self._detect_and_display()
 
     def _get_sel_classes(self):
@@ -2725,9 +3183,60 @@ class YoloTab(Frame):
                     tw, th = tb[2] - tb[0], tb[3] - tb[1]
                     ty = max(y1 - th - 4, 0)
                     draw.rectangle([x1, ty, x1 + tw + 6, ty + th + 4], fill=color)
-                    draw.text((x1 + 3, ty + 2), label, fill=(255, 255, 255), font=font)
+                    draw.text((x1 + 3, ty + 2), label,
+                              fill=_contrast_text(color), font=font)
                 except Exception:
-                    draw.text((x1, max(y1 - fs - 2, 0)), label, fill=color, font=font)
+                    draw.text((x1, max(y1 - fs - 2, 0)), label,
+                              fill=_contrast_text(color), font=font)
+
+        ann_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        return pil_img, ann_bgr
+
+    def _annotated_combined_pil(self, results1, results2, model2):
+        """Vẽ bbox từ 2 model lên cùng 1 ảnh: cyan (M1) + cam KZTEK (M2)."""
+        from PIL import ImageFont, ImageDraw as _Draw
+
+        lw = max(1, self.v_line_width.get())
+        fs = max(6, self.v_font_size.get())
+
+        orig_bgr = results1[0].orig_img
+        orig_rgb = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2RGB)
+        pil_img  = Image.fromarray(orig_rgb)
+        draw     = _Draw.Draw(pil_img)
+
+        try:
+            font = ImageFont.truetype("arial.ttf", fs)
+        except Exception:
+            try:
+                font = ImageFont.load_default(size=fs)
+            except Exception:
+                font = ImageFont.load_default()
+
+        def _draw_boxes(boxes, names, color, prefix):
+            if boxes is None or not len(boxes):
+                return
+            for box in boxes:
+                x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
+                cls_id = int(box.cls[0])
+                conf   = float(box.conf[0])
+                label  = f"{prefix}{names.get(cls_id, str(cls_id))} {conf:.2f}"
+                draw.rectangle([x1, y1, x2, y2], outline=color, width=lw)
+                try:
+                    tb = draw.textbbox((0, 0), label, font=font)
+                    tw, th = tb[2]-tb[0], tb[3]-tb[1]
+                    ty = max(y1-th-4, 0)
+                    draw.rectangle([x1, ty, x1+tw+6, ty+th+4], fill=color)
+                    draw.text((x1+3, ty+2), label,
+                               fill=_contrast_text(color), font=font)
+                except Exception:
+                    draw.text((x1, max(y1-fs-2, 0)), label, fill=color, font=font)
+
+        _draw_boxes(results1[0].boxes,
+                    getattr(self.model, "names", {}) or {},
+                    self._PANEL1_COLOR, "M1:")
+        _draw_boxes(results2[0].boxes,
+                    getattr(model2, "names", {}) or {},
+                    self._PANEL2_COLOR, "M2:")
 
         ann_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         return pil_img, ann_bgr
@@ -2745,7 +3254,7 @@ class YoloTab(Frame):
             pass
         if not data or data["n"] == 0:
             return pil
-        conf_thresh = self.v_conf_thresh.get()
+        conf_thresh = max(self.v_conf_thresh.get(), self.v_conf.get())
         visible_boxes = [b for b in data["boxes"]
                          if (len(b) > 7 and float(b[7]) >= conf_thresh)]
         if not visible_boxes:
@@ -2793,9 +3302,11 @@ class YoloTab(Frame):
                 tw2, th2 = tb[2] - tb[0], tb[3] - tb[1]
                 ty = max(y1 - th2 - 4, 0)
                 draw.rectangle([x1, ty, x1 + tw2 + 6, ty + th2 + 4], fill=color)
-                draw.text((x1 + 3, ty + 2), label, fill=(255, 255, 255), font=font)
+                draw.text((x1 + 3, ty + 2), label,
+                          fill=_contrast_text(color), font=font)
             except Exception:
-                draw.text((x1, max(y1 - fs - 2, 0)), label, fill=color, font=font)
+                draw.text((x1, max(y1 - fs - 2, 0)), label,
+                          fill=_contrast_text(color), font=font)
         return pil
 
     def _resize_pil(self, pil_img, w, h):
@@ -2823,9 +3334,13 @@ class YoloTab(Frame):
         model2          = self.model2
         sel_cls         = self._get_sel_classes()
         # Capture params trên main thread (Tkinter widget không thread-safe)
-        conf_val        = max(self.v_conf_thresh.get(), self.v_conf.get())
-        iou_val         = self.v_iou.get()
-        conf_thresh_val = self.v_conf_thresh.get()
+        conf_val = max(self.v_conf_thresh.get(), self.v_conf.get())
+        iou_val  = self.v_iou.get()
+        check_lpr   = self.v_check_lpr.get()
+        lpr_urls    = ([v.get().strip() for v in self._lpr_url_vars
+                        if v.get().strip()] if check_lpr else [])
+        lpr_timeout = self._lpr_timeout_var.get() if check_lpr else 10
+        lpr_fullimg = [v.get() for v in self._lpr_fullimg_vars] if check_lpr else []
         # Dùng cache nếu có (nhất quán với grid thumbnail), trừ dual-model mode
         with self._det_cache_lock:
             cached = self._det_cache.get(img_path) if model2 is None else None
@@ -2833,7 +3348,7 @@ class YoloTab(Frame):
         def _run():
             try:
                 if cached is not None:
-                    # ── Cache hit: vẽ từ cache, filter theo conf_thresh hiện tại ──
+                    # ── Cache hit: vẽ từ cache, filter theo max(conf_thresh, conf) ──
                     pil1     = self._annotated_from_cache(img_path)
                     ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
                     try:
@@ -2842,9 +3357,9 @@ class YoloTab(Frame):
                         pil_orig = ImageOps.exif_transpose(pil_orig)
                     except Exception:
                         pil_orig = None
-                    # Tính n_det và summary chỉ với boxes vượt qua conf_thresh
+                    # Tính n_det và summary chỉ với boxes vượt qua effective threshold
                     filtered_boxes = [b for b in cached["boxes"]
-                                      if (len(b) > 7 and float(b[7]) >= conf_thresh_val)]
+                                      if (len(b) > 7 and float(b[7]) >= conf_val)]
                     n_det = len(filtered_boxes)
                     filtered_classes = {}
                     for b in filtered_boxes:
@@ -2858,6 +3373,28 @@ class YoloTab(Frame):
                     summary = "  |  ".join(
                         f"{_names.get(k, str(k))}: {v}"
                         for k, v in filtered_classes.items())
+                    # ── LPR overlay (B2+B3) ────────────────────────────────
+                    if check_lpr and lpr_urls and _REQ_OK and filtered_boxes:
+                        with self._lpr_cache_lock:
+                            _lpr_hit = self._lpr_cache.get(img_path)
+                        if _lpr_hit is not None:
+                            pil1 = self._lpr_draw_from_results(pil1, _lpr_hit)
+                        else:
+                            iw, ih = pil1.size
+                            bwc = [(
+                                max(0, int((b[1] - b[3] / 2) * iw)),
+                                max(0, int((b[2] - b[4] / 2) * ih)),
+                                min(iw - 1, int((b[1] + b[3] / 2) * iw)),
+                                min(ih - 1, int((b[2] + b[4] / 2) * ih)),
+                                int(b[0]),
+                            ) for b in filtered_boxes]
+                            pil1 = self._lpr_overlay_boxes(
+                                pil1, pil_orig, bwc, lpr_urls, lpr_timeout,
+                                _names, lpr_fullimg)
+                            with self._lpr_cache_lock:
+                                self._lpr_cache[img_path] = list(
+                                    self._last_lpr_plates_result)
+                        ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
                     self.root.after(0, lambda: self._on_detect_done(
                         img_path, None, pil1, ann1_bgr, pil_orig,
                         n_det, summary, None, None, None, 0, ""))
@@ -2873,10 +3410,47 @@ class YoloTab(Frame):
                         pil_orig = ImageOps.exif_transpose(pil_orig)
                     except Exception:
                         pil_orig = None
+                    # ── LPR overlay (B2+B3) ────────────────────────────────
+                    if check_lpr and lpr_urls and _REQ_OK:
+                        _boxes = results1[0].boxes
+                        if _boxes is not None and len(_boxes):
+                            with self._lpr_cache_lock:
+                                _lpr_hit = self._lpr_cache.get(img_path)
+                            if _lpr_hit is not None:
+                                pil1 = self._lpr_draw_from_results(pil1, _lpr_hit)
+                            else:
+                                _cls_list = [int(c) for c in _boxes.cls.tolist()]
+                                _bwc = [(int(v[0]), int(v[1]), int(v[2]), int(v[3]),
+                                         _cls_list[i])
+                                        for i, v in enumerate(_boxes.xyxy.tolist())]
+                                _mn = {}
+                                try:
+                                    _mn = dict(model1.names) or {}
+                                except Exception:
+                                    pass
+                                pil1 = self._lpr_overlay_boxes(
+                                    pil1, pil_orig, _bwc, lpr_urls, lpr_timeout,
+                                    _mn, lpr_fullimg)
+                                with self._lpr_cache_lock:
+                                    self._lpr_cache[img_path] = list(
+                                        self._last_lpr_plates_result)
+                            ann1_bgr = cv2.cvtColor(np.array(pil1),
+                                                    cv2.COLOR_RGB2BGR)
                     if model2 is not None:
                         results2 = self._run_model(model2, img_path, sel_cls, conf_val, iou_val)
                         n_det2, summary2 = self._results_summary(results2, model2.names)
-                        pil2, _ = self._annotated_to_pil(results2)
+                        # Gộp 2 model lên 1 ảnh (cyan M1, cam M2)
+                        pil1, ann1_bgr = self._annotated_combined_pil(
+                            results1, results2, model2)
+                        # Áp LPR overlay từ cache (đã tính ở bước model1 phía trên)
+                        if check_lpr and lpr_urls and _REQ_OK:
+                            with self._lpr_cache_lock:
+                                _lpr_c2 = self._lpr_cache.get(img_path)
+                            if _lpr_c2 is not None:
+                                pil1 = self._lpr_draw_from_results(pil1, _lpr_c2)
+                                ann1_bgr = cv2.cvtColor(np.array(pil1),
+                                                        cv2.COLOR_RGB2BGR)
+                        pil2 = None   # combined mode — không dùng side-by-side
                     else:
                         results2, pil2, n_det2, summary2 = None, None, 0, ""
                     self.root.after(0, lambda: self._on_detect_done(
@@ -2903,38 +3477,19 @@ class YoloTab(Frame):
         self._last_results1      = results1
 
         if model2 is not None:
-            # Side-by-side mode
-            self.panel2_frame.pack(side=LEFT, fill=BOTH, expand=True)
+            # Combined mode — 1 ảnh, 2 màu bbox (cyan M1, cam M2)
             m1_name = os.path.basename(self.v_model_path.get())
             m2_name = os.path.basename(self.v_model2_path.get())
-
             self.lbl_panel1_title.config(
-                text=f"Model 1: {m1_name}  ({n_det} obj)")
-            self.lbl_panel2_title.config(
-                text=f"Model 2: {m2_name}  ({n_det2} obj)")
+                text=(f"Model 1: {m1_name}  ({n_det} obj)"
+                      f"    |    Model 2: {m2_name}  ({n_det2} obj)"))
+            self.panel2_frame.pack_forget()
+            self.lbl_panel2_title.config(text="")
 
-            half_w = max(self.panels_frame.winfo_width() // 2, 400)
-            ph     = max(self.panels_frame.winfo_height(), 400)
-            pil1r  = self._resize_pil(pil1, half_w, ph)
-            pil2r  = self._resize_pil(pil2, half_w, ph)
-
-            self._pil2_full  = pil2
-            self._photo_ref  = ImageTk.PhotoImage(image=pil1r)
-            self._photo_ref2 = ImageTk.PhotoImage(image=pil2r)
-
-            cw1 = max(self.canvas.winfo_width(), half_w)
-            ch1 = max(self.canvas.winfo_height(), ph)
-            self.canvas.delete("all")
-            self.canvas.create_image(
-                (cw1 - pil1r.width) // 2, (ch1 - pil1r.height) // 2,
-                anchor=NW, image=self._photo_ref, tags="img")
-
-            cw2 = max(self.canvas2.winfo_width(), half_w)
-            ch2 = max(self.canvas2.winfo_height(), ph)
-            self.canvas2.delete("all")
-            self.canvas2.create_image(
-                (cw2 - pil2r.width) // 2, (ch2 - pil2r.height) // 2,
-                anchor=NW, image=self._photo_ref2, tags="img")
+            self._pil1_full  = pil1
+            self._pil1_orig  = pil_orig
+            self._last_n_det = n_det + n_det2
+            self._render_display()
 
             txt = (f"Model1: {n_det} obj" + (f"  [{summary}]" if summary else "")
                    + f"    Model2: {n_det2} obj" + (f"  [{summary2}]" if summary2 else ""))
@@ -2967,19 +3522,365 @@ class YoloTab(Frame):
         if pending:
             self._detect_and_display()
 
+    # ============================================= LPR OVERLAY HELPERS ==
+
+    def _lpr_parse_plate(self, raw) -> str:
+        """Trích biển số từ JSON response của LPR server."""
+        if isinstance(raw, list):
+            raw = raw[0] if raw else {}
+        if not isinstance(raw, dict):
+            return str(raw)[:30] if raw else ""
+        for rk in ("Results", "results"):
+            sub = raw.get(rk)
+            if isinstance(sub, list) and sub:
+                item = sub[0]
+                for pk in ("Plate", "plate", "PlateNumber", "plate_number"):
+                    if item.get(pk):
+                        return str(item[pk]).strip()
+        for k in ("plate", "PlateNumber", "license_plate", "plateNumber", "text"):
+            if raw.get(k):
+                return str(raw[k]).strip()
+        return ""
+
+    def _lpr_call_crop(self, crop_pil, url: str, timeout: int) -> str:
+        """Gửi ảnh crop lên LPR server, trả về biển số hoặc ''."""
+        if not _REQ_OK or not _PIL_OK:
+            return ""
+        try:
+            from io import BytesIO
+            buf = BytesIO()
+            img = crop_pil if crop_pil.mode == "RGB" else crop_pil.convert("RGB")
+            img.save(buf, "JPEG", quality=90)
+            data = buf.getvalue()
+            resp = _requests.post(
+                url,
+                files={"upload": ("crop.jpg", data, "image/jpeg")},
+                timeout=timeout)
+            resp.raise_for_status()
+            try:
+                raw = resp.json()
+            except Exception:
+                return resp.text.strip()[:50]
+            return self._lpr_parse_plate(raw)
+        except Exception:
+            return ""
+
+    # ── Màu nền mỗi dòng LPR ──────────────────────────────────────────────
+    # Màu prefix LPR1/2/3 — dùng làm text color trên nền tối
+    _LPR_LINE_COLORS = [(80, 220, 100), (80, 160, 255), (255, 185, 60)]
+    _LPR_BG          = (15, 15, 25, 210)   # nền tối bán trong suốt (RGBA)
+
+    @staticmethod
+    def _lpr_draw_lines(draw, font, x1: int, y1: int, x2: int, y2: int,
+                        plates_tsv: str, iw: int, ih: int, fs: int):
+        """Vẽ từng dòng kết quả LPR — nền tối, prefix màu riêng, diff màu vàng."""
+        _COLORS = [(80, 220, 100), (80, 160, 255), (255, 185, 60)]
+        _BG     = (15, 15, 25)
+        _DIFF   = (255, 220, 0)    # vàng — dễ thấy trên nền tối
+        _WHITE  = (255, 255, 255)
+
+        raw = [p.upper() for p in plates_tsv.split("\t")] if plates_tsv else []
+        ref = next((p for p in raw if p), "")
+        multi = sum(1 for p in raw if p) > 1
+
+        lines = []
+        for i, p in enumerate(raw):
+            if not p:
+                continue
+            prefix = f"LPR{i+1}: " if multi else ""
+            lines.append((prefix, p, _COLORS[i % len(_COLORS)]))
+
+        if not lines:
+            return
+
+        pad = 5
+        line_gap = 2
+
+        def _text_w(txt):
+            try:
+                return draw.textbbox((0, 0), txt, font=font)[2]
+            except Exception:
+                return len(txt) * 9
+
+        def _text_h(txt):
+            try:
+                tb = draw.textbbox((0, 0), txt, font=font)
+                return tb[3] - tb[1]
+            except Exception:
+                return fs
+
+        # Tính max width để biết tx cần dịch vào bao nhiêu
+        line_sizes = []
+        for prefix, plate_text, pfx_color in lines:
+            full  = prefix + plate_text
+            tw    = _text_w(full)
+            th    = _text_h(full)
+            line_sizes.append((tw, th))
+
+        max_tw   = max(tw for tw, _ in line_sizes) if line_sizes else 0
+        row_h    = max(th for _, th in line_sizes) if line_sizes else fs
+        total_h  = len(lines) * (row_h + pad * 2 + line_gap)
+
+        # Vị trí Y: ưu tiên dưới bbox, nếu tràn thì đẩy lên trên
+        ty = y2 + 3
+        if ty + total_h > ih:
+            ty = max(0, y1 - total_h - 3)
+
+        # Vị trí X: căn theo x1 của bbox, dịch trái nếu tràn cạnh phải
+        tx = min(x1, iw - max_tw - pad * 2 - 1)
+        tx = max(0, tx)
+
+        for (tw2, th2), (prefix, plate_text, pfx_color) in zip(line_sizes, lines):
+            draw.rectangle([tx, ty, tx + tw2 + pad * 2, ty + th2 + pad * 2],
+                           fill=_BG)
+            cx, cy = tx + pad, ty + pad
+            # Prefix màu riêng
+            if prefix:
+                draw.text((cx, cy), prefix, font=font, fill=pfx_color)
+                cx += _text_w(prefix)
+            # Từng ký tự: trắng nếu đúng, vàng nếu khác LPR1
+            for pi, ch in enumerate(plate_text):
+                ref_ch = ref[pi] if pi < len(ref) else None
+                fill = _DIFF if (ref_ch is not None and ch != ref_ch) else _WHITE
+                draw.text((cx, cy), ch, font=font, fill=fill)
+                cx += _text_w(ch)
+            ty += th2 + pad * 2 + line_gap
+
+    def _lpr_draw_from_results(self, draw_pil, results: list):
+        """Vẽ nhãn biển số từ results đã cache — không gọi API.
+        results: [(x1,y1,x2,y2,plate), ...]
+        """
+        if not results or not _PIL_OK:
+            return draw_pil
+        from PIL import ImageDraw as _Draw, ImageFont
+        iw, ih = draw_pil.size
+        draw = _Draw.Draw(draw_pil)
+        fs = max(1, int(self._lpr_font_size_var.get()))
+        try:
+            font = ImageFont.truetype("arial.ttf", fs)
+        except Exception:
+            try:
+                font = ImageFont.load_default(size=fs)
+            except Exception:
+                font = ImageFont.load_default()
+        self._last_lpr_plates_result = []
+        for (x1, y1, x2, y2, plates_tsv) in results:
+            self._last_lpr_plates_result.append((x1, y1, x2, y2, plates_tsv))
+            if not plates_tsv:
+                continue
+            x1c = max(0, x1); y1c = max(0, y1)
+            x2c = min(iw - 1, x2); y2c = min(ih - 1, y2)
+            self._lpr_draw_lines(draw, font, x1c, y1c, x2c, y2c,
+                                 plates_tsv, iw, ih, fs)
+        return draw_pil
+
+    def _lpr_batch_for_path(self, img_path: str, boxes: list,
+                             urls, timeout: int,
+                             use_full: list = None) -> list:
+        """Gọi LPR song song tất cả URL cho từng bbox của 1 ảnh (dùng trong batch detect).
+
+        boxes   : list[(cid, cx_n, cy_n, w_n, h_n, ...)] — format det_cache.
+        urls    : str hoặc list[str].
+        use_full: list[bool] tương ứng từng URL — True = gửi ảnh gốc, False = crop.
+        Returns : [(x1,y1,x2,y2,plates_tsv), ...]  (rỗng nếu lỗi).
+        """
+        if isinstance(urls, str):
+            urls = [urls] if urls else []
+        if not _REQ_OK or not _PIL_OK or not boxes or not urls:
+            return []
+        use_full = list(use_full) if use_full else [False] * len(urls)
+        while len(use_full) < len(urls):
+            use_full.append(False)
+        try:
+            from PIL import Image as _PILImg
+            pil = _PILImg.open(img_path).convert("RGB")
+            iw, ih = pil.size
+        except Exception:
+            return []
+        # Filter plate class
+        names = {}
+        try:
+            if self.model:
+                names = dict(self.model.names)
+        except Exception:
+            pass
+        _PLATE_KW = {"plate", "lp", "bsx", "bien", "license", "bienso"}
+        plate_cids = {
+            cid for cid, name in names.items()
+            if any(kw in str(name).lower() for kw in _PLATE_KW)
+        }
+        if plate_cids:
+            to_proc = [b for b in boxes if int(b[0]) in plate_cids]
+            if not to_proc:
+                return []   # model có plate class nhưng ảnh không detect ra → không gọi LPR
+        else:
+            to_proc = boxes
+        import concurrent.futures as _cf
+        results = []
+        for b in to_proc:
+            cx_n, cy_n, w_n, h_n = float(b[1]), float(b[2]), float(b[3]), float(b[4])
+            x1 = max(0, int((cx_n - w_n / 2) * iw))
+            y1 = max(0, int((cy_n - h_n / 2) * ih))
+            x2 = min(iw - 1, int((cx_n + w_n / 2) * iw))
+            y2 = min(ih - 1, int((cy_n + h_n / 2) * ih))
+            if x2 - x1 < 8 or y2 - y1 < 8:
+                continue
+            crop = pil.crop((x1, y1, x2, y2))
+            plates = [""] * len(urls)
+            def _call(idx, u):
+                img = pil if use_full[idx] else crop
+                return self._lpr_call_crop(img, u, timeout)
+            if len(urls) == 1:
+                plates[0] = _call(0, urls[0])
+            else:
+                with _cf.ThreadPoolExecutor(max_workers=len(urls)) as ex:
+                    futs = {ex.submit(_call, i, u): i
+                            for i, u in enumerate(urls)}
+                    for fut in _cf.as_completed(futs):
+                        plates[futs[fut]] = fut.result() or ""
+            plates_tsv = "\t".join(p.upper() for p in plates)
+            results.append((x1, y1, x2, y2, plates_tsv))
+        return results
+
+    def _lpr_overlay_boxes_vid(self, draw_pil, source_pil, boxes_with_cls,
+                               urls, timeout, model_names, use_full, font_size):
+        """Wrapper thread-safe cho video — nhận font_size trực tiếp, không đọc Tkinter var."""
+        import contextlib
+        class _FakeIntVar:
+            def get(self): return font_size
+        old = self._lpr_font_size_var
+        self._lpr_font_size_var = _FakeIntVar()
+        try:
+            return self._lpr_overlay_boxes(draw_pil, source_pil, boxes_with_cls,
+                                            urls, timeout, model_names, use_full)
+        finally:
+            self._lpr_font_size_var = old
+
+    def _lpr_overlay_boxes(self, draw_pil, source_pil, boxes_with_cls: list,
+                            urls, timeout: int, model_names: dict = None,
+                            use_full: list = None):
+        """Crop bbox biển số → gọi song song tất cả LPR URL → vẽ kết quả lên ảnh.
+
+        draw_pil       : PIL Image đã annotated — vẽ text lên đây.
+        source_pil     : PIL Image gốc để crop — None → dùng draw_pil.
+        boxes_with_cls : list[(x1,y1,x2,y2,cid)] tọa độ pixel + class id.
+        urls           : str hoặc list[str] — LPR server URL(s).
+        model_names    : dict {cid: name} từ model.names để lọc plate class.
+        use_full       : list[bool] tương ứng từng URL — True = gửi ảnh gốc.
+        """
+        if isinstance(urls, str):
+            urls = [urls] if urls else []
+        if not _PIL_OK:
+            return draw_pil
+        use_full = list(use_full) if use_full else [False] * len(urls)
+        while len(use_full) < len(urls):
+            use_full.append(False)
+        from PIL import ImageDraw as _Draw, ImageFont
+
+        # ── Lọc plate class nếu model có class biển số ──────────────────
+        _PLATE_KW = {"plate", "lp", "bsx", "bien", "license", "bienso"}
+        names = model_names or {}
+        plate_cids = {
+            cid for cid, name in names.items()
+            if any(kw in str(name).lower() for kw in _PLATE_KW)
+        }
+        if plate_cids:
+            to_process = [b for b in boxes_with_cls if b[4] in plate_cids]
+            if not to_process:
+                # Model có plate class nhưng ảnh không detect ra biển số → không gọi LPR
+                self._last_lpr_plates_result = []
+                return draw_pil
+        else:
+            to_process = boxes_with_cls      # model không có plate class → dùng tất cả bbox
+
+        self._last_lpr_plates_result = []
+        if not to_process:
+            return draw_pil
+
+        iw, ih = draw_pil.size
+        draw = _Draw.Draw(draw_pil)
+        fs = max(12, int(self._lpr_font_size_var.get()))
+        try:
+            font = ImageFont.truetype("arial.ttf", fs)
+        except Exception:
+            try:
+                font = ImageFont.load_default(size=fs)
+            except Exception:
+                font = ImageFont.load_default()
+
+        src = (source_pil if (source_pil is not None
+                               and source_pil.size == draw_pil.size)
+               else draw_pil)
+
+        import concurrent.futures as _cf
+        for (x1, y1, x2, y2, _cid) in to_process:
+            x1 = max(0, x1); y1 = max(0, y1)
+            x2 = min(iw - 1, x2); y2 = min(ih - 1, y2)
+            if x2 - x1 < 8 or y2 - y1 < 8:
+                continue
+            crop = src.crop((x1, y1, x2, y2))
+            # Gọi song song tất cả LPR URL — mỗi URL dùng crop hoặc ảnh gốc
+            plates = [""] * len(urls)
+            def _call(idx, u):
+                img = src if use_full[idx] else crop
+                return self._lpr_call_crop(img, u, timeout)
+            if len(urls) == 1:
+                plates[0] = _call(0, urls[0])
+            else:
+                with _cf.ThreadPoolExecutor(max_workers=len(urls)) as ex:
+                    futs = {ex.submit(_call, i, u): i
+                            for i, u in enumerate(urls)}
+                    for fut in _cf.as_completed(futs):
+                        plates[futs[fut]] = fut.result() or ""
+
+            plates_tsv = "\t".join(p.upper() for p in plates)
+            self._last_lpr_plates_result.append((x1, y1, x2, y2, plates_tsv))
+            if not any(plates):
+                continue
+            self._lpr_draw_lines(draw, font, x1, y1, x2, y2,
+                                 plates_tsv, iw, ih, fs)
+        return draw_pil
+
     # ================================================ WRONG FOLDER SAVE ==
+
+    def _update_wrong_path(self):
+        """Ghép 5 ô thành v_wrong_folder."""
+        parts = [sv.get().strip() for sv in self._v_wf_segs]
+        parts = [p for p in parts if p]
+        if not parts:
+            self.v_wrong_folder.set("")
+            return
+        # Dùng string join (không dùng os.path.join) để tránh lỗi drive letter Windows
+        path = parts[0].rstrip("/\\")
+        for p in parts[1:]:
+            path = path + "/" + p.strip("/\\")
+        self.v_wrong_folder.set(path)
 
     def _browse_wrong_folder(self):
         cur = self.v_wrong_folder.get().strip()
-        init = cur if cur and os.path.isdir(cur) else _cfg_dir("yolo.wrong_folder") or None
+        init = (cur if cur and os.path.isdir(cur)
+                else os.path.dirname(cur) if cur else None)
         folder = filedialog.askdirectory(
             title="Chọn thư mục lưu ảnh sai",
             initialdir=init,
             parent=self.root)
-        if folder:
-            self.v_wrong_folder.set(folder)
-            _push_history("h.yolo.wrong_folder", folder)
-            self.combo_wrong_folder["values"] = _get_history("h.yolo.wrong_folder")
+        if not folder:
+            return
+        # Chia path thành 5 ô: 4 phần cuối → ô 2-5, phần còn lại → ô 1
+        folder = folder.replace("\\", "/")
+        raw = folder.split("/")
+        # Xử lý drive letter Windows (e.g. "K:" → giữ nguyên trong raw[0])
+        if len(raw) >= 5:
+            s1 = "/".join(raw[:-4])
+            segs = [s1] + raw[-4:]
+        else:
+            segs = raw + [""] * (5 - len(raw))
+        for i, (sv, cb) in enumerate(zip(self._v_wf_segs, self._wf_combos)):
+            val = segs[i] if i < len(segs) else ""
+            sv.set(val)
+            if val:
+                _push_history(f"h.yolo.wf.s{i+1}", val)
+                cb["values"] = _get_history(f"h.yolo.wf.s{i+1}")
 
     def _open_wrong_folder(self):
         p = self.v_wrong_folder.get().strip()
@@ -2987,7 +3888,7 @@ class YoloTab(Frame):
             os.startfile(p)
 
     def _save_wrong_image(self):
-        """Copy ảnh hiện tại vào folder lưu ảnh sai đã cấu hình."""
+        """Copy ảnh + label hiện tại vào folder lưu ảnh sai đã cấu hình."""
         path = self.current_image_path
         if not path or not os.path.isfile(path):
             messagebox.showwarning("Chưa có ảnh",
@@ -3001,14 +3902,287 @@ class YoloTab(Frame):
             return
         try:
             os.makedirs(dest_dir, exist_ok=True)
-            dest = os.path.join(dest_dir, os.path.basename(path))
-            shutil.copy2(path, dest)
+            base     = os.path.splitext(os.path.basename(path))[0]
+            dest_img = os.path.join(dest_dir, os.path.basename(path))
+            dest_lbl = os.path.join(dest_dir, f"{base}.txt")
+
+            shutil.copy2(path, dest_img)
+
+            # 1) Ưu tiên: ghi label từ det_cache (boxes đã detect)
+            with self._det_cache_lock:
+                det = self._det_cache.get(path)
+            if det is not None:
+                conf_thresh = max(self.v_conf_thresh.get(), self.v_conf.get())
+                with open(dest_lbl, "w", encoding="utf-8") as f:
+                    for box_t in det.get("boxes", []):
+                        if len(box_t) > 7 and float(box_t[7]) < conf_thresh:
+                            continue
+                        cid, cx, cy, bw, bh = (box_t[0], box_t[1],
+                                                box_t[2], box_t[3], box_t[4])
+                        f.write(f"{int(cid)} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+            # 2) Fallback: kết quả detect trực tiếp (_last_results1)
+            elif self._last_results1 is not None:
+                boxes = self._last_results1[0].boxes
+                with open(dest_lbl, "w", encoding="utf-8") as f:
+                    if boxes is not None and len(boxes):
+                        for box in boxes:
+                            cid = int(box.cls[0])
+                            cx, cy, bw, bh = box.xywhn[0].tolist()
+                            f.write(f"{cid} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+            # 3) Fallback cuối: copy file .txt gốc nếu tồn tại
+            else:
+                src_lbl = os.path.splitext(path)[0] + ".txt"
+                if os.path.isfile(src_lbl):
+                    shutil.copy2(src_lbl, dest_lbl)
+
+            # Tự động đánh dấu sai
+            self._review_state[path] = "incorrect"
+            _CFG["yolo.review_states"] = self._review_state
+            _cfg_save()
+            iid = self._path_to_iid.get(path)
+            if iid:
+                try:
+                    if self.tree_images.exists(iid):
+                        icon = _REVIEW_ICON["incorrect"]
+                        old_text = self.tree_images.item(iid, "text")
+                        bare = old_text[2:] if len(old_text) > 2 else old_text
+                        self.tree_images.item(iid,
+                                              text=f"{icon} {bare}",
+                                              tags=("incorrect",))
+                except Exception:
+                    pass
+            self._update_filter_counts()
+
             self.lbl_mark_state.config(
-                text=f"💾 Đã lưu: {os.path.basename(path)}", fg="#ffaa55")
+                text=f"✗💾 {os.path.basename(path)}", fg="#ffaa55")
             self.after(3000, lambda: self.lbl_mark_state.config(text=""))
-            self.v_status.set(f"💾 Lưu ảnh sai → {dest}")
+            lbl_note = " + label" if os.path.isfile(dest_lbl) else ""
+            self.v_status.set(f"✗💾 Lưu ảnh sai{lbl_note} → {dest_dir}")
         except Exception as e:
             messagebox.showerror("Lỗi lưu ảnh", str(e), parent=self.root)
+
+    def _save_wrong_page(self):
+        """Copy toàn bộ ảnh trang grid hiện tại + label vào wrong_folder."""
+        if not self._grid_cells:
+            messagebox.showwarning("Chưa có ảnh",
+                                   "Trang hiện tại không có ảnh.", parent=self.root)
+            return
+        dest_dir = self.v_wrong_folder.get().strip()
+        if not dest_dir:
+            messagebox.showwarning("Chưa chọn thư mục",
+                                   "Vui lòng chọn thư mục lưu ảnh sai (ô phía trên).",
+                                   parent=self.root)
+            return
+
+        paths = [c["path"] for c in self._grid_cells if c.get("path")]
+        if not paths:
+            return
+
+        conf_thresh = max(self.v_conf_thresh.get(), self.v_conf.get())
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+        except Exception as e:
+            messagebox.showerror("Lỗi tạo thư mục", str(e), parent=self.root)
+            return
+
+        saved = 0
+        errors = 0
+        for p in paths:
+            if not os.path.isfile(p):
+                continue
+            try:
+                base     = os.path.splitext(os.path.basename(p))[0]
+                dest_img = os.path.join(dest_dir, os.path.basename(p))
+                dest_lbl = os.path.join(dest_dir, f"{base}.txt")
+
+                shutil.copy2(p, dest_img)
+
+                # Ghi label — ưu tiên det_cache → file .txt gốc
+                with self._det_cache_lock:
+                    det = self._det_cache.get(p)
+                if det is not None:
+                    with open(dest_lbl, "w", encoding="utf-8") as f:
+                        for box_t in det.get("boxes", []):
+                            if len(box_t) > 7 and float(box_t[7]) < conf_thresh:
+                                continue
+                            cid, cx, cy, bw, bh = (box_t[0], box_t[1],
+                                                    box_t[2], box_t[3], box_t[4])
+                            f.write(f"{int(cid)} {cx:.6f} {cy:.6f}"
+                                    f" {bw:.6f} {bh:.6f}\n")
+                else:
+                    src_lbl = os.path.splitext(p)[0] + ".txt"
+                    if os.path.isfile(src_lbl):
+                        shutil.copy2(src_lbl, dest_lbl)
+
+                # Tự động đánh dấu sai
+                self._review_state[p] = "incorrect"
+                iid = self._path_to_iid.get(p)
+                if iid:
+                    try:
+                        if self.tree_images.exists(iid):
+                            icon = _REVIEW_ICON["incorrect"]
+                            old_text = self.tree_images.item(iid, "text")
+                            bare = old_text[2:] if len(old_text) > 2 else old_text
+                            self.tree_images.item(iid,
+                                                  text=f"{icon} {bare}",
+                                                  tags=("incorrect",))
+                    except Exception:
+                        pass
+                saved += 1
+            except Exception:
+                errors += 1
+
+        if saved:
+            _CFG["yolo.review_states"] = self._review_state
+            _cfg_save()
+            self._update_filter_counts()
+
+        msg = f"✗💾 {saved}/{len(paths)} ảnh → {dest_dir}"
+        if errors:
+            msg += f" ({errors} lỗi)"
+        self.lbl_mark_state.config(text=f"✗💾 {saved} ảnh sai", fg="#ffaa55")
+        self.after(3000, lambda: self.lbl_mark_state.config(text=""))
+        self.v_status.set(msg)
+
+    # ============================================ LPR ERROR SAVE + GT ==
+
+    @staticmethod
+    def _extract_plate_from_filename(fname: str) -> str:
+        """Trích biển số từ tên file dạng sub_<biển số>[_...].
+        VD: sub_29A12345_001 → '29A12345'
+        """
+        import re
+        m = re.match(r'^sub_([A-Za-z0-9]+)', fname, re.IGNORECASE)
+        return m.group(1).upper() if m else ""
+
+    @staticmethod
+    def _update_gt(gt_path: str, filename: str, plate: str):
+        """Thêm hoặc cập nhật dòng 'filename\\tplate' trong gt.txt."""
+        lines = []
+        updated = False
+        if os.path.isfile(gt_path):
+            with open(gt_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.rstrip("\n")
+                    if not line:
+                        continue
+                    parts = line.split("\t", 1)
+                    if parts[0] == filename:
+                        lines.append(f"{filename}\t{plate}")
+                        updated = True
+                    else:
+                        lines.append(line)
+        if not updated:
+            lines.append(f"{filename}\t{plate}")
+        with open(gt_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+
+    def _save_lpr_error_image(self):
+        """Lưu ảnh lỗi kèm crop biển số + GT.
+
+        1. Ảnh full (annotated nếu đã detect, else bản gốc) → wrong_folder/
+        2. Crops từng bbox biển số → wrong_folder/crops/
+        3. GT: wrong_folder/gt.txt  format: filename\\tplate
+           Plate GT ưu tiên: tên file sub_<plate> → kết quả LPR
+        """
+        path = self.current_image_path
+        if not path or not os.path.isfile(path):
+            messagebox.showwarning("Chưa có ảnh",
+                                   "Vui lòng chọn ảnh trước.", parent=self.root)
+            return
+        dest_dir = self.v_wrong_folder.get().strip()
+        if not dest_dir:
+            messagebox.showwarning("Chưa chọn thư mục",
+                                   "Vui lòng chọn thư mục lưu ảnh sai (ô phía trên).",
+                                   parent=self.root)
+            return
+
+        fname   = os.path.basename(path)
+        base    = os.path.splitext(fname)[0]
+        lpr_res = list(self._last_lpr_plates_result)  # snapshot
+
+        # Plate GT: tên file → LPR (lấy plate đầu tiên có giá trị từ tab-separated)
+        plate_gt = self._extract_plate_from_filename(base)
+        if not plate_gt:
+            plate_gt = next(
+                (p for _, _, _, _, tsv in lpr_res
+                 for p in tsv.split("\t") if p),
+                ""
+            )
+
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+
+            # ── 1. Lưu ảnh full ──────────────────────────────────────────
+            dest_full = os.path.join(dest_dir, fname)
+            pil_full  = getattr(self, "_pil1_full", None)
+            if pil_full is not None:
+                pil_full.save(dest_full, quality=95)
+            else:
+                shutil.copy2(path, dest_full)
+
+            # ── 2. Lưu crops bbox biển số ─────────────────────────────────
+            n_crops  = 0
+            pil_src  = getattr(self, "_pil1_orig", None)
+            if pil_src is None:
+                try:
+                    from PIL import ImageOps
+                    pil_src = Image.open(path).convert("RGB")
+                    pil_src = ImageOps.exif_transpose(pil_src)
+                except Exception:
+                    pil_src = pil_full
+
+            crop_gt_entries = []   # [(crop_fname, plate_str), ...]
+            if pil_src is not None and lpr_res:
+                crops_dir = os.path.join(dest_dir, "crops")
+                os.makedirs(crops_dir, exist_ok=True)
+                iw, ih = pil_src.size
+                for i, (x1, y1, x2, y2, plates_tsv) in enumerate(lpr_res):
+                    x1 = max(0, x1); y1 = max(0, y1)
+                    x2 = min(iw - 1, x2); y2 = min(ih - 1, y2)
+                    if x2 - x1 < 4 or y2 - y1 < 4:
+                        continue
+                    crop_img  = pil_src.crop((x1, y1, x2, y2))
+                    crop_fname = f"{base}_crop{i:02d}.jpg"
+                    crop_img.save(os.path.join(crops_dir, crop_fname), quality=95)
+                    n_crops += 1
+                    # GT cho crop: lấy plate đầu tiên có giá trị (ưu tiên LPR1)
+                    crop_plate = plate_gt or next(
+                        (p for p in plates_tsv.split("\t") if p), "")
+                    if crop_plate:
+                        crop_gt_entries.append((crop_fname, crop_plate))
+
+            # ── 3. GT ─────────────────────────────────────────────────────
+            gt_path = os.path.join(dest_dir, "gt.txt")
+            if plate_gt:
+                self._update_gt(gt_path, fname, plate_gt)
+            # GT cho từng crop
+            crops_gt_path = os.path.join(dest_dir, "crops", "gt.txt")
+            for crop_fname, crop_plate in crop_gt_entries:
+                self._update_gt(crops_gt_path, crop_fname, crop_plate)
+
+            # Feedback
+            gt_note = f"  GT={plate_gt}" if plate_gt else "  GT=—"
+            crop_gt_note = f"+{len(crop_gt_entries)}crop" if crop_gt_entries else ""
+            msg = f"📋 {fname}  crop={n_crops}{gt_note}{crop_gt_note}"
+            self.lbl_mark_state.config(text=msg[:56], fg="#4cdf80")
+            self.after(3000, lambda: self.lbl_mark_state.config(text=""))
+            self.v_status.set(f"📋 Lưu lỗi+GT → {dest_dir}  {gt_note.strip()}")
+
+        except Exception as e:
+            messagebox.showerror("Lỗi lưu lỗi+GT", str(e), parent=self.root)
+
+    def _open_gt_folder(self):
+        p = self.v_wrong_folder.get().strip()
+        if p and os.path.isdir(p):
+            os.startfile(p)
+        elif p:
+            messagebox.showwarning("Thư mục không tồn tại",
+                                   f"Chưa có thư mục:\n{p}", parent=self.root)
+        else:
+            messagebox.showwarning("Chưa chọn thư mục",
+                                   "Vui lòng chọn thư mục lưu ảnh sai trước.",
+                                   parent=self.root)
 
     # ======================================================= SAVE RESULT ==
 
@@ -3867,6 +5041,20 @@ class YoloTab(Frame):
                     activebackground=BG, selectcolor="#16162a",
                     font=F_MAIN, cursor="hand2").pack(side=LEFT)
 
+        # RTSP / HTTP stream row
+        rtsp_row = Frame(dlg, bg=BG)
+        rtsp_row.pack(fill=X, padx=16, pady=(8, 2))
+        Label(rtsp_row, text="RTSP / HTTP:", bg=BG, fg=DIM, font=F_MAIN,
+              width=14, anchor=W).pack(side=LEFT)
+        v_rtsp = StringVar()
+        rtsp_hist = _get_history("h.yolo.rtsp_url")
+        combo_rtsp = ttk.Combobox(rtsp_row, textvariable=v_rtsp,
+                                   font=F_MAIN, width=36)
+        combo_rtsp["values"] = rtsp_hist
+        combo_rtsp.set(rtsp_hist[0] if rtsp_hist else "rtsp://")
+        combo_rtsp.pack(side=LEFT, fill=X, expand=True)
+        _bind_history("h.yolo.rtsp_url", combo_rtsp)
+
         # Separator
         Frame(dlg, bg=DIM, height=1).pack(fill=X, padx=16, pady=4)
 
@@ -3912,8 +5100,23 @@ class YoloTab(Frame):
             _result[0] = ("cam", idx, False)
             dlg.destroy()
 
+        def _start_rtsp():
+            url = v_rtsp.get().strip()
+            if not url or url in ("rtsp://", "http://"):
+                messagebox.showwarning("Chưa nhập URL",
+                                       "Vui lòng nhập RTSP hoặc HTTP URL.",
+                                       parent=dlg)
+                return
+            _push_history("h.yolo.rtsp_url", url)
+            combo_rtsp["values"] = _get_history("h.yolo.rtsp_url")
+            _result[0] = ("rtsp", url, False)
+            dlg.destroy()
+
         Button(btn_frame, text="▶ Mở File Video", command=_start_file,
                bg=ACCENT, fg="white", font=F_BOLD, relief="flat",
+               padx=12, cursor="hand2").pack(side=LEFT, padx=(0, 8))
+        Button(btn_frame, text="📡 Mở RTSP", command=_start_rtsp,
+               bg="#1a6b3c", fg="white", font=F_BOLD, relief="flat",
                padx=12, cursor="hand2").pack(side=LEFT, padx=(0, 8))
         Button(btn_frame, text="📷 Mở Webcam", command=_start_cam,
                bg="#2e5fa3", fg="white", font=F_BOLD, relief="flat",
@@ -3937,6 +5140,8 @@ class YoloTab(Frame):
         src_type, src_val, do_loop = _result[0]
         if src_type == "file":
             self._launch_video_window(src_val, os.path.basename(src_val), do_loop)
+        elif src_type == "rtsp":
+            self._launch_video_window(src_val, src_val, False)
         else:
             self._launch_video_window(src_val, f"Webcam #{src_val}", False)
 
@@ -3999,17 +5204,20 @@ class YoloTab(Frame):
 
         lbl_det_info = Label(info_bar, text="",
                              bg=CARD, fg=DIM, font=F_MONO)
-        lbl_det_info.pack(side=LEFT, expand=True, anchor=W)
+        lbl_det_info.pack(side=LEFT, anchor=W, padx=(0, 12))
+
+        lbl_lpr_info = Label(info_bar, text="",
+                             bg=CARD, fg="#50dc64", font=F_MONO)
+        lbl_lpr_info.pack(side=LEFT, expand=True, anchor=W)
 
         lbl_status = Label(info_bar, text="Đang khởi động...",
                            bg=CARD, fg=DIM, font=F_MAIN)
         lbl_status.pack(side=RIGHT)
 
-        # ── Video canvas ──────────────────────────────────────────────────
+        # ── Video canvas ── pack sau tất cả các bar để controls luôn hiển thị
         vid_label = Label(win, bg="#0d0d1a",
                           text="Đang khởi tạo...", fg=DIM,
                           font=("Segoe UI", 14))
-        vid_label.pack(fill=BOTH, expand=True)
 
         def _on_zoom(_e=None):
             if _last_pil[0] is not None:
@@ -4073,6 +5281,59 @@ class YoloTab(Frame):
 
         win.bind("<space>", lambda _: _toggle_pause())
 
+        # ── Seek bar (chỉ file video, không phải webcam/RTSP) ────────────
+        _total_frames   = [0]
+        _seek_requested = [None]   # frame index cần seek, None = không seek
+        _seeking        = [False]  # đang kéo slider (tạm dừng cập nhật tự động)
+
+        is_file_source = isinstance(source, str) and os.path.isfile(source)
+        if is_file_source:
+            seek_bar = Frame(win, bg=CARD, padx=8, pady=4)
+            seek_bar.pack(fill=X)
+
+            v_seek_pos  = IntVar(value=0)
+            lbl_pos     = Label(seek_bar, text="00:00 / 00:00",
+                                bg=CARD, fg=DIM, font=F_MONO)
+            lbl_pos.pack(side=LEFT, padx=(0, 8))
+
+            seek_slider = ttk.Scale(seek_bar, from_=0, to=1000,
+                                    orient="horizontal", variable=v_seek_pos)
+            seek_slider.pack(side=LEFT, fill=X, expand=True)
+
+            def _fmt_time(frames, fps):
+                if fps <= 0:
+                    return "—"
+                secs = int(frames / fps)
+                return f"{secs // 60:02d}:{secs % 60:02d}"
+
+            def _on_seek_press(_e):
+                _seeking[0] = True
+
+            def _on_seek_release(_e):
+                if _total_frames[0] > 0:
+                    frac = v_seek_pos.get() / 1000.0
+                    _seek_requested[0] = int(frac * _total_frames[0])
+                _seeking[0] = False
+
+            seek_slider.bind("<ButtonPress-1>",   _on_seek_press)
+            seek_slider.bind("<ButtonRelease-1>", _on_seek_release)
+
+            def _update_seek(cur_frame):
+                if _seeking[0] or _total_frames[0] <= 0:
+                    return
+                try:
+                    v_seek_pos.set(int(cur_frame / _total_frames[0] * 1000))
+                    fps_n = cap_fps_ref[0]
+                    lbl_pos.config(
+                        text=f"{_fmt_time(cur_frame, fps_n)} / "
+                             f"{_fmt_time(_total_frames[0], fps_n)}")
+                except Exception:
+                    pass
+        else:
+            _update_seek   = None
+            _seek_requested = [None]
+        cap_fps_ref = [25.0]   # actualFPS из cap, обновляется в worker
+
         def _toggle_pause():
             _paused[0] = not _paused[0]
             btn_pause.config(
@@ -4081,13 +5342,160 @@ class YoloTab(Frame):
             lbl_status.config(
                 text="Tạm dừng" if _paused[0] else "Đang chạy...")
 
+        # vid_names cần trước save_bar (dùng để build class checkboxes)
+        vid_names = {}
+        try:
+            if self.model:
+                vid_names = dict(self.model.names)
+        except Exception:
+            pass
+
+        # ── Save-frame panel ─────────────────────────────────────────────
+        save_bar = Frame(win, bg="#16162a", padx=8, pady=5)
+        save_bar.pack(fill=X)
+
+        v_save_enable  = BooleanVar(value=False)
+        v_save_no_det  = BooleanVar(value=True)   # lưu khi không detect được gì
+        v_save_classes = {}                        # {class_name: BooleanVar} — lưu khi class xuất hiện
+        v_save_interval = IntVar(value=500)        # ms giữa 2 lần lưu
+        v_save_folder  = StringVar(
+            value=_get_history("h.yolo.vid_save_folder")[0]
+            if _get_history("h.yolo.vid_save_folder") else "")
+        lbl_save_count = [None]                    # ref label đếm số frame đã lưu
+        _save_frame_count = [0]
+        _last_save_ms = [0]                        # time.monotonic() * 1000
+
+        # Row 1: enable + folder
+        sv_r1 = Frame(save_bar, bg="#16162a")
+        sv_r1.pack(fill=X, pady=(0, 3))
+        Checkbutton(sv_r1, text="💾 Lưu frame", variable=v_save_enable,
+                    bg="#16162a", fg=TEXT, selectcolor="#16162a",
+                    activebackground="#16162a", font=F_BOLD,
+                    cursor="hand2").pack(side=LEFT, padx=(0, 8))
+        Label(sv_r1, text="Thư mục:", bg="#16162a", fg=DIM,
+              font=F_MAIN).pack(side=LEFT)
+        sv_combo_folder = ttk.Combobox(sv_r1, textvariable=v_save_folder,
+                                        font=F_MAIN, width=30)
+        sv_combo_folder["values"] = _get_history("h.yolo.vid_save_folder")
+        sv_combo_folder.pack(side=LEFT, padx=(4, 4))
+        _bind_history("h.yolo.vid_save_folder", sv_combo_folder)
+
+        def _pick_save_folder():
+            p = filedialog.askdirectory(title="Chọn thư mục lưu frame", parent=win)
+            if p:
+                v_save_folder.set(p)
+                _push_history("h.yolo.vid_save_folder", p)
+                sv_combo_folder["values"] = _get_history("h.yolo.vid_save_folder")
+        Button(sv_r1, text="Duyệt…", command=_pick_save_folder,
+               bg=ACCENT2, fg="white", font=F_MAIN, relief="flat",
+               padx=6, cursor="hand2").pack(side=LEFT)
+        lbl_save_count[0] = Label(sv_r1, text="Đã lưu: 0",
+                                   bg="#16162a", fg=DIM, font=F_MONO)
+        lbl_save_count[0].pack(side=LEFT, padx=(12, 0))
+        Button(sv_r1, text="📂", command=lambda: (
+                   os.startfile(v_save_folder.get())
+                   if v_save_folder.get() and os.path.isdir(v_save_folder.get())
+                   else None),
+               bg="#16162a", fg=DIM, font=F_MAIN, relief="flat",
+               cursor="hand2").pack(side=LEFT, padx=(4, 0))
+
+        # Duration: lưu tối đa N giây sau mỗi lần trigger (0 = không giới hạn)
+        v_save_duration = IntVar(value=0)
+
+        # Row 2: điều kiện — checkbox theo từng label + cài đặt
+        sv_r2 = Frame(save_bar, bg="#16162a")
+        sv_r2.pack(fill=X, pady=(2, 0))
+        Label(sv_r2, text="Lưu khi:", bg="#16162a", fg=DIM,
+              font=F_MAIN).pack(side=LEFT, padx=(0, 6))
+
+        # Label đặc biệt: "Không có label" (không detect được gì)
+        _KEY_EMPTY = "__empty__"
+        v_save_no_det = BooleanVar(value=True)   # giữ lại var cho logic cũ
+        v_save_classes[_KEY_EMPTY] = v_save_no_det
+        Checkbutton(sv_r2, text="Không có label",
+                    variable=v_save_no_det,
+                    bg="#16162a", fg="#9090c0", selectcolor="#16162a",
+                    activebackground="#16162a",
+                    font=("Segoe UI", 8), cursor="hand2").pack(
+            side=LEFT, padx=(0, 4))
+
+        # Checkbox từng class trong model
+        for _cid, _cname in sorted(vid_names.items(), key=lambda x: x[1]):
+            _v = BooleanVar(value=False)
+            v_save_classes[_cname] = _v
+            Checkbutton(sv_r2, text=_cname, variable=_v,
+                        bg="#16162a", fg=TEXT, selectcolor="#16162a",
+                        activebackground="#16162a",
+                        font=("Segoe UI", 8), cursor="hand2").pack(
+                side=LEFT, padx=(0, 4))
+
+        Frame(sv_r2, bg=DIM, width=1).pack(side=LEFT, fill=Y, padx=(8, 8))
+        Label(sv_r2, text="Tần suất:", bg="#16162a", fg=DIM,
+              font=F_MAIN).pack(side=LEFT)
+        Spinbox(sv_r2, from_=100, to=10000, increment=100,
+                textvariable=v_save_interval, width=5,
+                bg="#0d0d1a", fg=TEXT, insertbackground=TEXT,
+                buttonbackground=ACCENT2, relief="flat",
+                font=F_MONO).pack(side=LEFT, padx=(4, 2))
+        Label(sv_r2, text="ms", bg="#16162a", fg=DIM,
+              font=F_MAIN).pack(side=LEFT)
+        Frame(sv_r2, bg=DIM, width=1).pack(side=LEFT, fill=Y, padx=(8, 8))
+        Label(sv_r2, text="Lưu trong:", bg="#16162a", fg=DIM,
+              font=F_MAIN).pack(side=LEFT)
+        Spinbox(sv_r2, from_=0, to=3600, increment=1,
+                textvariable=v_save_duration, width=4,
+                bg="#0d0d1a", fg=TEXT, insertbackground=TEXT,
+                buttonbackground=ACCENT2, relief="flat",
+                font=F_MONO).pack(side=LEFT, padx=(4, 2))
+        Label(sv_r2, text="giây (0=∞)", bg="#16162a", fg=DIM,
+              font=F_MAIN).pack(side=LEFT)
+
+        # Video area — pack sau tất cả bars để chúng luôn hiện ở trên
+        vid_label.pack(fill=BOTH, expand=True)
+
         # Capture params trên main thread
-        sel_cls = self._get_sel_classes()
-        lw      = max(1, self.v_line_width.get())
-        fs      = max(6, self.v_font_size.get())
+        sel_cls    = self._get_sel_classes()
+        lw         = max(1, self.v_line_width.get())
+        fs         = max(6, self.v_font_size.get())
+        model2_vid = self.model2          # snapshot tại thời điểm mở cửa sổ video
+        check_lpr  = self.v_check_lpr.get() and _REQ_OK and _PIL_OK
+        lpr_urls   = ([v.get().strip() for v in self._lpr_url_vars
+                       if v.get().strip()] if check_lpr else [])
+        lpr_timeout  = self._lpr_timeout_var.get() if check_lpr else 10
+        lpr_fullimg  = [v.get() for v in self._lpr_fullimg_vars] if check_lpr else []
+        lpr_font_sz  = max(12, self._lpr_font_size_var.get()) if check_lpr else 16
+        do_lpr       = bool(check_lpr and lpr_urls)
+        _LPR_EVERY    = 3          # gọi LPR mỗi N frame (tránh làm giảm FPS)
+        lpr_skip_ctr  = [0]        # đếm frame skip LPR
+        lpr_last_text = [""]       # kết quả LPR cuối để hiển thị info bar
+        _lpr_vid_cache = [None]    # [(x1,y1,x2,y2,plates_tsv)...] từ lần gọi LPR mới nhất
+
+        # Snapshot dict — worker đọc từ đây (thread-safe, không gọi Tkinter từ thread phụ)
+        _snap = {
+            "save_enable":   False,
+            "save_interval": 500,
+            "save_duration": 0,    # giây, 0 = không giới hạn
+            "save_folder":   "",
+            "save_classes":  {},   # {class_name: bool} — kể cả "__empty__"
+        }
+        _save_start_ms = [0.0]     # thời điểm bắt đầu lưu (monotonic ms), 0 = chưa bắt đầu
+
+        def _refresh_snap():
+            """Cập nhật snapshot từ Tkinter vars — chỉ gọi từ main thread."""
+            if not _running[0]:
+                return
+            _snap["save_enable"]   = v_save_enable.get()
+            _snap["save_interval"] = max(100, v_save_interval.get())
+            _snap["save_duration"] = max(0, v_save_duration.get())
+            _snap["save_folder"]   = v_save_folder.get().strip()
+            _snap["save_classes"]  = {k: v.get() for k, v in v_save_classes.items()}
+            win.after(200, _refresh_snap)   # refresh 5 lần/s — đủ nhanh
+
+        win.after(100, _refresh_snap)  # bắt đầu refresh sau khi UI ổn định
 
         # ── Worker thread: read + detect ─────────────────────────────────
         def _worker():
+          try:
             cap = cv2.VideoCapture(source)
             if not cap.isOpened():
                 self.root.after(0, lambda: messagebox.showerror(
@@ -4099,6 +5507,11 @@ class YoloTab(Frame):
             fps_native = cap.get(cv2.CAP_PROP_FPS)
             if fps_native <= 0:
                 fps_native = 25.0
+            cap_fps_ref[0] = fps_native
+
+            total_f = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if total_f > 0:
+                _total_frames[0] = total_f
 
             # Show native fps in info bar
             self.root.after(0, lambda f=fps_native:
@@ -4110,10 +5523,18 @@ class YoloTab(Frame):
 
             self.root.after(0, lambda: lbl_status.config(text="Đang chạy..."))
 
+            cur_frame_idx = [0]
+
             while _running[0]:
                 if _paused[0]:
                     time.sleep(0.05)
                     continue
+
+                # Seek nếu user kéo slider
+                if _seek_requested[0] is not None:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, _seek_requested[0])
+                    cur_frame_idx[0] = _seek_requested[0]
+                    _seek_requested[0] = None
 
                 t_frame_start = time.time()
 
@@ -4121,12 +5542,19 @@ class YoloTab(Frame):
                 if not ret:
                     if loop_video and isinstance(source, str):
                         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        cur_frame_idx[0] = 0
                         continue
                     self.root.after(0, lambda: lbl_status.config(
                         text="Video kết thúc"))
                     break
 
+                cur_frame_idx[0] += 1
+                if _update_seek is not None:
+                    self.root.after(0, lambda f=cur_frame_idx[0]:
+                                    _update_seek(f))
+
                 # Detect
+                boxes = None   # reset mỗi frame để điều kiện lưu không dùng kết quả cũ
                 try:
                     results = self.model.predict(
                         source=frame,
@@ -4137,19 +5565,111 @@ class YoloTab(Frame):
                         agnostic_nms=True,
                         verbose=False,
                     )
-                    annotated_bgr = results[0].plot(
-                        line_width=lw, font_size=fs)
-                    boxes  = results[0].boxes
-                    n_det  = len(boxes) if boxes is not None else 0
-                    if n_det > 0 and self.model and hasattr(self.model, "names"):
-                        cnts = {}
-                        for cid in boxes.cls.tolist():
-                            nm = self.model.names[int(cid)]
-                            cnts[nm] = cnts.get(nm, 0) + 1
-                        det_summary = "  ".join(
-                            f"{nm}:{c}" for nm, c in cnts.items())
+                    boxes = results[0].boxes
+                    n_det = len(boxes) if boxes is not None else 0
+
+                    if model2_vid is not None:
+                        # Dual model — vẽ thủ công 2 màu cố định
+                        try:
+                            results2 = model2_vid.predict(
+                                source=frame,
+                                classes=sel_cls,
+                                conf=conf_val,
+                                iou=iou_val,
+                                imgsz=640,
+                                agnostic_nms=True,
+                                verbose=False,
+                            )
+                            boxes2 = results2[0].boxes
+                            n_det2 = len(boxes2) if boxes2 is not None else 0
+                        except Exception:
+                            boxes2 = None
+                            n_det2 = 0
+
+                        from PIL import ImageFont as _IFont
+                        _orig_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        _pil_vid  = Image.fromarray(_orig_rgb)
+                        _draw_vid = ImageDraw.Draw(_pil_vid)
+                        try:
+                            _ifont = _IFont.truetype("arial.ttf", fs)
+                        except Exception:
+                            try:
+                                _ifont = _IFont.load_default(size=fs)
+                            except Exception:
+                                _ifont = _IFont.load_default()
+
+                        _C1 = (0, 200, 255)    # cyan  — Model 1
+                        _C2 = (240, 89, 34)    # cam KZTEK — Model 2
+
+                        _names1 = getattr(self.model, "names", {}) or {}
+                        if boxes is not None and len(boxes):
+                            for _b in boxes:
+                                _x1, _y1, _x2, _y2 = (int(v) for v in _b.xyxy[0])
+                                _cid  = int(_b.cls[0])
+                                _cf   = float(_b.conf[0])
+                                _lbl  = f"M1:{_names1.get(_cid, str(_cid))} {_cf:.2f}"
+                                _draw_vid.rectangle([_x1, _y1, _x2, _y2],
+                                                    outline=_C1, width=lw)
+                                try:
+                                    _tb = _draw_vid.textbbox((0, 0), _lbl, font=_ifont)
+                                    _tw, _th = _tb[2]-_tb[0], _tb[3]-_tb[1]
+                                    _ty = max(_y1-_th-4, 0)
+                                    _draw_vid.rectangle([_x1, _ty, _x1+_tw+6, _ty+_th+4],
+                                                        fill=_C1)
+                                    _draw_vid.text((_x1+3, _ty+2), _lbl,
+                                                   fill=_contrast_text(_C1), font=_ifont)
+                                except Exception:
+                                    _draw_vid.text((_x1, max(_y1-fs-2, 0)),
+                                                   _lbl, fill=_C1, font=_ifont)
+
+                        _names2 = getattr(model2_vid, "names", {}) or {}
+                        if boxes2 is not None and len(boxes2):
+                            for _b in boxes2:
+                                _x1, _y1, _x2, _y2 = (int(v) for v in _b.xyxy[0])
+                                _cid  = int(_b.cls[0])
+                                _cf   = float(_b.conf[0])
+                                _lbl  = f"M2:{_names2.get(_cid, str(_cid))} {_cf:.2f}"
+                                _draw_vid.rectangle([_x1, _y1, _x2, _y2],
+                                                    outline=_C2, width=lw)
+                                try:
+                                    _tb = _draw_vid.textbbox((0, 0), _lbl, font=_ifont)
+                                    _tw, _th = _tb[2]-_tb[0], _tb[3]-_tb[1]
+                                    _ty = max(_y1-_th-4, 0)
+                                    _draw_vid.rectangle([_x1, _ty, _x1+_tw+6, _ty+_th+4],
+                                                        fill=_C2)
+                                    _draw_vid.text((_x1+3, _ty+2), _lbl,
+                                                   fill=_contrast_text(_C2), font=_ifont)
+                                except Exception:
+                                    _draw_vid.text((_x1, max(_y1-fs-2, 0)),
+                                                   _lbl, fill=_C2, font=_ifont)
+
+                        annotated_bgr = cv2.cvtColor(np.array(_pil_vid),
+                                                     cv2.COLOR_RGB2BGR)
+                        _cnts: dict = {}
+                        if boxes is not None:
+                            for _cid in boxes.cls.tolist():
+                                _k = f"M1:{_names1.get(int(_cid), str(int(_cid)))}"
+                                _cnts[_k] = _cnts.get(_k, 0) + 1
+                        if boxes2 is not None:
+                            for _cid in boxes2.cls.tolist():
+                                _k = f"M2:{_names2.get(int(_cid), str(int(_cid)))}"
+                                _cnts[_k] = _cnts.get(_k, 0) + 1
+                        n_det      = n_det + n_det2
+                        det_summary = "  ".join(f"{k}:{v}" for k, v in _cnts.items())
+
                     else:
-                        det_summary = ""
+                        # Single model — dùng results[0].plot() như cũ
+                        annotated_bgr = results[0].plot(line_width=lw, font_size=fs)
+                        if n_det > 0 and self.model and hasattr(self.model, "names"):
+                            _cnts = {}
+                            for _cid in boxes.cls.tolist():
+                                _nm = self.model.names[int(_cid)]
+                                _cnts[_nm] = _cnts.get(_nm, 0) + 1
+                            det_summary = "  ".join(
+                                f"{k}:{v}" for k, v in _cnts.items())
+                        else:
+                            det_summary = ""
+
                 except Exception:
                     annotated_bgr = frame
                     n_det         = 0
@@ -4167,11 +5687,105 @@ class YoloTab(Frame):
                 rgb       = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
                 pil_frame = Image.fromarray(rgb)
 
+                # ── LPR (mỗi _LPR_EVERY frame, chỉ khi có detect) ──────────
+                if do_lpr and n_det > 0 and boxes is not None:
+                    lpr_skip_ctr[0] = (lpr_skip_ctr[0] + 1) % _LPR_EVERY
+                    if lpr_skip_ctr[0] == 0:
+                        # Gọi LPR thật + cập nhật cache
+                        try:
+                            bwc = [(int(x1), int(y1), int(x2), int(y2), int(cid))
+                                   for (x1, y1, x2, y2), cid in zip(
+                                       boxes.xyxy.tolist(), boxes.cls.tolist())]
+                            pil_orig_lpr = Image.fromarray(
+                                cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                            pil_frame = self._lpr_overlay_boxes_vid(
+                                pil_frame, pil_orig_lpr, bwc, lpr_urls,
+                                lpr_timeout, vid_names, lpr_fullimg, lpr_font_sz)
+                            _lpr_vid_cache[0] = list(self._last_lpr_plates_result)
+                            plates = [p for _, _, _, _, tsv in (_lpr_vid_cache[0] or [])
+                                      for p in tsv.split("\t") if p]
+                            lpr_last_text[0] = ("🔤 " + " | ".join(plates)
+                                                 if plates else "")
+                        except Exception:
+                            pass
+                    elif _lpr_vid_cache[0]:
+                        # Frame skip: vẽ lại từ cache để không bị nháy
+                        try:
+                            from PIL import ImageDraw as _LDraw, ImageFont as _LFont
+                            _draw = _LDraw.Draw(pil_frame)
+                            _iw, _ih = pil_frame.size
+                            try:
+                                _font = _LFont.truetype("arial.ttf", lpr_font_sz)
+                            except Exception:
+                                try:
+                                    _font = _LFont.load_default(size=lpr_font_sz)
+                                except Exception:
+                                    _font = _LFont.load_default()
+                            for (cx1, cy1, cx2, cy2, _tsv) in _lpr_vid_cache[0]:
+                                if _tsv:
+                                    self._lpr_draw_lines(_draw, _font,
+                                                         cx1, cy1, cx2, cy2,
+                                                         _tsv, _iw, _ih, lpr_font_sz)
+                        except Exception:
+                            pass
+                elif do_lpr and n_det == 0:
+                    _lpr_vid_cache[0] = None
+                    lpr_last_text[0] = ""
+
                 # Push (drop if full — don't block worker)
                 try:
-                    frame_q.put_nowait((pil_frame, n_det, fps_disp, det_summary))
+                    frame_q.put_nowait((pil_frame, n_det, fps_disp,
+                                        det_summary, lpr_last_text[0]))
                 except _q.Full:
                     pass
+
+                # ── Lưu frame theo điều kiện (dùng _snap, không đọc Tkinter) ──
+                if _snap["save_enable"]:
+                    now_ms    = time.monotonic() * 1000
+                    interval  = _snap["save_interval"]
+                    duration  = _snap["save_duration"]  # giây, 0 = không giới hạn
+                    save_dir  = _snap["save_folder"]
+                    # Kiểm tra duration: nếu đã lưu quá N giây kể từ lần trigger đầu → dừng
+                    if (duration > 0 and _save_start_ms[0] > 0
+                            and now_ms - _save_start_ms[0] > duration * 1000):
+                        pass   # hết duration, không lưu
+                    elif now_ms - _last_save_ms[0] >= interval and save_dir:
+                        should_save = False
+                        cls_map = _snap["save_classes"]
+                        # "__empty__" = lưu khi không detect được gì
+                        if n_det == 0 and cls_map.get("__empty__", False):
+                            should_save = True
+                        if not should_save and n_det > 0 and boxes is not None:
+                            detected_cls = set()
+                            for cid in boxes.cls.tolist():
+                                nm = vid_names.get(int(cid), "")
+                                if nm:
+                                    detected_cls.add(nm)
+                            for cname, enabled in cls_map.items():
+                                if cname != "__empty__" and enabled and cname in detected_cls:
+                                    should_save = True
+                                    break
+                        if should_save:
+                            if _save_start_ms[0] == 0:
+                                _save_start_ms[0] = now_ms  # ghi nhận lần trigger đầu
+                            try:
+                                import datetime as _dt
+                                os.makedirs(save_dir, exist_ok=True)
+                                ts = _dt.datetime.now().strftime(
+                                    "%Y%m%d_%H%M%S_%f")[:21]
+                                cv2.imwrite(
+                                    os.path.join(save_dir, f"frame_{ts}.jpg"),
+                                    frame)
+                                _save_frame_count[0] += 1
+                                cnt = _save_frame_count[0]
+                                self.root.after(0, lambda c=cnt:
+                                    lbl_save_count[0].config(
+                                        text=f"Đã lưu: {c}", fg="#50dc64"))
+                            except Exception:
+                                pass
+                            _last_save_ms[0] = now_ms
+                        else:
+                            _save_start_ms[0] = 0  # reset khi điều kiện không còn đúng
 
                 # ── Speed throttle ────────────────────────────────────────
                 speed_mul = _SPEED_MAP.get(v_speed.get(), 1.0)
@@ -4185,17 +5799,32 @@ class YoloTab(Frame):
                 # speed_mul == 0 → "Max": no sleep, run as fast as YOLO allows
 
             cap.release()
+          except Exception as _worker_ex:
+            import traceback as _tb
+            _msg = _tb.format_exc()
+            self.root.after(0, lambda m=_msg: messagebox.showerror(
+                "Lỗi worker video", m[:1000], parent=win))
+            _running[0] = False
 
         # ── Main-thread polling ──────────────────────────────────────────
         def _poll():
             try:
-                pil_frame, n_det, fps_val, det_summary = frame_q.get_nowait()
+                item = frame_q.get_nowait()
+                pil_frame = item[0]
+                n_det      = item[1]
+                fps_val    = item[2]
+                det_summary = item[3]
+                lpr_text   = item[4] if len(item) > 4 else ""
                 _last_pil[0] = pil_frame
 
                 cw = max(vid_label.winfo_width(),  640)
                 ch = max(vid_label.winfo_height(), 360)
-                display = pil_frame.copy()
-                display.thumbnail((cw, ch), Image.Resampling.LANCZOS)
+                img_w, img_h = pil_frame.size
+                scale = min(cw / img_w, ch / img_h)
+                new_w = max(1, int(img_w * scale))
+                new_h = max(1, int(img_h * scale))
+                display = pil_frame.resize(
+                    (new_w, new_h), Image.Resampling.BILINEAR)
 
                 tk_img = ImageTk.PhotoImage(display)
                 vid_label.config(image=tk_img, text="")
@@ -4206,6 +5835,10 @@ class YoloTab(Frame):
                     text=f"Đối tượng: {n_det}",
                     fg=SUCCESS if n_det > 0 else DIM)
                 lbl_det_info.config(text=det_summary)
+                if do_lpr:
+                    lbl_lpr_info.config(
+                        text=lpr_text,
+                        fg="#50dc64" if lpr_text else DIM)
             except _q.Empty:
                 pass
             except Exception:

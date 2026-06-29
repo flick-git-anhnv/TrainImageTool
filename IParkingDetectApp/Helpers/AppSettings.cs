@@ -26,6 +26,8 @@ public sealed class AppSettings
     public int     Parallelism    { get; set; } = 4;     // số ảnh detect song song
     public int     ApiPort        { get; set; } = 5000;  // cổng HTTP API host
     public bool    ApiAutoStart   { get; set; } = false; // tự khởi động API khi mở app
+    public string  Device         { get; set; } = "CPU";  // CPU | AUTO | GPU
+    public bool    SaveLabel      { get; set; } = false; // tự lưu file .txt khi detect
     public int     FilmCols       { get; set; } = 8;
     public int     SplitLeft      { get; set; } = 260;
     public int     SplitRight     { get; set; } = 220;

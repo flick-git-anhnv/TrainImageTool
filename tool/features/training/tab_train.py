@@ -107,9 +107,21 @@ class TrainTab(Frame):
         self._mixup_var         = StringVar(value="0.15")
         self._copy_paste_var    = StringVar(value="0.1")
         self._degrees_var       = StringVar(value="10.0")
-        self._cls_var           = StringVar(value="1.5")
+        self._cls_var           = StringVar(value="4.0")
+        self._box_var           = StringVar(value="7.5")
+        self._dfl_var           = StringVar(value="2.5")
+        self._iou_var           = StringVar(value="0.5")
         self._momentum_var      = StringVar(value="0.937")
         self._warmup_var        = StringVar(value="3")
+        # ── Augmentation nâng cao 2 ───────────────────────────────────────
+        self._erasing_var       = StringVar(value="0.4")
+        self._perspective_var   = StringVar(value="0.0")
+        self._fliplr_var        = StringVar(value="0.5")
+        self._hsv_h_var         = StringVar(value="0.015")
+        self._hsv_s_var         = StringVar(value="0.7")
+        self._hsv_v_var         = StringVar(value="0.4")
+        self._dropout_var       = StringVar(value="0.0")
+        self._save_period_var   = StringVar(value="-1")
         # ── 2-Stage training ─────────────────────────────────────────────
         self._two_stage_var     = BooleanVar(value=False)
         self._freeze_epochs_var = StringVar(value="30")
@@ -121,8 +133,19 @@ class TrainTab(Frame):
         _bind_cfg("train.copy_paste",   self._copy_paste_var)
         _bind_cfg("train.degrees",      self._degrees_var)
         _bind_cfg("train.cls",          self._cls_var)
+        _bind_cfg("train.box",          self._box_var)
+        _bind_cfg("train.dfl",          self._dfl_var)
+        _bind_cfg("train.iou",          self._iou_var)
         _bind_cfg("train.momentum",     self._momentum_var)
         _bind_cfg("train.warmup",       self._warmup_var)
+        _bind_cfg("train.erasing",      self._erasing_var)
+        _bind_cfg("train.perspective",  self._perspective_var)
+        _bind_cfg("train.fliplr",       self._fliplr_var)
+        _bind_cfg("train.hsv_h",        self._hsv_h_var)
+        _bind_cfg("train.hsv_s",        self._hsv_s_var)
+        _bind_cfg("train.hsv_v",        self._hsv_v_var)
+        _bind_cfg("train.dropout",      self._dropout_var)
+        _bind_cfg("train.save_period",  self._save_period_var)
         _bind_cfg("train.two_stage",    self._two_stage_var)
         _bind_cfg("train.freeze_ep",    self._freeze_epochs_var)
         _bind_cfg("train.freeze_lay",   self._freeze_layers_var)
@@ -313,6 +336,7 @@ class TrainTab(Frame):
             ("Close Mosaic:",self._close_mosaic_var,  4),
             ("Workers:",     self._workers_var,       4),
             ("Weight Decay:",self._weight_decay_var,  9),
+            ("IoU:",         self._iou_var,           5),
         ]:
             lbl_w = Label(adv1, text=_lbl, bg=CARD, fg=DIM, font=F_MAIN)
             lbl_w.pack(side=LEFT)
@@ -351,7 +375,9 @@ class TrainTab(Frame):
             ("Mixup:",        self._mixup_var,         5, "0–0.5"),
             ("Copy-Paste:",   self._copy_paste_var,    5, "0–0.5"),
             ("Degrees:",      self._degrees_var,       5, "°rot"),
-            ("CLS weight:",   self._cls_var,           4, "loss"),
+            ("CLS weight:",   self._cls_var,           5, "loss"),
+            ("Box loss:",     self._box_var,           5, "bbox"),
+            ("DFL loss:",     self._dfl_var,           5, "dist"),
             ("Momentum:",     self._momentum_var,      6, "SGD"),
             ("Warmup ep:",    self._warmup_var,        3, "ep"),
         ]:
@@ -362,9 +388,31 @@ class TrainTab(Frame):
             Label(adv3, text=_tip, bg=CARD, fg="#606080",
                   font=("Segoe UI", 7, "italic")).pack(side=LEFT, padx=(0, 8))
 
+        # ── Augmentation nâng cao 2 ──────────────────────────────────────
+        Label(pf, text="Aug nâng cao:", bg=CARD, fg=DIM,
+              font=F_BOLD).grid(row=8, column=0, sticky=W, pady=(4, 2))
+        adv3b = Frame(pf, bg=CARD)
+        adv3b.grid(row=8, column=1, columnspan=9, sticky=W, pady=(4, 2))
+        for _lbl, _var, _w, _tip in [
+            ("Erasing:",     self._erasing_var,     5, "0–0.9"),
+            ("Perspective:", self._perspective_var,  6, "0–0.001"),
+            ("FlipLR:",      self._fliplr_var,       5, "0–1"),
+            ("HSV-H:",       self._hsv_h_var,        6, "hue"),
+            ("HSV-S:",       self._hsv_s_var,        5, "sat"),
+            ("HSV-V:",       self._hsv_v_var,        5, "val"),
+            ("Dropout:",     self._dropout_var,      5, "0–0.5"),
+            ("Save Period:", self._save_period_var,  4, "ep,-1=off"),
+        ]:
+            Label(adv3b, text=_lbl, bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+            Entry(adv3b, textvariable=_var, bg="#16162a", fg=TEXT,
+                  insertbackground=TEXT, relief="flat", font=F_MAIN, bd=4,
+                  width=_w).pack(side=LEFT, padx=(2, 2))
+            Label(adv3b, text=_tip, bg=CARD, fg="#606080",
+                  font=("Segoe UI", 7, "italic")).pack(side=LEFT, padx=(0, 8))
+
         # ── 2-Stage Training ──────────────────────────────────────────────
         adv4 = Frame(pf, bg=CARD)
-        adv4.grid(row=8, column=0, columnspan=10, sticky=W, pady=(6, 0))
+        adv4.grid(row=9, column=0, columnspan=10, sticky=W, pady=(6, 0))
         Checkbutton(adv4, text="2-Stage Training  (Freeze Backbone → Full Fine-tune)",
                     variable=self._two_stage_var,
                     bg=CARD, fg=ACCENT, activebackground=CARD, activeforeground=ACCENT,
@@ -372,7 +420,7 @@ class TrainTab(Frame):
                     command=self._on_two_stage_toggle).pack(side=LEFT)
 
         self._ts_frame = Frame(pf, bg=CARD)
-        self._ts_frame.grid(row=9, column=0, columnspan=10, sticky=W, pady=(2, 6))
+        self._ts_frame.grid(row=10, column=0, columnspan=10, sticky=W, pady=(2, 6))
         Label(self._ts_frame, text="  Stage1 epochs:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
         self._ts_ep_e = Entry(self._ts_frame, textvariable=self._freeze_epochs_var,
                                bg="#16162a", fg=TEXT, insertbackground=TEXT,
@@ -894,7 +942,7 @@ class TrainTab(Frame):
 
             import subprocess as _sp
             proc = _sp.Popen([sys.executable, str(tmp)],
-                             stdout=_sp.PIPE, stderr=_sp.STDOUT, bufsize=1)
+                             stdout=_sp.PIPE, stderr=_sp.STDOUT)
 
             def _stream():
                 for raw in iter(proc.stdout.readline, b""):
@@ -1874,6 +1922,10 @@ class TrainTab(Frame):
             weight_decay = float(self._weight_decay_var.get())
         except ValueError:
             weight_decay = 0.0005
+        try:
+            iou = float(self._iou_var.get())
+        except ValueError:
+            iou = 0.5
         cache_raw = self._cache_var.get().strip()
         cache_py  = "False" if cache_raw == "False" else f"'{cache_raw}'"
         cos_lr    = self._cos_lr_var.get()
@@ -1897,7 +1949,47 @@ class TrainTab(Frame):
         try:
             cls = float(self._cls_var.get())
         except ValueError:
-            cls = 1.5
+            cls = 4.0
+        try:
+            box = float(self._box_var.get())
+        except ValueError:
+            box = 7.5
+        try:
+            dfl = float(self._dfl_var.get())
+        except ValueError:
+            dfl = 2.5
+        try:
+            erasing = float(self._erasing_var.get())
+        except ValueError:
+            erasing = 0.4
+        try:
+            perspective = float(self._perspective_var.get())
+        except ValueError:
+            perspective = 0.0
+        try:
+            fliplr = float(self._fliplr_var.get())
+        except ValueError:
+            fliplr = 0.5
+        try:
+            hsv_h = float(self._hsv_h_var.get())
+        except ValueError:
+            hsv_h = 0.015
+        try:
+            hsv_s = float(self._hsv_s_var.get())
+        except ValueError:
+            hsv_s = 0.7
+        try:
+            hsv_v = float(self._hsv_v_var.get())
+        except ValueError:
+            hsv_v = 0.4
+        try:
+            dropout = float(self._dropout_var.get())
+        except ValueError:
+            dropout = 0.0
+        try:
+            save_period = int(self._save_period_var.get())
+        except ValueError:
+            save_period = -1
         try:
             momentum = float(self._momentum_var.get())
         except ValueError:
@@ -1947,6 +2039,9 @@ class TrainTab(Frame):
             f"        workers={workers},\n"
             f"        cos_lr={cos_lr},\n"
             f"        weight_decay={weight_decay},\n"
+            f"        iou={iou},\n"
+            f"        dropout={dropout},\n"
+            f"        save_period={save_period},\n"
             f"        amp={amp},\n"
             f"        label_smoothing={label_smooth},\n"
             f"        momentum={momentum},\n"
@@ -1958,6 +2053,14 @@ class TrainTab(Frame):
             f"        copy_paste={copy_paste},\n"
             f"        degrees={degrees},\n"
             f"        cls={cls},\n"
+            f"        box={box},\n"
+            f"        dfl={dfl},\n"
+            f"        erasing={erasing},\n"
+            f"        perspective={perspective},\n"
+            f"        fliplr={fliplr},\n"
+            f"        hsv_h={hsv_h},\n"
+            f"        hsv_s={hsv_s},\n"
+            f"        hsv_v={hsv_v},\n"
         )
         _ekw = ""
         _xkw = ""
@@ -2063,7 +2166,7 @@ class TrainTab(Frame):
         try:
             self._proc = subprocess.Popen(
                 [sys.executable, str(tmp_script)],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         except Exception as e:
             messagebox.showerror("Lỗi khởi động", str(e)); return
 
@@ -2149,7 +2252,7 @@ class TrainTab(Frame):
         try:
             self._proc = subprocess.Popen(
                 [sys.executable, str(tmp_script)],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         except Exception as e:
             messagebox.showerror("Lỗi khởi động", str(e)); return
 
@@ -2386,6 +2489,10 @@ class TrainTab(Frame):
             weight_decay = float(self._weight_decay_var.get())
         except ValueError:
             weight_decay = 0.0005
+        try:
+            iou = float(self._iou_var.get())
+        except ValueError:
+            iou = 0.5
         cache_raw    = self._cache_var.get().strip()
         cache_py     = "False" if cache_raw == "False" else f"'{cache_raw}'"
         cos_lr       = self._cos_lr_var.get()
@@ -2409,7 +2516,47 @@ class TrainTab(Frame):
         try:
             cls = float(self._cls_var.get())
         except ValueError:
-            cls = 1.5
+            cls = 4.0
+        try:
+            box = float(self._box_var.get())
+        except ValueError:
+            box = 7.5
+        try:
+            dfl = float(self._dfl_var.get())
+        except ValueError:
+            dfl = 2.5
+        try:
+            erasing = float(self._erasing_var.get())
+        except ValueError:
+            erasing = 0.4
+        try:
+            perspective = float(self._perspective_var.get())
+        except ValueError:
+            perspective = 0.0
+        try:
+            fliplr = float(self._fliplr_var.get())
+        except ValueError:
+            fliplr = 0.5
+        try:
+            hsv_h = float(self._hsv_h_var.get())
+        except ValueError:
+            hsv_h = 0.015
+        try:
+            hsv_s = float(self._hsv_s_var.get())
+        except ValueError:
+            hsv_s = 0.7
+        try:
+            hsv_v = float(self._hsv_v_var.get())
+        except ValueError:
+            hsv_v = 0.4
+        try:
+            dropout = float(self._dropout_var.get())
+        except ValueError:
+            dropout = 0.0
+        try:
+            save_period = int(self._save_period_var.get())
+        except ValueError:
+            save_period = -1
         try:
             momentum = float(self._momentum_var.get())
         except ValueError:
@@ -2447,12 +2594,23 @@ class TrainTab(Frame):
             f"        workers={workers},\n"
             f"        cos_lr={cos_lr},\n"
             f"        weight_decay={weight_decay},\n"
+            f"        iou={iou},\n"
+            f"        dropout={dropout},\n"
+            f"        save_period={save_period},\n"
             f"        amp={amp},\n"
             f"        label_smoothing={label_smooth},\n"
             f"        mixup={mixup},\n"
             f"        copy_paste={copy_paste},\n"
             f"        degrees={degrees},\n"
             f"        cls={cls},\n"
+            f"        box={box},\n"
+            f"        dfl={dfl},\n"
+            f"        erasing={erasing},\n"
+            f"        perspective={perspective},\n"
+            f"        fliplr={fliplr},\n"
+            f"        hsv_h={hsv_h},\n"
+            f"        hsv_s={hsv_s},\n"
+            f"        hsv_v={hsv_v},\n"
             f"        momentum={momentum},\n"
             f"        warmup_epochs={warmup},\n"
             f"    )\n"
@@ -2479,7 +2637,7 @@ class TrainTab(Frame):
         try:
             self._proc = subprocess.Popen(
                 [sys.executable, str(tmp_script)],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         except Exception as e:
             messagebox.showerror("Lỗi khởi động", str(e)); return
 

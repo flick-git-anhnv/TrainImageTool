@@ -25,6 +25,11 @@ public static class PostProcess
         int numClasses = numCh - 4;
         if (numClasses <= 0) return [];
 
+        // O(1) lookup thay vì O(N) scan mỗi anchor
+        HashSet<int>? enabledSet = enabledClasses is { Length: > 0 }
+            ? new HashSet<int>(enabledClasses)
+            : null;
+
         var candidates = new List<(int cid, float conf, float x1, float y1, float x2, float y2)>(
             capacity: 128);
 
@@ -40,7 +45,7 @@ public static class PostProcess
             }
 
             if (maxScore < confThresh) continue;
-            if (enabledClasses != null && !enabledClasses.Contains(maxClass)) continue;
+            if (enabledSet != null && !enabledSet.Contains(maxClass)) continue;
 
             float cx = data[0 * numAnchors + a];
             float cy = data[1 * numAnchors + a];
@@ -60,37 +65,42 @@ public static class PostProcess
 
         if (candidates.Count == 0) return [];
 
+        // Sort in-place, tránh tạo array tạm từ LINQ
+        candidates.Sort(static (a, b) => b.conf.CompareTo(a.conf));
+
         return ApplyNMS(candidates, iouThresh)
-            .Select(b => new DetectBox(
+            .ConvertAll(b => new DetectBox(
                 b.cid,
                 b.cid < classNames.Length ? classNames[b.cid] : $"cls{b.cid}",
-                b.conf, b.x1, b.y1, b.x2, b.y2))
-            .ToList();
+                b.conf, b.x1, b.y1, b.x2, b.y2));
     }
 
     // ── NMS ──────────────────────────────────────────────────────────────
 
-    private static IEnumerable<(int cid, float conf, float x1, float y1, float x2, float y2)>
+    private static List<(int cid, float conf, float x1, float y1, float x2, float y2)>
         ApplyNMS(List<(int cid, float conf, float x1, float y1, float x2, float y2)> boxes,
                  float iouThresh)
     {
-        // Sort by confidence descending
-        var sorted = boxes.OrderByDescending(b => b.conf).ToArray();
-        var suppressed = new bool[sorted.Length];
+        // boxes đã được sort descending bởi caller — không cần sort lại
+        var suppressed = new bool[boxes.Count];
+        var result = new List<(int cid, float conf, float x1, float y1, float x2, float y2)>(
+            capacity: boxes.Count);
 
-        for (int i = 0; i < sorted.Length; i++)
+        for (int i = 0; i < boxes.Count; i++)
         {
             if (suppressed[i]) continue;
-            yield return sorted[i];
+            result.Add(boxes[i]);
 
-            for (int j = i + 1; j < sorted.Length; j++)
+            for (int j = i + 1; j < boxes.Count; j++)
             {
                 if (suppressed[j]) continue;
                 // NMS per class
-                if (sorted[i].cid == sorted[j].cid && Iou(sorted[i], sorted[j]) > iouThresh)
+                if (boxes[i].cid == boxes[j].cid && Iou(boxes[i], boxes[j]) > iouThresh)
                     suppressed[j] = true;
             }
         }
+
+        return result;
     }
 
     private static float Iou(

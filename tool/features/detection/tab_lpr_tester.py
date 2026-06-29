@@ -182,6 +182,9 @@ class LprTesterTab(Frame):
         self.v_lpr4_line_w       = IntVar(value=2)
         _bind_cfg("lpr.sv4_line_w", self.v_lpr4_line_w)
 
+        self._sv_result_bbox     = None   # bbox từ kết quả detect đơn lẻ
+        self._folder_bbox: dict  = {}     # iid → bbox dict
+
         self._build()
 
     # ═══════════════════════════════ BUILD ════════════════════════════════
@@ -710,6 +713,8 @@ class LprTesterTab(Frame):
                 self._res["confidence"].set(f"{conf:.1%}" if conf else "-")
                 self._res["elapsed_ms"].set(f"{elapsed} ms")
                 self._res["bbox"].set(_fmt_bbox(result.get("bbox")))
+                self._sv_result_bbox = result.get("bbox")
+                self._render_bbox_overlay()
                 b64 = result.get("lpr_image_b64")
                 if b64 and _PIL_OK:
                     try:
@@ -726,8 +731,10 @@ class LprTesterTab(Frame):
     def _clear_single_result(self):
         for v in self._res.values(): v.set("-")
         self._pic_lpr.config(image="", text="(chưa nhận dạng)")
-        self._pil_lpr = None
+        self._pil_lpr  = None
         self._lpr4_pil = None
+        self._sv_result_bbox = None
+        self._pic_vehicle.delete("bbox_ov")
 
     # ═══════════════════════════ FOLDER BATCH ═════════════════════════════
 
@@ -777,6 +784,7 @@ class LprTesterTab(Frame):
             try: pil.close()
             except Exception: pass
         self._folder_lpr.clear()
+        self._folder_bbox.clear()
         self._folder_files.clear()
         self._all_tree_order.clear()
         self._tree.delete(*self._tree.get_children())
@@ -900,13 +908,15 @@ class LprTesterTab(Frame):
                 return None
 
             t0 = time.perf_counter()
-            lpr_pil = None
+            lpr_pil  = None
+            lpr_bbox = None
             if _hit:
                 plate   = _cached.get("plate", "")
                 vtype   = _cached.get("vehicle_type", "")
                 elapsed = _cached.get("ms", 0)
                 status  = ("OK" if plate else "Không nhận dạng") + " ★Cache"
-                lpr_pil = _crop_plate(fpath, _cached.get("bbox"))
+                lpr_bbox = _cached.get("bbox")
+                lpr_pil  = _crop_plate(fpath, lpr_bbox)
                 if plate: ok_n += 1
                 else:     fail_n += 1
                 total_ms += elapsed
@@ -922,8 +932,9 @@ class LprTesterTab(Frame):
                         status = "OK" if plate else "Không nhận dạng"
                         if plate: ok_n += 1
                         else:     fail_n += 1
-                        bbox = result.get("bbox")
-                        lpr_pil = _crop_plate(fpath, bbox)
+                        bbox     = result.get("bbox")
+                        lpr_bbox = bbox
+                        lpr_pil  = _crop_plate(fpath, bbox)
                         # Lưu cache khi không lỗi kết nối
                         if not err:
                             _cache[fname] = {
@@ -948,10 +959,11 @@ class LprTesterTab(Frame):
             _gt      = _cmp_plate(plate, gt_plate)
             _i, _f, _pl, _or, _vt = i + 1, fname, plate, orig, vtype
             _ms, _st, _lpi, _fp = elapsed, status, lpr_pil, fpath
+            _lbx = lpr_bbox
             _ok, _nk, _tms = ok_n, fail_n, total_ms
 
             def _ui(i=_i, f=_f, pl=_pl, orig=_or, vt=_vt,
-                    ms=_ms, st=_st, lpi=_lpi, fp=_fp,
+                    ms=_ms, st=_st, lpi=_lpi, fp=_fp, lbx=_lbx,
                     ok=_ok, nk=_nk, tms=_tms, gt=_gt):
                 # Nếu có GT: tự động áp dụng kết quả so sánh vào trạng thái
                 if gt == "✓ Đúng":
@@ -967,7 +979,8 @@ class LprTesterTab(Frame):
                 self._tree.item(iid, tags=(tag,))
                 self._folder_files[iid] = fp
                 self._all_tree_order.append((iid, fp))
-                if lpi: self._folder_lpr[iid] = lpi
+                if lpi:  self._folder_lpr[iid]  = lpi
+                if lbx:  self._folder_bbox[iid] = lbx
                 self._tree.see(iid)
                 self._pb["value"] = i
                 self._prog_lbl.config(text=f"Đang xử lý: {i}/{total}  ({int(i/total*100)}%)")
@@ -1314,7 +1327,10 @@ class LprTesterTab(Frame):
 
         if fpath and os.path.isfile(fpath) and _PIL_OK:
             try:
-                img = Image.open(fpath)
+                img  = Image.open(fpath)
+                bbox = self._folder_bbox.get(iid)
+                if bbox:
+                    img = _draw_bbox_on_pil(img, bbox)
                 self._show_img(self._pic_fv, img, 300, 180)
                 img.close(); return
             except Exception: pass
@@ -1541,9 +1557,15 @@ class LprTesterTab(Frame):
     def _zoom_fv(self):
         sel = self._tree.selection()
         if not sel or not _PIL_OK: return
-        fpath = self._folder_files.get(sel[0], "")
+        iid   = sel[0]
+        fpath = self._folder_files.get(iid, "")
         if fpath and os.path.isfile(fpath):
-            try: _zoom_image_window(self.root, Image.open(fpath), os.path.basename(fpath))
+            try:
+                img  = Image.open(fpath)
+                bbox = self._folder_bbox.get(iid)
+                if bbox:
+                    img = _draw_bbox_on_pil(img, bbox)
+                _zoom_image_window(self.root, img, os.path.basename(fpath))
             except Exception: pass
 
     def _zoom_fp(self):
@@ -1662,6 +1684,24 @@ class LprTesterTab(Frame):
         cv._tk_img = tk_img
         if self._lpr4_active and self._lpr4_pts:
             self._sv_draw_4pt()
+        if self._sv_result_bbox:
+            self._render_bbox_overlay()
+
+    def _render_bbox_overlay(self):
+        """Vẽ bbox detect đơn lên canvas ảnh xe (canvas rect, không sửa PIL)."""
+        cv = self._pic_vehicle
+        cv.delete("bbox_ov")
+        if not self._sv_result_bbox or not self._pil_single:
+            return
+        x1, y1, x2, y2 = _parse_bbox_coords(self._sv_result_bbox)
+        if x2 <= x1 or y2 <= y1:
+            return
+        cx1 = x1 * self._sv_scale + self._sv_off_x
+        cy1 = y1 * self._sv_scale + self._sv_off_y
+        cx2 = x2 * self._sv_scale + self._sv_off_x
+        cy2 = y2 * self._sv_scale + self._sv_off_y
+        cv.create_rectangle(cx1, cy1, cx2, cy2,
+                            outline=ACCENT, width=2, tags="bbox_ov")
 
     def _sv_c2i(self, cx, cy):
         if self._sv_scale == 0:
@@ -1791,10 +1831,13 @@ class LprTesterTab(Frame):
             self._sv_draw_4pt()
 
     def _on_sv_dbl(self, e):
-        target = self._lpr4_pil or self._pil_single
-        if target:
-            _zoom_image_window(self.root, target,
-                               "4-pt crop" if self._lpr4_pil else "Ảnh xe")
+        if self._lpr4_pil:
+            _zoom_image_window(self.root, self._lpr4_pil, "4-pt crop")
+        elif self._pil_single:
+            target = self._pil_single
+            if self._sv_result_bbox:
+                target = _draw_bbox_on_pil(target, self._sv_result_bbox)
+            _zoom_image_window(self.root, target, "Ảnh xe")
 
     # ── Perspective warp ───────────────────────────────────────────────────
 
@@ -1828,6 +1871,37 @@ class LprTesterTab(Frame):
 
 
 # ════════════════════════ MODULE-LEVEL API HELPERS ════════════════════════
+
+def _parse_bbox_coords(bbox) -> tuple:
+    """Trả về (x1, y1, x2, y2) từ bbox dict hoặc list/tuple."""
+    if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+        return int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+    if isinstance(bbox, dict):
+        x1 = int(bbox.get("xmin", bbox.get("Xmin", 0)))
+        y1 = int(bbox.get("ymin", bbox.get("Ymin", 0)))
+        x2 = int(bbox.get("xmax", bbox.get("Xmax", 0)))
+        y2 = int(bbox.get("ymax", bbox.get("Ymax", 0)))
+        return x1, y1, x2, y2
+    return 0, 0, 0, 0
+
+
+def _draw_bbox_on_pil(pil_img, bbox) -> "Image.Image":
+    """Vẽ bbox lên bản copy của PIL image bằng ImageDraw."""
+    if not _PIL_OK or not bbox:
+        return pil_img
+    try:
+        from PIL import ImageDraw
+        x1, y1, x2, y2 = _parse_bbox_coords(bbox)
+        if x2 <= x1 or y2 <= y1:
+            return pil_img
+        img  = pil_img.copy()
+        draw = ImageDraw.Draw(img)
+        lw   = max(2, min(img.width, img.height) // 120)
+        draw.rectangle([x1, y1, x2, y2], outline="#F05922", width=lw)
+        return img
+    except Exception:
+        return pil_img
+
 
 def _save_gt_to_file(folder: str, fname: str, plate: str):
     """Ghi/cập nhật gt.txt trong folder với format: <filename>\t<plate>"""

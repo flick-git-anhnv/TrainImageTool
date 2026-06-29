@@ -43,3 +43,10 @@ try:
 except Exception:
     _PaddleOCR = None
     _PADDLE_OK = False
+
+try:
+    from ddgs import DDGS as _DDGS
+    _DDGS_OK = True
+except ImportError:
+    _DDGS    = None
+    _DDGS_OK = False
