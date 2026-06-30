@@ -1000,6 +1000,8 @@ class BBoxEditorTab(Frame):
             self._relabel_selected()
 
     def _load_image(self, idx):
+        if idx < 0 or idx >= len(self.image_files):
+            return
         self.current_idx = idx
         fp = self.image_files[idx]
         try:

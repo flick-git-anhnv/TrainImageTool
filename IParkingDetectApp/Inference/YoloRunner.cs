@@ -149,11 +149,14 @@ public sealed class YoloRunner : IDisposable
             () => new Bitmap(canvasW, canvasH, PixelFormat.Format24bppRgb),
             trackAllValues: true);
 
-        // Đọc số class từ output shape: [1, 4+N, anchors]
+        // Đọc số class từ output shape — cùng logic robust với RunInfer
         try
         {
             var outShape = _compiled.Outputs[0].Shape;
-            NumClasses = Math.Max(1, (int)outShape[1] - 4);
+            int d1 = outShape.Rank >= 2 ? (int)outShape[outShape.Rank >= 3 ? 1 : 0] : -1;
+            int d2 = outShape.Rank >= 2 ? (int)outShape[outShape.Rank >= 3 ? 2 : 1] : -1;
+            int chDim = (d1 > 0 && d2 > 0) ? Math.Min(d1, d2) : 5;
+            NumClasses = Math.Max(1, chDim - 4);
         }
         catch { NumClasses = 1; }
 
@@ -214,8 +217,30 @@ public sealed class YoloRunner : IDisposable
 
         Span<float> outData  = req.Outputs[0].GetData<float>();
         var         outShape = req.Outputs[0].Shape;
-        int numCh      = (int)outShape[1];
-        int numAnchors = (int)outShape[2];
+
+        // Hỗ trợ 3 layout output YOLO phổ biến:
+        //   [1, numCh, numAnchors]  — chuẩn Ultralytics ONNX/OpenVINO
+        //   [numCh, numAnchors]     — rank-2, batch stripped
+        //   [1, numAnchors, numCh]  — transposed (một số export)
+        int numCh, numAnchors;
+        if (outShape.Rank >= 3)
+        {
+            int d1 = (int)outShape[1];
+            int d2 = (int)outShape[2];
+            // Heuristic: numCh = 4 + num_classes (nhỏ), numAnchors = 8400/2100/… (lớn)
+            if (d1 < d2) { numCh = d1; numAnchors = d2; }   // layout chuẩn
+            else         { numCh = d2; numAnchors = d1; }   // layout transposed
+        }
+        else if (outShape.Rank == 2)
+        {
+            int d0 = (int)outShape[0];
+            int d1 = (int)outShape[1];
+            if (d0 < d1) { numCh = d0; numAnchors = d1; }
+            else         { numCh = d1; numAnchors = d0; }
+        }
+        else return [];
+
+        if (numCh <= 4 || numAnchors <= 0) return [];
 
         return PostProcess.Decode(outData, numCh, numAnchors, conf, iou,
             origW, origH, InputW, InputH, scale, padX, padY, ClassNames, enabledClasses);

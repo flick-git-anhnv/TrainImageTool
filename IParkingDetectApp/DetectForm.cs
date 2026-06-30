@@ -42,6 +42,9 @@ public sealed partial class DetectForm : Form
     private readonly Dictionary<Guid, ListViewItem> _logItems = [];
     private readonly ConcurrentQueue<ApiLogEntry>   _logQueue = new();
 
+    // ── Filmstrip ─────────────────────────────────────────────────────────
+    private CancellationTokenSource _filmstripCts = new();
+
     // ── Constructor ───────────────────────────────────────────────────────
     public DetectForm()
     {
@@ -328,7 +331,11 @@ public sealed partial class DetectForm : Form
             if (_cfg.SaveLabel)
                 SaveLabelFile(path, boxes, _origBmp.Width, _origBmp.Height);
         }
-        catch { _cache[path] = []; }
+        catch (Exception ex)
+        {
+            _cache[path] = [];
+            SetStatus($"⚠ Detect lỗi: {ex.GetType().Name} — {ex.Message}");
+        }
 
         UpdateCacheLabel();
     }
@@ -584,6 +591,20 @@ public sealed partial class DetectForm : Form
 
     private void UpdateFilmstrip()
     {
+        // Cancel các task thumbnail cũ đang chạy nền
+        _filmstripCts.Cancel();
+        _filmstripCts.Dispose();
+        _filmstripCts = new CancellationTokenSource();
+        var cts = _filmstripCts;
+
+        // Dispose các PictureBox cũ để giải phóng GDI resource
+        foreach (Control ctrl in _filmstrip.Controls)
+        {
+            if (ctrl is Panel panel)
+                foreach (Control child in panel.Controls)
+                    child.Dispose();
+            ctrl.Dispose();
+        }
         _filmstrip.Controls.Clear();
 
         int half  = 15;
@@ -614,15 +635,19 @@ public sealed partial class DetectForm : Form
 
             Task.Run(() =>
             {
+                if (cts.IsCancellationRequested) return;
+                Bitmap? thumb = null;
                 try
                 {
                     using var bmp = new Bitmap(path);
                     var boxes = _cache.GetValueOrDefault(path, []);
-                    var thumb = BboxRenderer.MakeThumb(bmp, boxes, 80, 60);
-                    if (!pb.IsDisposed) pb.Invoke(() => { pb.Image?.Dispose(); pb.Image = thumb; });
+                    thumb = BboxRenderer.MakeThumb(bmp, boxes, 80, 60);
+                    if (!cts.IsCancellationRequested && !pb.IsDisposed && pb.IsHandleCreated)
+                        pb.Invoke(() => { if (!pb.IsDisposed) { pb.Image?.Dispose(); pb.Image = thumb; thumb = null; } });
                 }
-                catch { }
-            });
+                catch { /* control disposed hoặc task bị cancel — bỏ qua */ }
+                finally  { thumb?.Dispose(); }
+            }, cts.Token);
 
             cell.Click += (_, _) => NavigateTo(idx);
             pb.Click   += (_, _) => NavigateTo(idx);
@@ -926,6 +951,8 @@ public sealed partial class DetectForm : Form
         {
             _logTimer.Stop();
             _detectCts?.Dispose();
+            _filmstripCts.Cancel();
+            _filmstripCts.Dispose();
             _origBmp?.Dispose();
             _yolo.Dispose();
             _apiHost?.Dispose();
