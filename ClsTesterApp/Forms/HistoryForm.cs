@@ -123,7 +123,7 @@ public sealed class HistoryForm : Form
         {
             Dock = DockStyle.Fill, Orientation = Orientation.Vertical,
             SplitterWidth = 4, BackColor = Theme.Border,
-            Panel2MinSize = 220,
+            //Panel2MinSize = 220,
         };
         // Đặt sau khi form hiển thị mới có kích thước thực
         Shown += (_, _) =>

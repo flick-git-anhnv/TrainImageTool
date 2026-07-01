@@ -33,6 +33,12 @@ except ImportError:
     _YOLO_OK = False
 
 try:
+    from rfdetr import RFDETRBase as _RFDETRBase
+    _RFDETR_OK = True
+except ImportError:
+    _RFDETR_OK = False
+
+try:
     from tkinterdnd2 import DND_FILES
     _DND_OK = True
 except ImportError:
@@ -45,6 +51,165 @@ except ImportError:
     _REQ_OK = False
 
 _REVIEW_ICON = {"correct": "✓", "incorrect": "✗", "": "○"}
+
+try:
+    from .det_table import DetTablePanel as _DetTablePanel
+    _DET_TABLE_OK = True
+except Exception:
+    _DET_TABLE_OK = False
+
+
+class _OnnxDetResult:
+    """Container kết quả inference, interface giống sv.Detections."""
+    def __init__(self, xyxy, confidence, class_id):
+        import numpy as np
+        self.xyxy       = (np.array(xyxy, dtype=np.float32)
+                           if len(xyxy) else np.empty((0, 4), dtype=np.float32))
+        self.confidence = np.array(confidence, dtype=np.float32)
+        self.class_id   = np.array(class_id,   dtype=np.int32)
+
+    def __len__(self):
+        return len(self.xyxy)
+
+
+class _OnnxRunner:
+    """Chạy ONNX detection model bằng onnxruntime — tự đọc tên input từ model."""
+
+    _MEAN = [0.485, 0.456, 0.406]
+    _STD  = [0.229, 0.224, 0.225]
+
+    def __init__(self, path: str):
+        import onnxruntime as ort
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        self.session = ort.InferenceSession(path, providers=providers)
+        inp = self.session.get_inputs()[0]
+        self.input_name  = inp.name
+        shape = inp.shape
+        self.input_h = int(shape[2]) if isinstance(shape[2], int) and shape[2] > 0 else 640
+        self.input_w = int(shape[3]) if isinstance(shape[3], int) and shape[3] > 0 else 640
+        self.output_names = [o.name for o in self.session.get_outputs()]
+        self.names = {}
+        # In thông tin model ra console để debug nếu cần
+        print(f"[OnnxRunner] input : {self.input_name} {inp.shape}")
+        for o in self.session.get_outputs():
+            print(f"[OnnxRunner] output: {o.name} {o.shape}")
+
+    def predict(self, img_src, threshold: float = 0.25) -> "_OnnxDetResult":
+        import numpy as np
+        from PIL import Image, ImageOps
+        if isinstance(img_src, str):
+            pil = Image.open(img_src).convert("RGB")
+            try:
+                pil = ImageOps.exif_transpose(pil)
+            except Exception:
+                pass
+        else:
+            pil = img_src.convert("RGB")
+        orig_w, orig_h = pil.size
+        pil_r = pil.resize((self.input_w, self.input_h))
+        arr   = np.array(pil_r, dtype=np.float32) / 255.0
+        arr   = (arr - np.array(self._MEAN, dtype=np.float32)) / np.array(self._STD, dtype=np.float32)
+        arr   = arr.transpose(2, 0, 1)[np.newaxis]          # [1, 3, H, W]
+        outs  = self.session.run(self.output_names, {self.input_name: arr})
+        return self._parse(outs, orig_w, orig_h, threshold)
+
+    def _parse(self, outs, orig_w, orig_h, threshold) -> "_OnnxDetResult":
+        """Hỗ trợ các định dạng output phổ biến của DETR/YOLO ONNX.
+
+        Thứ tự thử (từ đặc thù đến tổng quát):
+          A. RF-DETR sigmoid — 2 outs: logits[1,N,C] + boxes[1,N,4] cxcywh norm
+          B. Post-processed   — 3 outs: boxes(N,4), scores(N), labels(N)
+          C. YOLO [1,N,6+]    — x1y1x2y2 conf cls (pixel hoặc norm)
+          D. Classic DETR softmax — fallback với class "no-object" cuối
+        """
+        import numpy as np
+
+        def _sigmoid(x):
+            return 1.0 / (1.0 + np.exp(-np.clip(x, -88, 88)))
+
+        def _cxcywh_to_xyxy(bx, w, h):
+            x1 = (bx[:, 0] - bx[:, 2] / 2) * w
+            y1 = (bx[:, 1] - bx[:, 3] / 2) * h
+            x2 = (bx[:, 0] + bx[:, 2] / 2) * w
+            y2 = (bx[:, 1] + bx[:, 3] / 2) * h
+            return np.clip(np.stack([x1, y1, x2, y2], axis=1), 0, None)
+
+        def _scale_xyxy(bx):
+            if bx.size and bx.max() <= 1.5:   # normalised
+                return bx * [orig_w, orig_h, orig_w, orig_h]
+            return bx
+
+        # ── A. RF-DETR sigmoid (2 outputs: pred_logits + pred_boxes) ──────
+        if len(outs) >= 2:
+            try:
+                a0 = np.array(outs[0])
+                a1 = np.array(outs[1])
+                # Xác định output nào là logits (ndim=3, C > 4) và boxes (ndim=3, C==4)
+                for la, ba in [(a0, a1), (a1, a0)]:
+                    if la.ndim == 3 and ba.ndim == 3 and ba.shape[-1] == 4:
+                        logits = la.squeeze(0)    # [N, num_classes]
+                        boxes  = ba.squeeze(0)    # [N, 4]
+                        probs  = _sigmoid(logits)
+                        scores = probs.max(axis=1)
+                        labels = probs.argmax(axis=1)
+                        mask   = scores >= threshold
+                        if mask.any():
+                            return _OnnxDetResult(
+                                _cxcywh_to_xyxy(boxes[mask], orig_w, orig_h),
+                                scores[mask], labels[mask])
+                        # Trả về rỗng (model chạy OK, chỉ không vượt ngưỡng)
+                        return _OnnxDetResult([], [], [])
+            except Exception:
+                pass
+
+        # ── B. Post-processed: [boxes(N,4), scores(N), labels(N)] ─────────
+        if len(outs) >= 3:
+            for ai, bi, ci in [(0, 1, 2), (1, 0, 2), (0, 2, 1)]:
+                try:
+                    boxes  = np.array(outs[ai]).reshape(-1, 4)
+                    scores = np.array(outs[bi]).flatten()
+                    labels = np.array(outs[ci]).flatten().astype(int)
+                    if len(boxes) == len(scores) == len(labels) > 0:
+                        mask = scores >= threshold
+                        return _OnnxDetResult(_scale_xyxy(boxes[mask]),
+                                              scores[mask], labels[mask])
+                except Exception:
+                    continue
+
+        # ── C. YOLO [1, N, 6+] — x1y1x2y2 conf cls ───────────────────────
+        if len(outs) >= 1:
+            try:
+                out = np.array(outs[0])
+                if out.ndim == 3:
+                    out = out[0]
+                if out.ndim == 2 and out.shape[1] >= 6:
+                    mask = out[:, 4] >= threshold
+                    out  = out[mask]
+                    return _OnnxDetResult(_scale_xyxy(out[:, :4]),
+                                          out[:, 4], out[:, 5].astype(int))
+            except Exception:
+                pass
+
+        # ── D. Classic DETR softmax với background class cuối (fallback) ──
+        if len(outs) >= 2:
+            try:
+                a0 = np.array(outs[0]).squeeze(0)
+                a1 = np.array(outs[1]).squeeze(0)
+                for logits, boxes in [(a0, a1), (a1, a0)]:
+                    if logits.ndim == 2 and boxes.ndim == 2 and boxes.shape[1] == 4:
+                        e = np.exp(logits - logits.max(axis=1, keepdims=True))
+                        probs  = e / e.sum(axis=1, keepdims=True)
+                        probs  = probs[:, :-1]   # bỏ no-object
+                        scores = probs.max(axis=1)
+                        labels = probs.argmax(axis=1)
+                        mask   = scores >= threshold
+                        return _OnnxDetResult(
+                            _cxcywh_to_xyxy(boxes[mask], orig_w, orig_h),
+                            scores[mask], labels[mask])
+            except Exception:
+                pass
+
+        return _OnnxDetResult([], [], [])
 
 _THUMB_PALETTE = [
     "#F05922", "#4caf50", "#2196f3", "#9c27b0", "#ff9800",
@@ -67,6 +232,13 @@ class YoloTab(Frame):
         self.current_image_path = None
         self.model = None
         self.model2 = None
+        self.model3 = None
+        self._model1_type  = "yolo"     # "yolo" | "rfdetr" | "onnx"
+        self._model1_names = {}
+        self._model2_type  = "yolo"     # "yolo" | "rfdetr" | "onnx"
+        self._model2_names = {}
+        self._model3_names = {}
+        self._model3_type  = "rfdetr"   # "rfdetr" | "yolo" | "onnx"
         self.class_ids = []
         self.image_list = []
         self._photo_ref = None
@@ -75,6 +247,7 @@ class YoloTab(Frame):
 
         self.v_model_path    = StringVar()
         self.v_model2_path   = StringVar()
+        self.v_model3_path   = StringVar()
         self.v_subfolder     = BooleanVar(value=False)
         self.v_show_original = BooleanVar(value=False)
         self.v_check_folder  = StringVar()
@@ -252,6 +425,25 @@ class YoloTab(Frame):
                                 bg=CARD, fg=DIM, width=18, anchor=W)
         self.lbl_model2.pack(side=LEFT, padx=(4, 0))
         Button(r0, text="×", command=self._clear_model2,
+               bg=CARD, fg=DIM, font=F_BOLD, relief="flat",
+               padx=4, cursor="hand2",
+               activebackground="#3a1a1a", activeforeground=ACCENT,
+               ).pack(side=LEFT, padx=(2, 0))
+
+        # Separator
+        Frame(r0, bg=DIM, width=1).pack(side=LEFT, fill=Y, padx=(8, 8))
+
+        # Model 3 (RF-DETR)
+        Button(r0, text="Model 3", command=self._select_model3,
+               bg="#4a3a6a", fg="white", font=F_BOLD, relief="flat",
+               padx=8, cursor="hand2",
+               activebackground="#6a5a8a", activeforeground="white",
+               ).pack(side=LEFT)
+        self.lbl_model3 = Label(r0, text="Chưa chọn (RF-DETR)",
+                                font=("Segoe UI", 9, "italic"),
+                                bg=CARD, fg=DIM, width=22, anchor=W)
+        self.lbl_model3.pack(side=LEFT, padx=(4, 0))
+        Button(r0, text="×", command=self._clear_model3,
                bg=CARD, fg=DIM, font=F_BOLD, relief="flat",
                padx=4, cursor="hand2",
                activebackground="#3a1a1a", activeforeground=ACCENT,
@@ -783,6 +975,19 @@ class YoloTab(Frame):
                                  bg=BG, fg=TEXT, anchor=W)
         self.lbl_result.pack(fill=X, padx=6, pady=(4, 0))
 
+        # Per-model result row (luôn pack, chỉ thay text để ẩn/hiện)
+        self._model_result_frame = Frame(right, bg=BG)
+        self._model_result_frame.pack(fill=X, padx=6, pady=(0, 0))
+        self._lbl_m1_res = Label(self._model_result_frame, text="", font=F_BOLD,
+                                  bg=BG, fg=SUCCESS, anchor=W)
+        self._lbl_m1_res.pack(side=LEFT, padx=(0, 16))
+        self._lbl_m2_res = Label(self._model_result_frame, text="", font=F_BOLD,
+                                  bg=BG, fg=SUCCESS, anchor=W)
+        self._lbl_m2_res.pack(side=LEFT, padx=(0, 16))
+        self._lbl_m3_res = Label(self._model_result_frame, text="", font=F_BOLD,
+                                  bg=BG, fg=SUCCESS, anchor=W)
+        self._lbl_m3_res.pack(side=LEFT)
+
         # Mark buttons
         mark_row = Frame(right, bg=BG)
         mark_row.pack(fill=X, padx=6, pady=(2, 0))
@@ -825,6 +1030,13 @@ class YoloTab(Frame):
         self.lbl_mark_state = Label(mark_row, text="", font=F_MONO,
                                      bg=BG, fg=DIM)
         self.lbl_mark_state.pack(side=LEFT, padx=(12, 0))
+
+        # Detection detail table — đặt ở bottom trước khi pack expand area
+        if _DET_TABLE_OK:
+            self._det_table = _DetTablePanel(right, on_select=self._on_det_row_select)
+            self._det_table.pack(fill=X, side=BOTTOM)
+        else:
+            self._det_table = None
 
         # Horizontal split: image view (left) | filmstrip grid (right)
         from tkinter import PanedWindow as _PW
@@ -972,8 +1184,11 @@ class YoloTab(Frame):
 
     def _select_model(self):
         path = filedialog.askopenfilename(
-            title="Chọn file model YOLO 1 (.pt)",
-            filetypes=[("PyTorch Model", "*.pt"), ("All files", "*.*")],
+            title="Chọn file model YOLO 1 (.pt / .onnx)",
+            filetypes=[("Model files", "*.pt *.onnx"),
+                       ("PyTorch Model", "*.pt"),
+                       ("ONNX Model", "*.onnx"),
+                       ("All files", "*.*")],
             initialdir=_cfg_dir("yolo.model_dir") or None,
             parent=self.root)
         if path:
@@ -981,30 +1196,52 @@ class YoloTab(Frame):
             self._load_model(path)
 
     def _select_model2(self):
-        if not _YOLO_OK:
+        if not _YOLO_OK and not _RFDETR_OK:
             messagebox.showerror("Thiếu thư viện",
-                                  "pip install ultralytics", parent=self.root)
+                                  "pip install ultralytics  hoặc  pip install rfdetr",
+                                  parent=self.root)
             return
         path = filedialog.askopenfilename(
-            title="Chọn file model YOLO 2 (.pt)",
-            filetypes=[("PyTorch Model", "*.pt"), ("All files", "*.*")],
+            title="Chọn file model 2 (.pt / .onnx)",
+            filetypes=[("Model files", "*.pt *.onnx"),
+                       ("PyTorch Model", "*.pt"),
+                       ("ONNX Model", "*.onnx"),
+                       ("All files", "*.*")],
             initialdir=_cfg_dir("yolo.model_dir") or None,
             parent=self.root)
         if not path:
             return
         _push_history("h.yolo.model2", path)
-        try:
-            self.model2 = YOLO(path)
-            self.v_model2_path.set(path)
-            self.lbl_model2.config(
-                text=f"  {os.path.basename(path)}", fg="#4caf50")
-            if self.current_image_path and self.model:
-                self._detect_and_display()
-        except Exception as e:
-            messagebox.showerror("Lỗi load model 2", str(e), parent=self.root)
+        self.lbl_model2.config(text=f"  ⏳ Đang load…", fg=DIM)
+        self.root.update_idletasks()
+
+        def _do_load():
+            try:
+                mdl, names, mtype = self._auto_load_pt(path)
+                self.root.after(0, lambda: self._on_model2_loaded(path, mdl, names, mtype, None))
+            except Exception as e:
+                self.root.after(0, lambda err=str(e): self._on_model2_loaded(path, None, {}, "yolo", err))
+
+        threading.Thread(target=_do_load, daemon=True).start()
+
+    def _on_model2_loaded(self, path: str, mdl, names: dict, mtype: str, err):
+        if err:
+            messagebox.showerror("Lỗi load model 2", err, parent=self.root)
+            self.lbl_model2.config(text="  ✗ Lỗi load", fg=ACCENT)
+            return
+        self.model2 = mdl
+        self._model2_type  = mtype
+        self._model2_names = names
+        self.v_model2_path.set(path)
+        tag = {"rfdetr": " [DETR]", "onnx": " [ONNX]"}.get(mtype, "")
+        self.lbl_model2.config(text=f"  {os.path.basename(path)}{tag}", fg=SUCCESS)
+        if self.current_image_path and self.model:
+            self._detect_and_display()
 
     def _clear_model2(self):
         self.model2 = None
+        self._model2_type  = "yolo"
+        self._model2_names = {}
         self.v_model2_path.set("")
         self.lbl_model2.config(text="Chưa chọn", fg=DIM)
         self.panel2_frame.pack_forget()
@@ -1012,31 +1249,181 @@ class YoloTab(Frame):
         if self.current_image_path and self.model:
             self._detect_and_display()
 
-    def _load_model(self, path: str):
-        if not _YOLO_OK:
+    def _select_model3(self):
+        if not _RFDETR_OK and not _YOLO_OK:
             messagebox.showerror("Thiếu thư viện",
-                                  "pip install ultralytics", parent=self.root)
+                                  "pip install ultralytics  (YOLO .pt/.onnx)\n"
+                                  "pip install rfdetr  (RF-DETR .pt)",
+                                  parent=self.root)
+            return
+        path = filedialog.askopenfilename(
+            title="Chọn file model 3 (.pt YOLO/RF-DETR hoặc .onnx)",
+            filetypes=[("Model files", "*.pt *.onnx"),
+                       ("PyTorch Model", "*.pt"),
+                       ("ONNX Model", "*.onnx"),
+                       ("All files", "*.*")],
+            initialdir=_cfg_dir("yolo.model_dir") or None,
+            parent=self.root)
+        if not path:
+            return
+        _push_history("h.yolo.model3", path)
+        self.lbl_model3.config(text="  ⏳ Đang load…", fg=DIM)
+        self.root.update_idletasks()
+
+        def _do_load():
+            try:
+                mdl, names, mtype = self._auto_load_pt(path)
+                self.root.after(0, lambda: self._on_model3_loaded(path, mdl, names, mtype, None))
+            except Exception as e:
+                self.root.after(0, lambda err=str(e): self._on_model3_loaded(path, None, {}, "rfdetr", err))
+
+        threading.Thread(target=_do_load, daemon=True).start()
+
+    def _on_model3_loaded(self, path: str, mdl, names: dict, mtype: str, err):
+        if err:
+            messagebox.showerror("Lỗi load model 3", err, parent=self.root)
+            self.lbl_model3.config(text="  ✗ Lỗi load", fg=ACCENT)
+            return
+        self.model3        = mdl
+        self._model3_names = names
+        self._model3_type  = mtype
+        self.v_model3_path.set(path)
+        ext_tag = {"onnx": " [ONNX]", "rfdetr": " [DETR]"}.get(mtype, "")
+        self.lbl_model3.config(text=f"  {os.path.basename(path)}{ext_tag}", fg=SUCCESS)
+        if self.current_image_path and self.model:
+            self._detect_and_display()
+
+    def _clear_model3(self):
+        self.model3        = None
+        self._model3_names = {}
+        self._model3_type  = "rfdetr"
+        self.v_model3_path.set("")
+        self.lbl_model3.config(text="Chưa chọn", fg=DIM)
+        if self.current_image_path and self.model:
+            self._detect_and_display()
+
+    def _auto_load_pt(self, path: str):
+        """Tự phân biệt YOLO / RF-DETR / ONNX và trả về (model, names, mtype).
+        Thứ tự ưu tiên: .onnx → OnnxRunner; .pt → YOLO trước, RF-DETR nếu lỗi."""
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".onnx":
+            try:
+                import onnxruntime  # noqa
+            except ImportError:
+                raise ImportError("pip install onnxruntime  (hoặc onnxruntime-gpu)")
+            mdl = _OnnxRunner(path)
+            return mdl, mdl.names, "onnx"
+        # .pt: thử YOLO trước
+        yolo_err = None
+        if _YOLO_OK:
+            try:
+                mdl = YOLO(path)
+                names = dict(mdl.names) if hasattr(mdl, "names") else {}
+                return mdl, names, "yolo"
+            except Exception as e:
+                yolo_err = e
+        # Thử RF-DETR
+        if _RFDETR_OK:
+            try:
+                mdl = _RFDETRBase(pretrain_weights=path)
+                names = {}
+                if hasattr(mdl, "model") and hasattr(mdl.model, "names"):
+                    raw = mdl.model.names
+                    names = ({i: n for i, n in enumerate(raw)}
+                             if isinstance(raw, (list, tuple)) else dict(raw))
+                return mdl, names, "rfdetr"
+            except Exception as e:
+                if yolo_err:
+                    raise ValueError(f"YOLO: {yolo_err}\nRF-DETR: {e}")
+                raise
+        if yolo_err:
+            raise yolo_err
+        raise ImportError("pip install ultralytics  (YOLO)  hoặc  pip install rfdetr  (RF-DETR)")
+
+    def _cache_sv_result(self, img_path: str, dets):
+        """Lưu sv.Detections / _OnnxDetResult vào _det_cache (dạng box tuple)."""
+        if dets is None:
+            return
+        try:
+            from PIL import Image as _Img
+            iw, ih = _Img.open(img_path).size
+        except Exception:
+            iw = ih = 1
+        box_list = []
+        classes_count = {}
+        try:
+            xyxy_arr = dets.xyxy
+            conf_arr = dets.confidence
+            cls_arr  = dets.class_id
+            if xyxy_arr is None or len(xyxy_arr) == 0:
+                with self._det_cache_lock:
+                    self._det_cache[img_path] = {"n": 0, "classes": {}, "boxes": []}
+                return
+            for i in range(len(xyxy_arr)):
+                x1, y1, x2, y2 = float(xyxy_arr[i][0]), float(xyxy_arr[i][1]), \
+                                  float(xyxy_arr[i][2]), float(xyxy_arr[i][3])
+                cid  = int(cls_arr[i]) if cls_arr is not None and i < len(cls_arr) else 0
+                conf = float(conf_arr[i]) if conf_arr is not None and i < len(conf_arr) else 1.0
+                cx_n = ((x1 + x2) / 2) / iw
+                cy_n = ((y1 + y2) / 2) / ih
+                w_n  = (x2 - x1) / iw
+                h_n  = (y2 - y1) / ih
+                w_px = x2 - x1
+                h_px = y2 - y1
+                box_list.append((cid, cx_n, cy_n, w_n, h_n, w_px, h_px, conf))
+                classes_count[cid] = classes_count.get(cid, 0) + 1
+        except Exception:
+            pass
+        with self._det_cache_lock:
+            self._det_cache[img_path] = {"n": len(box_list),
+                                          "classes": classes_count,
+                                          "boxes": box_list}
+
+    def _sv_summary(self, dets, names: dict) -> str:
+        """Tạo chuỗi tóm tắt 'name: count | ...' từ sv.Detections / _OnnxDetResult."""
+        if dets is None:
+            return ""
+        try:
+            cls_arr = dets.class_id
+            if cls_arr is None or len(cls_arr) == 0:
+                return ""
+            cnt = {}
+            for c in cls_arr:
+                cid = int(c)
+                cnt[cid] = cnt.get(cid, 0) + 1
+            return "  |  ".join(f"{names.get(k, str(k))}: {v}" for k, v in cnt.items())
+        except Exception:
+            return ""
+
+    def _load_model(self, path: str):
+        if not _YOLO_OK and not _RFDETR_OK:
+            messagebox.showerror("Thiếu thư viện",
+                                  "pip install ultralytics  hoặc  pip install rfdetr",
+                                  parent=self.root)
             return
         self.lbl_model.config(text=f"  ⏳ Đang load {os.path.basename(path)}…", fg=DIM)
         self.root.update_idletasks()
 
         def _do_load():
             try:
-                mdl = YOLO(path)
-                self.root.after(0, lambda: self._on_model_loaded(path, mdl, None))
+                mdl, names, mtype = self._auto_load_pt(path)
+                self.root.after(0, lambda: self._on_model_loaded(path, mdl, names, mtype, None))
             except Exception as e:
-                self.root.after(0, lambda err=str(e): self._on_model_loaded(path, None, err))
+                self.root.after(0, lambda err=str(e): self._on_model_loaded(path, None, {}, "yolo", err))
 
         threading.Thread(target=_do_load, daemon=True).start()
 
-    def _on_model_loaded(self, path: str, mdl, err: str | None):
+    def _on_model_loaded(self, path: str, mdl, names: dict, mtype: str, err: str | None):
         if err:
             messagebox.showerror("Lỗi load model", err, parent=self.root)
             self.lbl_model.config(text="  ✗ Lỗi load model", fg=ACCENT)
             return
         self.model = mdl
+        self._model1_type  = mtype
+        self._model1_names = names
         self.v_model_path.set(path)
-        self.lbl_model.config(text=f"  {os.path.basename(path)}", fg=SUCCESS)
+        tag = {"rfdetr": " [DETR]", "onnx": " [ONNX]"}.get(mtype, "")
+        self.lbl_model.config(text=f"  {os.path.basename(path)}{tag}", fg=SUCCESS)
         self._update_class_list()
         if self.current_image_path:
             self._detect_and_display()
@@ -1082,10 +1469,15 @@ class YoloTab(Frame):
     def _update_class_list(self):
         self.lb_classes.delete(0, END)
         self.class_ids.clear()
-        if self.model and hasattr(self.model, "names"):
-            for cid, cname in sorted(self.model.names.items()):
-                self.class_ids.append(cid)
-                self.lb_classes.insert(END, f"[{cid}] {cname}")
+        names = {}
+        if self.model:
+            if self._model1_type == "yolo" and hasattr(self.model, "names"):
+                names = self.model.names
+            else:
+                names = self._model1_names
+        for cid, cname in sorted(names.items()):
+            self.class_ids.append(cid)
+            self.lb_classes.insert(END, f"[{cid}] {cname}")
         self._update_must_have_lists()
 
     def _update_path_combo(self, path: str):
@@ -1696,13 +2088,14 @@ class YoloTab(Frame):
             kernel32 = ctypes.windll.kernel32
             user32   = ctypes.windll.user32
 
-            # Khai báo đầy đủ argtypes + restype cho mọi hàm nhận/trả handle 64-bit
             kernel32.GlobalAlloc.argtypes  = [ctypes.c_uint, ctypes.c_size_t]
             kernel32.GlobalAlloc.restype   = ctypes.c_void_p
             kernel32.GlobalLock.argtypes   = [ctypes.c_void_p]
             kernel32.GlobalLock.restype    = ctypes.c_void_p
             kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
             kernel32.GlobalUnlock.restype  = ctypes.c_bool
+            kernel32.GlobalFree.argtypes   = [ctypes.c_void_p]
+            kernel32.GlobalFree.restype    = ctypes.c_void_p
             user32.OpenClipboard.argtypes  = [ctypes.c_void_p]
             user32.OpenClipboard.restype   = ctypes.c_bool
             user32.EmptyClipboard.argtypes = []
@@ -1721,13 +2114,37 @@ class YoloTab(Frame):
             CF_DIB = 8
             GMEM_MOVEABLE = 0x0002
             h = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+            if not h:
+                self.v_status.set("Lỗi copy: không cấp phát được bộ nhớ")
+                return
             p = kernel32.GlobalLock(h)
+            if not p:
+                kernel32.GlobalFree(h)
+                self.v_status.set("Lỗi copy: GlobalLock thất bại")
+                return
             ctypes.memmove(p, data, len(data))
             kernel32.GlobalUnlock(h)
-            user32.OpenClipboard(None)
+
+            # Clipboard có thể tạm bị lock bởi app khác → retry tối đa 5 lần
+            opened = False
+            for _ in range(5):
+                if user32.OpenClipboard(None):
+                    opened = True
+                    break
+                time.sleep(0.05)
+            if not opened:
+                kernel32.GlobalFree(h)
+                self.v_status.set("Lỗi copy: clipboard đang bị chiếm (thử lại)")
+                return
+
             user32.EmptyClipboard()
-            user32.SetClipboardData(CF_DIB, h)
+            # Sau SetClipboardData thành công, Windows sở hữu h — không được GlobalFree
+            result = user32.SetClipboardData(CF_DIB, h)
             user32.CloseClipboard()
+
+            if not result:
+                self.v_status.set("Lỗi copy: SetClipboardData thất bại")
+                return
 
             self.lbl_result.config(
                 text=f"📋 Đã copy ảnh: {os.path.basename(self.current_image_path)}",
@@ -2121,9 +2538,9 @@ class YoloTab(Frame):
         if self._det_running:
             self._det_stop_flag = True
             return
-        if not _CV2_OK or not _YOLO_OK:
+        if not _CV2_OK and not _PIL_OK:
             messagebox.showerror("Thiếu thư viện",
-                                  "pip install ultralytics opencv-python", parent=self.root)
+                                  "pip install Pillow opencv-python", parent=self.root)
             return
 
         if hasattr(self, "lbl_cache_info"):
@@ -2178,43 +2595,64 @@ class YoloTab(Frame):
             BATCH     = 8
             last_ui   = time.monotonic()
             n_pending = len(pending)
+            _mtype    = self._model1_type  # snapshot (thread-safe read)
 
             for batch_start in range(0, n_pending, BATCH):
                 if self._det_stop_flag:
                     break
                 batch_paths = pending[batch_start:batch_start + BATCH]
                 try:
-                    results = self.model.predict(
-                        source=batch_paths, classes=sel_cls,
-                        conf=conf, iou=iou, imgsz=640,
-                        agnostic_nms=True, verbose=False)
-                    for img_path, res in zip(batch_paths, results):
-                        boxes = res.boxes
-                        n_det = len(boxes) if boxes is not None else 0
-                        classes_count = {}
-                        box_list = []
-                        if boxes is not None and len(boxes):
-                            for box in boxes:
-                                cid        = int(box.cls[0])
-                                conf_score = float(box.conf[0])
-                                classes_count[cid] = classes_count.get(cid, 0) + 1
-                                cx_n, cy_n, w_n, h_n = box.xywhn[0].tolist()
-                                w_px = float(box.xywh[0][2])
-                                h_px = float(box.xywh[0][3])
-                                box_list.append((cid, cx_n, cy_n, w_n, h_n, w_px, h_px, conf_score))
-                        with self._det_cache_lock:
-                            self._det_cache[img_path] = {
-                                "n": n_det,
-                                "classes": classes_count,
-                                "boxes": box_list,
-                            }
-                        # ── LPR batch ──────────────────────────────────────
-                        if do_lpr and lpr_urls_b and box_list:
-                            lpr_res = self._lpr_batch_for_path(
-                                img_path, box_list, lpr_urls_b, lpr_tmout_b,
-                                lpr_full_b)
-                            with self._lpr_cache_lock:
-                                self._lpr_cache[img_path] = lpr_res
+                    if _mtype == "yolo":
+                        results = self.model.predict(
+                            source=batch_paths, classes=sel_cls,
+                            conf=conf, iou=iou, imgsz=640,
+                            agnostic_nms=True, verbose=False)
+                        for img_path, res in zip(batch_paths, results):
+                            boxes = res.boxes
+                            n_det = len(boxes) if boxes is not None else 0
+                            classes_count = {}
+                            box_list = []
+                            if boxes is not None and len(boxes):
+                                for box in boxes:
+                                    cid        = int(box.cls[0])
+                                    conf_score = float(box.conf[0])
+                                    classes_count[cid] = classes_count.get(cid, 0) + 1
+                                    cx_n, cy_n, w_n, h_n = box.xywhn[0].tolist()
+                                    w_px = float(box.xywh[0][2])
+                                    h_px = float(box.xywh[0][3])
+                                    box_list.append((cid, cx_n, cy_n, w_n, h_n, w_px, h_px, conf_score))
+                            with self._det_cache_lock:
+                                self._det_cache[img_path] = {
+                                    "n": n_det,
+                                    "classes": classes_count,
+                                    "boxes": box_list,
+                                }
+                            # ── LPR batch ────────────────────────────────────
+                            if do_lpr and lpr_urls_b and box_list:
+                                lpr_res = self._lpr_batch_for_path(
+                                    img_path, box_list, lpr_urls_b, lpr_tmout_b,
+                                    lpr_full_b)
+                                with self._lpr_cache_lock:
+                                    self._lpr_cache[img_path] = lpr_res
+                    else:
+                        # RF-DETR / ONNX — xử lý từng ảnh (không hỗ trợ batch API)
+                        from PIL import Image as _PImg, ImageOps as _IOps
+                        for img_path in batch_paths:
+                            if self._det_stop_flag:
+                                break
+                            try:
+                                if _mtype == "rfdetr":
+                                    _pil = _PImg.open(img_path).convert("RGB")
+                                    try:
+                                        _pil = _IOps.exif_transpose(_pil)
+                                    except Exception:
+                                        pass
+                                    dets = self.model.predict(_pil, threshold=conf)
+                                else:
+                                    dets = self.model.predict(img_path, threshold=conf)
+                                self._cache_sv_result(img_path, dets)
+                            except Exception:
+                                pass
                 except Exception:
                     pass
 
@@ -2242,7 +2680,7 @@ class YoloTab(Frame):
             messagebox.showwarning("Đang chạy",
                                    "Detect All đang chạy, vui lòng đợi.", parent=self.root)
             return
-        if not _CV2_OK or not _YOLO_OK:
+        if not _CV2_OK and not _PIL_OK:
             return
 
         page_paths = [c["path"] for c in self._grid_cells if c.get("path")]
@@ -2261,6 +2699,7 @@ class YoloTab(Frame):
                         if v.get().strip()] if do_lpr else [])
         lpr_tmout_p = self._lpr_timeout_var.get() if do_lpr else 10
         lpr_full_p  = [v.get() for v in self._lpr_fullimg_vars] if do_lpr else []
+        _mtype_page = self._model1_type  # snapshot
 
         def run():
             import time
@@ -2268,35 +2707,53 @@ class YoloTab(Frame):
             for batch_start in range(0, total, BATCH):
                 batch = page_paths[batch_start:batch_start + BATCH]
                 try:
-                    results = self.model.predict(
-                        source=batch, classes=sel_cls,
-                        conf=conf, iou=iou, imgsz=640,
-                        agnostic_nms=True, verbose=False)
-                    for img_path, res in zip(batch, results):
-                        boxes = res.boxes
-                        n_det = len(boxes) if boxes is not None else 0
-                        classes_count = {}
-                        box_list = []
-                        if boxes is not None and len(boxes):
-                            for box in boxes:
-                                cid        = int(box.cls[0])
-                                conf_score = float(box.conf[0])
-                                classes_count[cid] = classes_count.get(cid, 0) + 1
-                                cx_n, cy_n, w_n, h_n = box.xywhn[0].tolist()
-                                w_px = float(box.xywh[0][2])
-                                h_px = float(box.xywh[0][3])
-                                box_list.append((cid, cx_n, cy_n, w_n, h_n, w_px, h_px, conf_score))
-                        with self._det_cache_lock:
-                            self._det_cache[img_path] = {
-                                "n": n_det, "classes": classes_count, "boxes": box_list,
-                            }
-                        # ── LPR batch ──────────────────────────────────────
-                        if do_lpr and lpr_urls_p and box_list:
-                            lpr_res = self._lpr_batch_for_path(
-                                img_path, box_list, lpr_urls_p, lpr_tmout_p,
-                                lpr_full_p)
-                            with self._lpr_cache_lock:
-                                self._lpr_cache[img_path] = lpr_res
+                    if _mtype_page == "yolo":
+                        results = self.model.predict(
+                            source=batch, classes=sel_cls,
+                            conf=conf, iou=iou, imgsz=640,
+                            agnostic_nms=True, verbose=False)
+                        for img_path, res in zip(batch, results):
+                            boxes = res.boxes
+                            n_det = len(boxes) if boxes is not None else 0
+                            classes_count = {}
+                            box_list = []
+                            if boxes is not None and len(boxes):
+                                for box in boxes:
+                                    cid        = int(box.cls[0])
+                                    conf_score = float(box.conf[0])
+                                    classes_count[cid] = classes_count.get(cid, 0) + 1
+                                    cx_n, cy_n, w_n, h_n = box.xywhn[0].tolist()
+                                    w_px = float(box.xywh[0][2])
+                                    h_px = float(box.xywh[0][3])
+                                    box_list.append((cid, cx_n, cy_n, w_n, h_n, w_px, h_px, conf_score))
+                            with self._det_cache_lock:
+                                self._det_cache[img_path] = {
+                                    "n": n_det, "classes": classes_count, "boxes": box_list,
+                                }
+                            # ── LPR batch ────────────────────────────────────
+                            if do_lpr and lpr_urls_p and box_list:
+                                lpr_res = self._lpr_batch_for_path(
+                                    img_path, box_list, lpr_urls_p, lpr_tmout_p,
+                                    lpr_full_p)
+                                with self._lpr_cache_lock:
+                                    self._lpr_cache[img_path] = lpr_res
+                    else:
+                        # RF-DETR / ONNX — per image
+                        from PIL import Image as _PImg, ImageOps as _IOps
+                        for img_path in batch:
+                            try:
+                                if _mtype_page == "rfdetr":
+                                    _pil = _PImg.open(img_path).convert("RGB")
+                                    try:
+                                        _pil = _IOps.exif_transpose(_pil)
+                                    except Exception:
+                                        pass
+                                    dets = self.model.predict(_pil, threshold=conf)
+                                else:
+                                    dets = self.model.predict(img_path, threshold=conf)
+                                self._cache_sv_result(img_path, dets)
+                            except Exception:
+                                pass
                 except Exception:
                     pass
                 done = min(batch_start + BATCH, total)
@@ -3121,9 +3578,10 @@ class YoloTab(Frame):
                 pass
         self._schedule_grid_rebuild()
 
-    # Màu cố định cho từng panel khi so sánh 2 model
+    # Màu cố định cho từng panel khi so sánh multi-model
     _PANEL1_COLOR = (0, 200, 255)    # cyan  — Model 1
     _PANEL2_COLOR = (240, 89, 34)    # orange ACCENT — Model 2
+    _PANEL3_COLOR = (50, 220, 50)    # lime green — Model 3 (RF-DETR)
 
     def _annotated_to_pil(self, results, single_color=None):
         """Vẽ annotation bằng PIL để font_size hoạt động độc lập với line_width.
@@ -3241,6 +3699,116 @@ class YoloTab(Frame):
         ann_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         return pil_img, ann_bgr
 
+    def _rfdetr_summary(self, dets) -> str:
+        """Tóm tắt kết quả RF-DETR: 'name: count | ...'"""
+        if dets is None:
+            return ""
+        ids = getattr(dets, "class_id", None)
+        if ids is None or len(ids) == 0:
+            return ""
+        counts = {}
+        for cid in ids:
+            name = self._model3_names.get(int(cid), str(cid))
+            counts[name] = counts.get(name, 0) + 1
+        return "  |  ".join(f"{n}: {c}" for n, c in counts.items())
+
+    def _draw_sv_on_pil(self, pil_img, dets, names: dict,
+                        panel_color=None, prefix: str = ""):
+        """Vẽ sv.Detections/_OnnxDetResult lên PIL.
+        panel_color=None → palette màu theo class_id; ngược lại dùng màu cố định."""
+        from PIL import ImageFont, ImageDraw as _Draw
+        if dets is None or not hasattr(dets, "xyxy") or dets.xyxy is None or len(dets.xyxy) == 0:
+            return pil_img
+        lw = max(1, self.v_line_width.get())
+        fs = max(6, self.v_font_size.get())
+        pil_out = pil_img.copy()
+        draw = _Draw.Draw(pil_out)
+        try:
+            font = ImageFont.truetype("arial.ttf", fs)
+        except Exception:
+            try:
+                font = ImageFont.load_default(size=fs)
+            except Exception:
+                font = ImageFont.load_default()
+        if panel_color is None:
+            try:
+                from ultralytics.utils.plotting import colors as _yc
+                def _clr(cid):
+                    c = _yc(int(cid), True)
+                    return (int(c[2]), int(c[1]), int(c[0]))
+            except Exception:
+                _pal = [(0, 200, 255), (0, 255, 0), (255, 100, 0),
+                        (255, 0, 200), (200, 200, 0)]
+                def _clr(cid):
+                    return _pal[int(cid) % len(_pal)]
+        else:
+            def _clr(_):
+                return panel_color
+        confs = getattr(dets, "confidence", None)
+        cids  = getattr(dets, "class_id",  None)
+        for i, box in enumerate(dets.xyxy):
+            x1, y1, x2, y2 = (int(v) for v in box)
+            cls_id = int(cids[i])  if cids  is not None else 0
+            conf   = float(confs[i]) if confs is not None else 0.0
+            label  = f"{prefix}{names.get(cls_id, str(cls_id))} {conf:.2f}"
+            color  = _clr(cls_id)
+            draw.rectangle([x1, y1, x2, y2], outline=color, width=lw)
+            try:
+                tb = draw.textbbox((0, 0), label, font=font)
+                tw, th = tb[2] - tb[0], tb[3] - tb[1]
+                ty = max(y1 - th - 4, 0)
+                draw.rectangle([x1, ty, x1 + tw + 6, ty + th + 4], fill=color)
+                draw.text((x1 + 3, ty + 2), label,
+                           fill=_contrast_text(color), font=font)
+            except Exception:
+                draw.text((x1, max(y1 - fs - 2, 0)), label, fill=color, font=font)
+        return pil_out
+
+    def _draw_rfdetr_on_pil(self, pil_img, dets):
+        """Vẽ RF-DETR boxes (lime green, prefix M3:) lên PIL Image, trả về PIL mới."""
+        return self._draw_sv_on_pil(pil_img, dets, self._model3_names,
+                                    self._PANEL3_COLOR, "M3:")
+
+    def _draw_yolo_panel_on_pil(self, pil_img, results, names: dict,
+                                  panel_color, prefix: str):
+        """Vẽ YOLO results lên PIL với màu và prefix tùy chọn (dùng cho M2/M3 overlay)."""
+        from PIL import ImageFont, ImageDraw as _Draw
+        boxes = results[0].boxes if results else None
+        if boxes is None or len(boxes) == 0:
+            return pil_img
+        lw = max(1, self.v_line_width.get())
+        fs = max(6, self.v_font_size.get())
+        pil_out = pil_img.copy()
+        draw    = _Draw.Draw(pil_out)
+        try:
+            font = ImageFont.truetype("arial.ttf", fs)
+        except Exception:
+            try:
+                font = ImageFont.load_default(size=fs)
+            except Exception:
+                font = ImageFont.load_default()
+        for box in boxes:
+            x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
+            cls_id = int(box.cls[0])
+            conf   = float(box.conf[0])
+            label  = f"{prefix}{names.get(cls_id, str(cls_id))} {conf:.2f}"
+            draw.rectangle([x1, y1, x2, y2], outline=panel_color, width=lw)
+            try:
+                tb = draw.textbbox((0, 0), label, font=font)
+                tw, th = tb[2] - tb[0], tb[3] - tb[1]
+                ty = max(y1 - th - 4, 0)
+                draw.rectangle([x1, ty, x1 + tw + 6, ty + th + 4], fill=panel_color)
+                draw.text((x1 + 3, ty + 2), label,
+                          fill=_contrast_text(panel_color), font=font)
+            except Exception:
+                draw.text((x1, max(y1 - fs - 2, 0)), label, fill=panel_color, font=font)
+        return pil_out
+
+    def _draw_yolo_m3_on_pil(self, pil_img, results):
+        """Vẽ YOLO results (M3, lime green, prefix M3:) lên PIL Image."""
+        return self._draw_yolo_panel_on_pil(
+            pil_img, results, self._model3_names, self._PANEL3_COLOR, "M3:")
+
     def _annotated_from_cache(self, img_path: str):
         """Vẽ annotated image từ _det_cache — nhất quán với grid thumbnail."""
         from PIL import ImageFont, ImageDraw as _Draw
@@ -3329,10 +3897,16 @@ class YoloTab(Frame):
         self._det_pending = False
         self.lbl_result.config(text="⏳ Đang nhận diện…", fg=DIM)
 
-        img_path        = self.current_image_path  # capture trước khi user chuyển ảnh
-        model1          = self.model
-        model2          = self.model2
-        sel_cls         = self._get_sel_classes()
+        img_path         = self.current_image_path  # capture trước khi user chuyển ảnh
+        model1           = self.model
+        model1_type      = self._model1_type
+        model1_names_cap = dict(self._model1_names)
+        model2           = self.model2
+        model2_type      = self._model2_type
+        model2_names_cap = dict(self._model2_names)
+        model3           = self.model3
+        model3_type      = self._model3_type
+        sel_cls          = self._get_sel_classes()
         # Capture params trên main thread (Tkinter widget không thread-safe)
         conf_val = max(self.v_conf_thresh.get(), self.v_conf.get())
         iou_val  = self.v_iou.get()
@@ -3343,7 +3917,8 @@ class YoloTab(Frame):
         lpr_fullimg = [v.get() for v in self._lpr_fullimg_vars] if check_lpr else []
         # Dùng cache nếu có (nhất quán với grid thumbnail), trừ dual-model mode
         with self._det_cache_lock:
-            cached = self._det_cache.get(img_path) if model2 is None else None
+            cached = (self._det_cache.get(img_path)
+                      if (model2 is None and model3 is None) else None)
 
         def _run():
             try:
@@ -3365,11 +3940,12 @@ class YoloTab(Frame):
                     for b in filtered_boxes:
                         cid = int(b[0])
                         filtered_classes[cid] = filtered_classes.get(cid, 0) + 1
-                    _names = {}
-                    try:
-                        _names = dict(model1.names) or {}
-                    except Exception:
-                        pass
+                    _names = model1_names_cap or {}
+                    if not _names and hasattr(model1, "names"):
+                        try:
+                            _names = dict(model1.names) or {}
+                        except Exception:
+                            pass
                     summary = "  |  ".join(
                         f"{_names.get(k, str(k))}: {v}"
                         for k, v in filtered_classes.items())
@@ -3397,65 +3973,143 @@ class YoloTab(Frame):
                         ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
                     self.root.after(0, lambda: self._on_detect_done(
                         img_path, None, pil1, ann1_bgr, pil_orig,
-                        n_det, summary, None, None, None, 0, ""))
+                        n_det, summary, None, None, None, 0, "",
+                        None, None, 0, ""))
                 else:
                     # ── Không có cache: chạy model, lưu cache ──
-                    results1 = self._run_model(model1, img_path, sel_cls, conf_val, iou_val)
-                    n_det, summary = self._results_summary(results1, model1.names)
-                    self._cache_single_result(img_path, results1)
-                    pil1, ann1_bgr = self._annotated_to_pil(results1)
                     try:
                         from PIL import ImageOps
                         pil_orig = Image.open(img_path).convert("RGB")
                         pil_orig = ImageOps.exif_transpose(pil_orig)
                     except Exception:
                         pil_orig = None
-                    # ── LPR overlay (B2+B3) ────────────────────────────────
-                    if check_lpr and lpr_urls and _REQ_OK:
-                        _boxes = results1[0].boxes
-                        if _boxes is not None and len(_boxes):
-                            with self._lpr_cache_lock:
-                                _lpr_hit = self._lpr_cache.get(img_path)
-                            if _lpr_hit is not None:
-                                pil1 = self._lpr_draw_from_results(pil1, _lpr_hit)
-                            else:
-                                _cls_list = [int(c) for c in _boxes.cls.tolist()]
-                                _bwc = [(int(v[0]), int(v[1]), int(v[2]), int(v[3]),
-                                         _cls_list[i])
-                                        for i, v in enumerate(_boxes.xyxy.tolist())]
-                                _mn = {}
-                                try:
-                                    _mn = dict(model1.names) or {}
-                                except Exception:
-                                    pass
-                                pil1 = self._lpr_overlay_boxes(
-                                    pil1, pil_orig, _bwc, lpr_urls, lpr_timeout,
-                                    _mn, lpr_fullimg)
+
+                    if model1_type == "yolo":
+                        results1 = self._run_model(model1, img_path, sel_cls, conf_val, iou_val)
+                        n_det, summary = self._results_summary(results1, model1.names)
+                        self._cache_single_result(img_path, results1)
+                        pil1, ann1_bgr = self._annotated_to_pil(results1)
+                        # ── LPR overlay ────────────────────────────────────
+                        if check_lpr and lpr_urls and _REQ_OK:
+                            _boxes = results1[0].boxes
+                            if _boxes is not None and len(_boxes):
                                 with self._lpr_cache_lock:
-                                    self._lpr_cache[img_path] = list(
-                                        self._last_lpr_plates_result)
-                            ann1_bgr = cv2.cvtColor(np.array(pil1),
-                                                    cv2.COLOR_RGB2BGR)
+                                    _lpr_hit = self._lpr_cache.get(img_path)
+                                if _lpr_hit is not None:
+                                    pil1 = self._lpr_draw_from_results(pil1, _lpr_hit)
+                                else:
+                                    _cls_list = [int(c) for c in _boxes.cls.tolist()]
+                                    _bwc = [(int(v[0]), int(v[1]), int(v[2]), int(v[3]),
+                                             _cls_list[i])
+                                            for i, v in enumerate(_boxes.xyxy.tolist())]
+                                    _mn = dict(model1.names) if hasattr(model1, "names") else {}
+                                    pil1 = self._lpr_overlay_boxes(
+                                        pil1, pil_orig, _bwc, lpr_urls, lpr_timeout,
+                                        _mn, lpr_fullimg)
+                                    with self._lpr_cache_lock:
+                                        self._lpr_cache[img_path] = list(
+                                            self._last_lpr_plates_result)
+                                ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
+                    else:
+                        # M1 là RF-DETR hoặc ONNX
+                        if model1_type == "rfdetr":
+                            _pil_in1 = pil_orig.copy() if pil_orig else Image.open(img_path).convert("RGB")
+                            dets1 = model1.predict(_pil_in1, threshold=conf_val)
+                        else:
+                            dets1 = model1.predict(img_path, threshold=conf_val)
+                        n_det   = len(dets1.xyxy) if hasattr(dets1, "xyxy") and dets1.xyxy is not None else 0
+                        summary = self._sv_summary(dets1, model1_names_cap)
+                        self._cache_sv_result(img_path, dets1)
+                        _base_pil = pil_orig.copy() if pil_orig else Image.open(img_path).convert("RGB")
+                        pil1 = self._draw_sv_on_pil(_base_pil, dets1, model1_names_cap)
+                        ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
+                        results1 = None
+
+                    # ── Model 2 ────────────────────────────────────────────
                     if model2 is not None:
-                        results2 = self._run_model(model2, img_path, sel_cls, conf_val, iou_val)
-                        n_det2, summary2 = self._results_summary(results2, model2.names)
-                        # Gộp 2 model lên 1 ảnh (cyan M1, cam M2)
-                        pil1, ann1_bgr = self._annotated_combined_pil(
-                            results1, results2, model2)
+                        if model2_type == "yolo":
+                            results2 = self._run_model(model2, img_path, sel_cls, conf_val, iou_val)
+                            n_det2, summary2 = self._results_summary(results2, model2.names)
+                            if model1_type == "yolo":
+                                # Gộp 2 model YOLO lên 1 ảnh (cyan M1, cam M2)
+                                pil1, ann1_bgr = self._annotated_combined_pil(
+                                    results1, results2, model2)
+                            else:
+                                # M1 non-YOLO: overlay M2 YOLO boxes lên pil1 đã có M1
+                                pil1 = self._draw_yolo_panel_on_pil(
+                                    pil1, results2,
+                                    dict(model2.names) if hasattr(model2, "names") else model2_names_cap,
+                                    self._PANEL2_COLOR, "M2:")
+                                ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
+                        else:
+                            # M2 là RF-DETR hoặc ONNX
+                            if model2_type == "rfdetr":
+                                _pil_in2 = pil_orig.copy() if pil_orig else Image.open(img_path).convert("RGB")
+                                dets2 = model2.predict(_pil_in2, threshold=conf_val)
+                            else:
+                                dets2 = model2.predict(img_path, threshold=conf_val)
+                            n_det2   = len(dets2.xyxy) if hasattr(dets2, "xyxy") and dets2.xyxy is not None else 0
+                            summary2 = self._sv_summary(dets2, model2_names_cap)
+                            pil1 = self._draw_sv_on_pil(pil1, dets2, model2_names_cap,
+                                                         self._PANEL2_COLOR, "M2:")
+                            ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
+                            results2 = None
                         # Áp LPR overlay từ cache (đã tính ở bước model1 phía trên)
                         if check_lpr and lpr_urls and _REQ_OK:
                             with self._lpr_cache_lock:
                                 _lpr_c2 = self._lpr_cache.get(img_path)
                             if _lpr_c2 is not None:
                                 pil1 = self._lpr_draw_from_results(pil1, _lpr_c2)
-                                ann1_bgr = cv2.cvtColor(np.array(pil1),
-                                                        cv2.COLOR_RGB2BGR)
+                                ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
                         pil2 = None   # combined mode — không dùng side-by-side
                     else:
                         results2, pil2, n_det2, summary2 = None, None, 0, ""
+                    # ── Model 3 (RF-DETR .pt  hoặc  YOLO .onnx) ──────────
+                    if model3 is not None:
+                        try:
+                            if model3_type == "onnx":
+                                # Generic ONNX via _OnnxRunner (tự đọc input name)
+                                dets3  = model3.predict(img_path, threshold=conf_val)
+                                n_det3 = len(dets3.xyxy) if dets3.xyxy is not None else 0
+                                summary3 = self._rfdetr_summary(dets3)
+                                pil1   = self._draw_rfdetr_on_pil(pil1, dets3)
+                                dets3  = dets3
+                            elif model3_type == "yolo":
+                                # ONNX dùng ultralytics (legacy, kept for safety)
+                                _res3    = self._run_model(model3, img_path, sel_cls,
+                                                           conf_val, iou_val)
+                                n_det3, summary3 = self._results_summary(
+                                    _res3, model3.names)
+                                pil1 = self._draw_yolo_m3_on_pil(pil1, _res3)
+                                dets3 = _res3
+                            else:
+                                # RF-DETR .pt dùng rfdetr (sv.Detections)
+                                from PIL import Image as _PILImg, ImageOps as _IOps
+                                _pil_in = _PILImg.open(img_path).convert("RGB")
+                                try:
+                                    _pil_in = _IOps.exif_transpose(_pil_in)
+                                except Exception:
+                                    pass
+                                dets3 = model3.predict(_pil_in, threshold=conf_val)
+                                _d3_len = (len(dets3.xyxy)
+                                           if hasattr(dets3, "xyxy") and dets3.xyxy is not None
+                                           else 0)
+                                n_det3   = _d3_len
+                                summary3 = self._rfdetr_summary(dets3)
+                                pil1     = self._draw_rfdetr_on_pil(pil1, dets3)
+                            ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
+                        except Exception as _e3:
+                            dets3, n_det3, summary3 = None, 0, f"Err:{_e3}"
+                    else:
+                        dets3, n_det3, summary3 = None, 0, ""
+                    _m3_ref  = model3
+                    _d3_ref  = dets3
+                    _n3_ref  = n_det3
+                    _s3_ref  = summary3
                     self.root.after(0, lambda: self._on_detect_done(
                         img_path, results1, pil1, ann1_bgr, pil_orig, n_det, summary,
-                        model2, results2, pil2, n_det2, summary2))
+                        model2, results2, pil2, n_det2, summary2,
+                        _m3_ref, _d3_ref, _n3_ref, _s3_ref))
             except Exception as e:
                 err = str(e)
                 self.root.after(0, lambda: self._on_detect_error(err))
@@ -3463,7 +4117,8 @@ class YoloTab(Frame):
         threading.Thread(target=_run, daemon=True).start()
 
     def _on_detect_done(self, img_path, results1, pil1, ann1_bgr, pil_orig,
-                         n_det, summary, model2, results2, pil2, n_det2, summary2):
+                         n_det, summary, model2, results2, pil2, n_det2, summary2,
+                         model3=None, dets3=None, n_det3=0, summary3=""):
         self._detecting = False
         pending = self._det_pending
         self._det_pending = False
@@ -3475,29 +4130,80 @@ class YoloTab(Frame):
 
         self._last_annotated_bgr = ann1_bgr
         self._last_results1      = results1
+        self._refresh_det_table(results1, model2, results2, model3, dets3)
 
-        if model2 is not None:
-            # Combined mode — 1 ảnh, 2 màu bbox (cyan M1, cam M2)
+        if model2 is not None or model3 is not None:
+            # Combined mode — 1 ảnh, nhiều model, mỗi model 1 màu bbox
+            _m1_tag = {"rfdetr": "[DETR]", "onnx": "[ONNX]"}.get(self._model1_type, "")
             m1_name = os.path.basename(self.v_model_path.get())
-            m2_name = os.path.basename(self.v_model2_path.get())
-            self.lbl_panel1_title.config(
-                text=(f"Model 1: {m1_name}  ({n_det} obj)"
-                      f"    |    Model 2: {m2_name}  ({n_det2} obj)"))
+            title_parts = [f"M1{_m1_tag}:{m1_name} ({n_det})"]
+            total_det   = n_det
+            if model2 is not None:
+                _m2_tag = {"rfdetr": "[DETR]", "onnx": "[ONNX]"}.get(self._model2_type, "")
+                m2_name = os.path.basename(self.v_model2_path.get())
+                title_parts.append(f"M2{_m2_tag}:{m2_name} ({n_det2})")
+                total_det += n_det2
+            if model3 is not None:
+                m3_name = os.path.basename(self.v_model3_path.get())
+                m3_tag  = "ONNX" if self._model3_type == "onnx" else "DETR"
+                title_parts.append(f"M3({m3_tag}):{m3_name} ({n_det3})")
+                total_det += n_det3
+            self.lbl_panel1_title.config(text="  |  ".join(title_parts))
             self.panel2_frame.pack_forget()
             self.lbl_panel2_title.config(text="")
 
             self._pil1_full  = pil1
             self._pil1_orig  = pil_orig
-            self._last_n_det = n_det + n_det2
+            self._last_n_det = total_det
             self._render_display()
 
-            txt = (f"Model1: {n_det} obj" + (f"  [{summary}]" if summary else "")
-                   + f"    Model2: {n_det2} obj" + (f"  [{summary2}]" if summary2 else ""))
-            self.lbl_result.config(text=txt, fg=SUCCESS if n_det or n_det2 else DIM)
+            # ── Per-model result labels với màu sai khác ──────────────────
+            active_counts = [n_det]
+            if model2 is not None: active_counts.append(n_det2)
+            if model3 is not None: active_counts.append(n_det3)
+            # Đa số (majority count)
+            from collections import Counter as _Counter
+            majority = _Counter(active_counts).most_common(1)[0][0]
+
+            def _model_color(count, is_active):
+                if not is_active:
+                    return DIM
+                if count == 0 and majority > 0:
+                    return "#e53935"   # đỏ — không detect được gì trong khi model khác có
+                if count != majority:
+                    return ACCENT      # cam — sai khác so với đa số
+                return SUCCESS         # xanh — khớp
+
+            def _model_prefix(count, is_active):
+                if not is_active: return ""
+                if count == 0 and majority > 0: return "✗ "
+                if count != majority: return "⚠ "
+                return "✓ "
+
+            # Cập nhật 3 label riêng
+            m1txt = f"{_model_prefix(n_det, True)}Model1{_m1_tag}: {n_det} obj" + (f"  [{summary}]" if summary else "")
+            self._lbl_m1_res.config(text=m1txt, fg=_model_color(n_det, True))
+
+            if model2 is not None:
+                m2txt = f"{_model_prefix(n_det2, True)}Model2{_m2_tag}: {n_det2} obj" + (f"  [{summary2}]" if summary2 else "")
+                self._lbl_m2_res.config(text=m2txt, fg=_model_color(n_det2, True))
+            else:
+                self._lbl_m2_res.config(text="")
+
+            if model3 is not None:
+                m3txt = f"{_model_prefix(n_det3, True)}Model3({m3_tag}): {n_det3} obj" + (f"  [{summary3}]" if summary3 else "")
+                self._lbl_m3_res.config(text=m3txt, fg=_model_color(n_det3, True))
+            else:
+                self._lbl_m3_res.config(text="")
+
+            self.lbl_result.config(text="")
         else:
             # Single panel
             self.panel2_frame.pack_forget()
             self.lbl_panel1_title.config(text="")
+            self._lbl_m1_res.config(text="")
+            self._lbl_m2_res.config(text="")
+            self._lbl_m3_res.config(text="")
 
             self._pil1_full = pil1
             self._pil1_orig = pil_orig
@@ -3521,6 +4227,107 @@ class YoloTab(Frame):
         self.lbl_result.config(text=f"Lỗi: {err}", fg=ACCENT)
         if pending:
             self._detect_and_display()
+
+    # ============================================ DET TABLE HELPERS ==
+
+    def _refresh_det_table(self, results1, model2, results2, model3, dets3):
+        """Populate bảng chi tiết detect từ kết quả mới nhất."""
+        if not self._det_table:
+            return
+        rows = []
+        thresh = self.v_conf_thresh.get()
+
+        # --- Model 1 (YOLO) ---
+        if results1 is not None:
+            boxes = results1[0].boxes
+            names = getattr(self.model, "names", {}) or {}
+            if boxes is not None:
+                for box in boxes:
+                    conf = float(box.conf[0])
+                    if conf < thresh:
+                        continue
+                    x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
+                    rows.append({
+                        "model": "M1",
+                        "class_name": names.get(int(box.cls[0]), str(int(box.cls[0]))),
+                        "conf": conf, "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                        "w": x2 - x1, "h": y2 - y1,
+                    })
+
+        # --- Model 2 (YOLO) ---
+        if model2 is not None and results2 is not None:
+            boxes2 = results2[0].boxes
+            names2 = getattr(model2, "names", {}) or {}
+            if boxes2 is not None:
+                for box in boxes2:
+                    conf = float(box.conf[0])
+                    if conf < thresh:
+                        continue
+                    x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
+                    rows.append({
+                        "model": "M2",
+                        "class_name": names2.get(int(box.cls[0]), str(int(box.cls[0]))),
+                        "conf": conf, "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                        "w": x2 - x1, "h": y2 - y1,
+                    })
+
+        # --- Model 3 (RF-DETR / ONNX / YOLO) ---
+        if model3 is not None and dets3 is not None:
+            names3 = self._model3_names
+            if self._model3_type == "yolo":
+                # dets3 là YOLO results list
+                boxes3 = dets3[0].boxes if dets3 else None
+                names3y = getattr(model3, "names", {}) or names3
+                if boxes3 is not None:
+                    for box in boxes3:
+                        conf = float(box.conf[0])
+                        if conf < thresh:
+                            continue
+                        x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
+                        rows.append({
+                            "model": "M3",
+                            "class_name": names3y.get(int(box.cls[0]), str(int(box.cls[0]))),
+                            "conf": conf, "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                            "w": x2 - x1, "h": y2 - y1,
+                        })
+            else:
+                # dets3 là _OnnxDetResult / sv.Detections
+                confs = getattr(dets3, "confidence", None)
+                cids  = getattr(dets3, "class_id",  None)
+                xyxys = getattr(dets3, "xyxy",      None)
+                if xyxys is not None:
+                    for i, box in enumerate(xyxys):
+                        conf = float(confs[i]) if confs is not None else 0.0
+                        if conf < thresh:
+                            continue
+                        x1, y1, x2, y2 = (int(v) for v in box)
+                        cid = int(cids[i]) if cids is not None else 0
+                        rows.append({
+                            "model": "M3",
+                            "class_name": names3.get(cid, str(cid)),
+                            "conf": conf, "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                            "w": x2 - x1, "h": y2 - y1,
+                        })
+
+        self._det_table.update(rows)
+
+    def _on_det_row_select(self, row):
+        """Zoom canvas tới bbox được chọn trong bảng detect (double-click)."""
+        pil = self._pil1_full or self._pil1_orig
+        if pil is None:
+            return
+        x1, y1, x2, y2 = row["x1"], row["y1"], row["x2"], row["y2"]
+        bw, bh = max(x2 - x1, 1), max(y2 - y1, 1)
+        cw = max(self.canvas.winfo_width(),  400)
+        ch = max(self.canvas.winfo_height(), 300)
+        # Zoom để bbox chiếm ~60% canvas, có margin
+        zoom = min(cw / (bw * 1.8), ch / (bh * 1.8), 12.0)
+        zoom = max(zoom, 0.5)
+        cx_img = (x1 + x2) / 2
+        cy_img = (y1 + y2) / 2
+        self._zoom_factor = zoom
+        self._img_pos = [cw / 2 - cx_img * zoom, ch / 2 - cy_img * zoom]
+        self._render_display()
 
     # ============================================= LPR OVERLAY HELPERS ==
 
@@ -5346,7 +6153,10 @@ class YoloTab(Frame):
         vid_names = {}
         try:
             if self.model:
-                vid_names = dict(self.model.names)
+                if _vid_m1_type == "yolo" and hasattr(self.model, "names"):
+                    vid_names = dict(self.model.names)
+                else:
+                    vid_names = dict(_vid_m1_names)
         except Exception:
             pass
 
@@ -5457,7 +6267,11 @@ class YoloTab(Frame):
         sel_cls    = self._get_sel_classes()
         lw         = max(1, self.v_line_width.get())
         fs         = max(6, self.v_font_size.get())
-        model2_vid = self.model2          # snapshot tại thời điểm mở cửa sổ video
+        model2_vid       = self.model2            # snapshot tại thời điểm mở cửa sổ video
+        _vid_m1_type     = self._model1_type
+        _vid_m1_names    = dict(self._model1_names)
+        _vid_m2_type     = self._model2_type
+        _vid_m2_names    = dict(self._model2_names)
         check_lpr  = self.v_check_lpr.get() and _REQ_OK and _PIL_OK
         lpr_urls   = ([v.get().strip() for v in self._lpr_url_vars
                        if v.get().strip()] if check_lpr else [])
@@ -5556,35 +6370,42 @@ class YoloTab(Frame):
                 # Detect
                 boxes = None   # reset mỗi frame để điều kiện lưu không dùng kết quả cũ
                 try:
-                    results = self.model.predict(
-                        source=frame,
-                        classes=sel_cls,
-                        conf=conf_val,
-                        iou=iou_val,
-                        imgsz=640,
-                        agnostic_nms=True,
-                        verbose=False,
-                    )
-                    boxes = results[0].boxes
-                    n_det = len(boxes) if boxes is not None else 0
+                    _C1 = (0, 200, 255)    # cyan  — Model 1
+                    _C2 = (240, 89, 34)    # cam KZTEK — Model 2
 
-                    if model2_vid is not None:
+                    if _vid_m1_type == "yolo":
+                      results = self.model.predict(
+                        source=frame, classes=sel_cls,
+                        conf=conf_val, iou=iou_val,
+                        imgsz=640, agnostic_nms=True, verbose=False,
+                      )
+                      boxes = results[0].boxes
+                      n_det = len(boxes) if boxes is not None else 0
+
+                      if model2_vid is not None:
                         # Dual model — vẽ thủ công 2 màu cố định
-                        try:
-                            results2 = model2_vid.predict(
-                                source=frame,
-                                classes=sel_cls,
-                                conf=conf_val,
-                                iou=iou_val,
-                                imgsz=640,
-                                agnostic_nms=True,
-                                verbose=False,
-                            )
-                            boxes2 = results2[0].boxes
-                            n_det2 = len(boxes2) if boxes2 is not None else 0
-                        except Exception:
-                            boxes2 = None
-                            n_det2 = 0
+                        boxes2, n_det2 = None, 0
+                        dets2_sv = None
+                        if _vid_m2_type == "yolo":
+                            try:
+                                results2 = model2_vid.predict(
+                                    source=frame, classes=sel_cls,
+                                    conf=conf_val, iou=iou_val,
+                                    imgsz=640, agnostic_nms=True, verbose=False,
+                                )
+                                boxes2 = results2[0].boxes
+                                n_det2 = len(boxes2) if boxes2 is not None else 0
+                            except Exception:
+                                pass
+                        else:
+                            try:
+                                _pil_m2 = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                                dets2_sv = model2_vid.predict(_pil_m2, threshold=conf_val)
+                                n_det2   = (len(dets2_sv.xyxy)
+                                             if hasattr(dets2_sv, "xyxy") and dets2_sv.xyxy is not None
+                                             else 0)
+                            except Exception:
+                                pass
 
                         from PIL import ImageFont as _IFont
                         _orig_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -5598,10 +6419,8 @@ class YoloTab(Frame):
                             except Exception:
                                 _ifont = _IFont.load_default()
 
-                        _C1 = (0, 200, 255)    # cyan  — Model 1
-                        _C2 = (240, 89, 34)    # cam KZTEK — Model 2
-
-                        _names1 = getattr(self.model, "names", {}) or {}
+                        _names1 = (_vid_m1_names if _vid_m1_type != "yolo"
+                                   else getattr(self.model, "names", {}) or {})
                         if boxes is not None and len(boxes):
                             for _b in boxes:
                                 _x1, _y1, _x2, _y2 = (int(v) for v in _b.xyxy[0])
@@ -5622,12 +6441,36 @@ class YoloTab(Frame):
                                     _draw_vid.text((_x1, max(_y1-fs-2, 0)),
                                                    _lbl, fill=_C1, font=_ifont)
 
-                        _names2 = getattr(model2_vid, "names", {}) or {}
-                        if boxes2 is not None and len(boxes2):
+                        _names2 = (_vid_m2_names if _vid_m2_type != "yolo"
+                                   else getattr(model2_vid, "names", {}) or {})
+                        if _vid_m2_type == "yolo" and boxes2 is not None and len(boxes2):
                             for _b in boxes2:
                                 _x1, _y1, _x2, _y2 = (int(v) for v in _b.xyxy[0])
                                 _cid  = int(_b.cls[0])
                                 _cf   = float(_b.conf[0])
+                                _lbl  = f"M2:{_names2.get(_cid, str(_cid))} {_cf:.2f}"
+                                _draw_vid.rectangle([_x1, _y1, _x2, _y2],
+                                                    outline=_C2, width=lw)
+                                try:
+                                    _tb = _draw_vid.textbbox((0, 0), _lbl, font=_ifont)
+                                    _tw, _th = _tb[2]-_tb[0], _tb[3]-_tb[1]
+                                    _ty = max(_y1-_th-4, 0)
+                                    _draw_vid.rectangle([_x1, _ty, _x1+_tw+6, _ty+_th+4],
+                                                        fill=_C2)
+                                    _draw_vid.text((_x1+3, _ty+2), _lbl,
+                                                   fill=_contrast_text(_C2), font=_ifont)
+                                except Exception:
+                                    _draw_vid.text((_x1, max(_y1-fs-2, 0)),
+                                                   _lbl, fill=_C2, font=_ifont)
+
+                        # M2 non-YOLO (sv.Detections)
+                        if dets2_sv is not None and hasattr(dets2_sv, "xyxy") and dets2_sv.xyxy is not None:
+                            _confs2 = getattr(dets2_sv, "confidence", None)
+                            _cids2  = getattr(dets2_sv, "class_id",  None)
+                            for _i2, _b2 in enumerate(dets2_sv.xyxy):
+                                _x1, _y1, _x2, _y2 = (int(v) for v in _b2)
+                                _cid  = int(_cids2[_i2])  if _cids2  is not None else 0
+                                _cf   = float(_confs2[_i2]) if _confs2 is not None else 0.0
                                 _lbl  = f"M2:{_names2.get(_cid, str(_cid))} {_cf:.2f}"
                                 _draw_vid.rectangle([_x1, _y1, _x2, _y2],
                                                     outline=_C2, width=lw)
@@ -5650,25 +6493,73 @@ class YoloTab(Frame):
                             for _cid in boxes.cls.tolist():
                                 _k = f"M1:{_names1.get(int(_cid), str(int(_cid)))}"
                                 _cnts[_k] = _cnts.get(_k, 0) + 1
-                        if boxes2 is not None:
+                        if _vid_m2_type == "yolo" and boxes2 is not None:
                             for _cid in boxes2.cls.tolist():
+                                _k = f"M2:{_names2.get(int(_cid), str(int(_cid)))}"
+                                _cnts[_k] = _cnts.get(_k, 0) + 1
+                        elif dets2_sv is not None and getattr(dets2_sv, "class_id", None) is not None:
+                            for _cid in dets2_sv.class_id:
                                 _k = f"M2:{_names2.get(int(_cid), str(int(_cid)))}"
                                 _cnts[_k] = _cnts.get(_k, 0) + 1
                         n_det      = n_det + n_det2
                         det_summary = "  ".join(f"{k}:{v}" for k, v in _cnts.items())
 
-                    else:
-                        # Single model — dùng results[0].plot() như cũ
+                      else:
+                        # Single YOLO model — dùng results[0].plot()
                         annotated_bgr = results[0].plot(line_width=lw, font_size=fs)
-                        if n_det > 0 and self.model and hasattr(self.model, "names"):
+                        if n_det > 0 and boxes is not None:
                             _cnts = {}
+                            _nm_m1 = getattr(self.model, "names", {}) or {}
                             for _cid in boxes.cls.tolist():
-                                _nm = self.model.names[int(_cid)]
-                                _cnts[_nm] = _cnts.get(_nm, 0) + 1
+                                _nm_key = _nm_m1.get(int(_cid), str(int(_cid)))
+                                _cnts[_nm_key] = _cnts.get(_nm_key, 0) + 1
                             det_summary = "  ".join(
                                 f"{k}:{v}" for k, v in _cnts.items())
                         else:
                             det_summary = ""
+
+                    else:
+                      # Non-YOLO M1 (RF-DETR / ONNX)
+                      _orig_rgb_nv = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                      _pil_nv = Image.fromarray(_orig_rgb_nv)
+                      dets1_nv = self.model.predict(_pil_nv, threshold=conf_val)
+                      n_det = (len(dets1_nv.xyxy)
+                                if hasattr(dets1_nv, "xyxy") and dets1_nv.xyxy is not None
+                                else 0)
+                      # Dùng _draw_sv_on_pil — cần self method, gọi trực tiếp
+                      _pil_nv_out = self._draw_sv_on_pil(_pil_nv, dets1_nv, _vid_m1_names)
+                      if model2_vid is not None:
+                          n_det2 = 0
+                          try:
+                              if _vid_m2_type == "rfdetr":
+                                  _pil_m2_nv = Image.fromarray(_orig_rgb_nv)
+                                  dets2_nv = model2_vid.predict(_pil_m2_nv, threshold=conf_val)
+                              else:
+                                  dets2_nv = model2_vid.predict(_pil_nv, threshold=conf_val)
+                              n_det2 = (len(dets2_nv.xyxy)
+                                         if hasattr(dets2_nv, "xyxy") and dets2_nv.xyxy is not None
+                                         else 0)
+                              _pil_nv_out = self._draw_sv_on_pil(
+                                  _pil_nv_out, dets2_nv, _vid_m2_names, _C2, "M2:")
+                          except Exception:
+                              dets2_nv = None
+                          _cnts = {}
+                          _cls_nv = getattr(dets1_nv, "class_id", None)
+                          if _cls_nv is not None:
+                              for _c in _cls_nv:
+                                  _k = f"M1:{_vid_m1_names.get(int(_c), str(int(_c)))}"
+                                  _cnts[_k] = _cnts.get(_k, 0) + 1
+                          n_det += n_det2
+                      else:
+                          _cnts = {}
+                          _cls_nv = getattr(dets1_nv, "class_id", None)
+                          if _cls_nv is not None:
+                              for _c in _cls_nv:
+                                  _nm_nv = _vid_m1_names.get(int(_c), str(int(_c)))
+                                  _cnts[_nm_nv] = _cnts.get(_nm_nv, 0) + 1
+                      det_summary   = "  ".join(f"{k}:{v}" for k, v in _cnts.items())
+                      annotated_bgr = cv2.cvtColor(np.array(_pil_nv_out), cv2.COLOR_RGB2BGR)
+                      # boxes = None (không hỗ trợ LPR overlay với non-YOLO video)
 
                 except Exception:
                     annotated_bgr = frame

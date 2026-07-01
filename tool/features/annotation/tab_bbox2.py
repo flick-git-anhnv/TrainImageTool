@@ -141,8 +141,10 @@ class BBoxEditorTab2(Frame):
         self._film_page         = 0
         self._film_max_page     = 0
 
-        # ── YOLO auto-detect ──────────────────────────────────────────────
+        # ── Auto-detect (YOLO / RF-DETR / ONNX) ──────────────────────────
         self._det_model       = None
+        self._det_model_type  = "yolo"   # "yolo" | "rfdetr" | "onnx"
+        self._det_model_names = {}
         self._det_model_path  = StringVar()
         self._det_conf_var    = DoubleVar(value=0.25)
         self._det_replace_var = BooleanVar(value=False)
@@ -2925,13 +2927,16 @@ class BBoxEditorTab2(Frame):
                 cell["img_lbl"].config(image=tk_img)
                 break
 
-    # ═══════════════════════════════════════════════════════ YOLO AUTO-DETECT ══
+    # ══════════════════════════════════════════════════ AUTO-DETECT (YOLO/DETR) ══
 
     def _browse_det_model(self):
         from tkinter import filedialog
         path = filedialog.askopenfilename(
-            title="Chọn file YOLO model (.pt)",
-            filetypes=[("PyTorch Model", "*.pt"), ("All files", "*.*")],
+            title="Chọn file model (.pt YOLO/RF-DETR hoặc .onnx)",
+            filetypes=[("Model files", "*.pt *.onnx"),
+                       ("PyTorch Model", "*.pt"),
+                       ("ONNX Model", "*.onnx"),
+                       ("All files", "*.*")],
             parent=self.root)
         if not path:
             return
@@ -2943,42 +2948,150 @@ class BBoxEditorTab2(Frame):
     def _load_det_model(self, path: str):
         if not path or not os.path.isfile(path):
             return
-        try:
-            from ultralytics import YOLO as _YOLO
-        except ImportError:
-            messagebox.showerror("Thiếu thư viện", "pip install ultralytics", parent=self.root)
-            return
         self._det_model_lbl.config(text=f"⏳ {os.path.basename(path)}…", fg=DIM)
         self._btn_detect.config(state="disabled")
 
         def _do():
             try:
-                mdl = _YOLO(path)
-                self.root.after(0, lambda: self._on_det_model_loaded(path, mdl, None))
+                mdl, names, mtype = self._auto_load_det_model(path)
+                self.root.after(0, lambda: self._on_det_model_loaded(path, mdl, names, mtype, None))
             except Exception as e:
-                self.root.after(0, lambda err=str(e): self._on_det_model_loaded(path, None, err))
+                self.root.after(0, lambda err=str(e): self._on_det_model_loaded(path, None, {}, "yolo", err))
 
         import threading
         threading.Thread(target=_do, daemon=True).start()
 
-    def _on_det_model_loaded(self, path: str, mdl, err):
+    def _auto_load_det_model(self, path: str):
+        """Tự phân biệt YOLO / RF-DETR / ONNX, trả về (model, names, mtype)."""
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".onnx":
+            try:
+                import onnxruntime as ort
+            except ImportError:
+                raise ImportError("pip install onnxruntime")
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            session   = ort.InferenceSession(path, providers=providers)
+            inp       = session.get_inputs()[0]
+            shape     = inp.shape
+            inp_h = int(shape[2]) if len(shape) > 2 and isinstance(shape[2], int) and shape[2] > 0 else 640
+            inp_w = int(shape[3]) if len(shape) > 3 and isinstance(shape[3], int) and shape[3] > 0 else 640
+            out_names = [o.name for o in session.get_outputs()]
+
+            class _Runner:
+                _MEAN = [0.485, 0.456, 0.406]
+                _STD  = [0.229, 0.224, 0.225]
+                def __init__(self_r):
+                    self_r.session = session
+                    self_r.input_name = inp.name
+                    self_r.input_h = inp_h
+                    self_r.input_w = inp_w
+                    self_r.output_names = out_names
+                    self_r.names = {}
+                def predict(self_r, pil_img, threshold=0.25):
+                    import numpy as _np
+                    from PIL import Image as _Img
+                    if hasattr(pil_img, "convert"):
+                        pil = pil_img.convert("RGB")
+                    else:
+                        pil = _Img.fromarray(pil_img).convert("RGB")
+                    ow, oh = pil.size
+                    pil_r = pil.resize((self_r.input_w, self_r.input_h))
+                    arr   = _np.array(pil_r, dtype=_np.float32) / 255.0
+                    arr   = (arr - _np.array(self_r._MEAN, dtype=_np.float32)) / _np.array(self_r._STD, dtype=_np.float32)
+                    arr   = arr.transpose(2, 0, 1)[_np.newaxis]
+                    outs  = self_r.session.run(self_r.output_names, {self_r.input_name: arr})
+                    return self_r._parse(outs, ow, oh, threshold)
+                def _parse(self_r, outs, orig_w, orig_h, threshold):
+                    import numpy as _np
+                    def _sigmoid(x): return 1.0 / (1.0 + _np.exp(-_np.clip(x, -88, 88)))
+                    if len(outs) >= 2:
+                        try:
+                            a0, a1 = _np.array(outs[0]), _np.array(outs[1])
+                            if a0.ndim == 3 and a1.ndim == 3 and a0.shape[-1] > 1 and a1.shape[-1] == 4:
+                                logits = _sigmoid(a0[0])
+                                scores = logits.max(axis=1)
+                                labels = logits.argmax(axis=1)
+                                bx = a1[0]
+                                x1 = (bx[:,0] - bx[:,2]/2) * orig_w
+                                y1 = (bx[:,1] - bx[:,3]/2) * orig_h
+                                x2 = (bx[:,0] + bx[:,2]/2) * orig_w
+                                y2 = (bx[:,1] + bx[:,3]/2) * orig_h
+                                mask = scores >= threshold
+                                xyxy = _np.clip(_np.stack([x1,y1,x2,y2], axis=1)[mask], 0, None)
+                                return _Det(xyxy, scores[mask], labels[mask])
+                        except Exception:
+                            pass
+                    if len(outs) >= 1:
+                        try:
+                            o0 = _np.array(outs[0]).squeeze()
+                            if o0.ndim == 2 and o0.shape[-1] >= 6:
+                                mask = o0[:,4] >= threshold
+                                o0 = o0[mask]
+                                xyxy = o0[:,:4]
+                                if xyxy.size and xyxy.max() <= 1.5:
+                                    xyxy = xyxy * [orig_w, orig_h, orig_w, orig_h]
+                                return _Det(xyxy, o0[:,4], o0[:,5].astype(int))
+                        except Exception:
+                            pass
+                    return _Det(_np.empty((0,4), dtype=_np.float32),
+                                _np.empty(0, dtype=_np.float32),
+                                _np.empty(0, dtype=_np.int32))
+
+            class _Det:
+                def __init__(self_d, xyxy, confidence, class_id):
+                    self_d.xyxy = xyxy
+                    self_d.confidence = confidence
+                    self_d.class_id   = class_id
+                def __len__(self_d): return len(self_d.xyxy)
+
+            runner = _Runner()
+            return runner, {}, "onnx"
+
+        yolo_err = None
+        try:
+            from ultralytics import YOLO as _YOLO
+            mdl   = _YOLO(path)
+            names = dict(mdl.names) if hasattr(mdl, "names") else {}
+            return mdl, names, "yolo"
+        except ImportError:
+            yolo_err = ImportError("pip install ultralytics")
+        except Exception as e:
+            yolo_err = e
+        try:
+            from rfdetr import RFDETRBase as _RFDETR
+            mdl   = _RFDETR(pretrain_weights=path)
+            names = {}
+            if hasattr(mdl, "model") and hasattr(mdl.model, "names"):
+                raw = mdl.model.names
+                names = ({i: n for i, n in enumerate(raw)}
+                         if isinstance(raw, (list, tuple)) else dict(raw))
+            return mdl, names, "rfdetr"
+        except ImportError:
+            pass
+        if yolo_err:
+            raise yolo_err
+        raise ImportError("pip install ultralytics  hoặc  pip install rfdetr")
+
+    def _on_det_model_loaded(self, path: str, mdl, names: dict, mtype: str, err):
         self._btn_detect.config(state="normal")
         if err:
             self._det_model_lbl.config(text="✗ Lỗi load", fg=ACCENT)
             messagebox.showerror("Lỗi load model", err, parent=self.root)
             return
-        self._det_model = mdl
+        self._det_model       = mdl
+        self._det_model_type  = mtype
+        self._det_model_names = names
         name = os.path.basename(path)
-        classes = ""
-        if hasattr(mdl, "names") and mdl.names:
-            classes = f" [{len(mdl.names)}cls]"
-        self._det_model_lbl.config(text=f"✓ {name}{classes}", fg="#4caf50")
+        tag  = {"rfdetr": " [DETR]", "onnx": " [ONNX]"}.get(mtype, "")
+        n_cls = len(names)
+        cls_info = f" [{n_cls}cls]" if n_cls else ""
+        self._det_model_lbl.config(text=f"✓ {name}{tag}{cls_info}", fg="#4caf50")
 
     def _run_detect(self):
         path = self._det_model_path.get().strip()
         if not path:
             messagebox.showwarning("Chưa chọn model",
-                                   "Vui lòng chọn file model YOLO (.pt).", parent=self.root)
+                                   "Vui lòng chọn file model (.pt hoặc .onnx).", parent=self.root)
             return
         if self._pil_img is None:
             messagebox.showwarning("Chưa có ảnh",
@@ -2996,19 +3109,29 @@ class BBoxEditorTab2(Frame):
 
         import threading
         import numpy as np
-        conf    = self._det_conf_var.get()
-        model   = self._det_model
-        img_arr = np.array(self._pil_img)
+        conf      = self._det_conf_var.get()
+        model     = self._det_model
+        mtype     = self._det_model_type
+        pil_copy  = self._pil_img.copy()
+        img_arr   = np.array(pil_copy)
 
         def _do():
             try:
-                results = model.predict(img_arr, conf=conf, verbose=False)
                 boxes = []
-                if results and results[0].boxes is not None:
-                    for box in results[0].boxes:
-                        cid = int(box.cls[0])
-                        x1, y1, x2, y2 = box.xyxy[0].tolist()
-                        boxes.append([cid, x1, y1, x2, y2])
+                if mtype == "yolo":
+                    results = model.predict(img_arr, conf=conf, verbose=False)
+                    if results and results[0].boxes is not None:
+                        for box in results[0].boxes:
+                            cid = int(box.cls[0])
+                            x1, y1, x2, y2 = box.xyxy[0].tolist()
+                            boxes.append([cid, x1, y1, x2, y2])
+                else:
+                    dets = model.predict(pil_copy, threshold=conf)
+                    if dets and len(dets) > 0:
+                        for i in range(len(dets.xyxy)):
+                            cid = int(dets.class_id[i]) if dets.class_id is not None else 0
+                            x1, y1, x2, y2 = dets.xyxy[i].tolist()
+                            boxes.append([cid, x1, y1, x2, y2])
                 self.root.after(0, lambda b=boxes: self._on_detect_done(b, None))
             except Exception as e:
                 self.root.after(0, lambda err=str(e): self._on_detect_done([], err))
@@ -3059,7 +3182,7 @@ class BBoxEditorTab2(Frame):
         """Chạy model detect rồi so sánh với label hiện tại (không thay đổi label)."""
         path = self._det_model_path.get().strip()
         if not path:
-            messagebox.showwarning("Chưa chọn model", "Chọn file model YOLO (.pt).", parent=self.root)
+            messagebox.showwarning("Chưa chọn model", "Chọn file model (.pt hoặc .onnx).", parent=self.root)
             return
         if self._pil_img is None:
             messagebox.showwarning("Chưa có ảnh", "Vui lòng tải ảnh trước.", parent=self.root)
@@ -3075,20 +3198,31 @@ class BBoxEditorTab2(Frame):
 
         import threading
         import numpy as np
-        conf    = self._det_conf_var.get()
-        model   = self._det_model
-        img_arr = np.array(self._pil_img)
+        conf      = self._det_conf_var.get()
+        model     = self._det_model
+        mtype     = self._det_model_type
+        pil_copy  = self._pil_img.copy()
+        img_arr   = np.array(pil_copy)
 
         def _do():
             try:
-                results = model.predict(img_arr, conf=conf, verbose=False)
                 boxes = []
-                if results and results[0].boxes is not None:
-                    for box in results[0].boxes:
-                        cid      = int(box.cls[0])
-                        x1, y1, x2, y2 = box.xyxy[0].tolist()
-                        conf_val = float(box.conf[0])
-                        boxes.append([cid, x1, y1, x2, y2, conf_val])
+                if mtype == "yolo":
+                    results = model.predict(img_arr, conf=conf, verbose=False)
+                    if results and results[0].boxes is not None:
+                        for box in results[0].boxes:
+                            cid      = int(box.cls[0])
+                            x1, y1, x2, y2 = box.xyxy[0].tolist()
+                            conf_val = float(box.conf[0])
+                            boxes.append([cid, x1, y1, x2, y2, conf_val])
+                else:
+                    dets = model.predict(pil_copy, threshold=conf)
+                    if dets and len(dets) > 0:
+                        for i in range(len(dets.xyxy)):
+                            cid      = int(dets.class_id[i]) if dets.class_id is not None else 0
+                            x1, y1, x2, y2 = dets.xyxy[i].tolist()
+                            conf_val = float(dets.confidence[i]) if dets.confidence is not None else conf
+                            boxes.append([cid, x1, y1, x2, y2, conf_val])
                 self.root.after(0, lambda b=boxes: self._on_verify_done(b, None))
             except Exception as e:
                 self.root.after(0, lambda err=str(e): self._on_verify_done([], err))
