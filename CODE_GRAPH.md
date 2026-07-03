@@ -1,5 +1,5 @@
 # CODE_GRAPH.md — KZTEK Image Tools
-<!-- Cập nhật: 2026-07-03 | YOLO Detect: test model Segment (viền polygon, màu theo instance khi 1 class, hiện thời gian nhận dạng ⏱); YOLO Train: thêm model Segment (yolo11*-seg.pt) vào dropdown Model -->
+<!-- Cập nhật: 2026-07-03 | Segment tab: FIX phím tắt (bỏ root.bind_all riêng cho Ctrl+O/S/Z/Delete/Escape/◀▶ — bị WebImageTab tạo sau ghi đè; thêm alias method để App._global_* dispatcher tìm thấy); FIX chọn/kéo nhầm segment lớn khi 2 segment chồng nhau (ưu tiên diện tích nhỏ nhất chứa điểm click); FIX segment nhỏ bị đè khuất (vẽ segment đang chọn sau cùng + viền trắng nổi bật); thêm PanedWindow kéo được cho panel trái/phải; "Auto-tách segment"/"Auto-tách TẤT CẢ bbox" dùng bbox làm khung SAM/CV Box tự động | Refactor tab_yolo.py (7017→195 dòng) thành 17 file mixin/helper (yolo_*.py), theo pattern IParkingImageTab -->
 
 ## Hướng dẫn sử dụng
 
@@ -18,7 +18,7 @@ train-image-tool.py
 tool/core/app.py (App)
     → tool.core.{constants, settings, ui_helpers, imports}
     → tool.features.dataset.{tab_split, tab_rename, tab_crop, tab_labelnorm}
-    → tool.features.annotation.{tab_bbox, tab_checker, tab_ocr}
+    → tool.features.annotation.{tab_bbox, tab_segment, tab_checker, tab_ocr}
     → tool.features.collection.tab_iparking_image
     → tool.features.collection.tab_web_image
     → tool.features.analysis.{tab_stats, tab_plate_search}
@@ -156,9 +156,9 @@ Class: `App(Tk)`
 | `App._global_delete_key/return/space/left/right/f1` | Dispatcher phím tắt điều hướng |
 | `App._on_close()` | Lưu config rồi thoát app |
 
-Tab đã đăng ký (theo thứ tự, 15 tab):
-`SplitTab`, `RenameTab`, `CropByLabelTab`, `LabelNormTab`, `BBoxEditorTab`,
-`IParkingImageTab`, `CheckerTab`, `StatsTab`, `PlateSearchTab`,
+Tab đã đăng ký (theo thứ tự trong `_tab_defs`, xem `app.py` để biết danh sách đầy đủ hiện tại):
+`SplitTab`, `RenameTab`, `CropByLabelTab`, `LabelNormTab`, `BBoxEditorTab`, `BBoxEditorTab2`,
+`SegmentTab`, `IParkingImageTab`, `WebImageTab`, `CheckerTab`, `StatsTab`, `PlateSearchTab`,
 `YoloTab`, `TrainTab`, `ClassifierTrainTab`, `LprTesterTab`, `SlotClassifierTab`, `ClassifierTesterTab`
 
 ---
@@ -289,6 +289,25 @@ Tab đã đăng ký (theo thứ tự, 15 tab):
 | `.filter_files(files, *, cls_filter, ndet_min, ndet_max, area_min, area_max, w_min, w_max, h_min, h_max, must_have, must_not)` | Lọc file theo cache |
 | `.all_class_counts()` | `{cid: count}` tổng hợp |
 
+#### `tool/shared/sam_utils.py`
+| Symbol | Mô tả |
+|---|---|
+| `run_sam_points(model, img, pts_labels)` | SAM inference point-prompt → list polygon points |
+| `run_sam_box(model, img, x1, y1, x2, y2)` | SAM inference box-prompt → list polygon points |
+| `simplify(pts, epsilon_pct)` | Douglas-Peucker (`cv2.approxPolyDP`) đơn giản hóa polygon; fallback stride-sampling nếu thiếu cv2 |
+
+#### `tool/shared/cv_segment.py`
+| Symbol | Mô tả |
+|---|---|
+| `compute_edge_mask(img, blur_ksize, canny_low, canny_high)` | Bản đồ biên nhị phân: GaussianBlur (thông thấp) → Canny (thông cao) → dilate nối biên đứt |
+| `empty_mask_like(edge_mask)` | Mask rỗng cùng shape, dùng làm accumulator ban đầu |
+| `flood_region_mask(edge_mask, x, y)` | Flood-fill vùng liên thông bị bao kín bởi biên, chứa điểm (x,y); `None` nếu điểm nằm trên biên/ngoài ảnh |
+| `mask_to_polygon(mask, close_ksize=15)` | Contour của mask → 1 polygon; morphological CLOSE nối các đảo rời rạc gần nhau, nếu vẫn nhiều mảnh thì gộp bằng `convexHull` → luôn trả về đúng 1 polygon |
+| `run_cv_edge_segment(img, click_x, click_y, *, blur_ksize, canny_low, canny_high, min_area)` | Tiện ích 1-click: kết hợp 3 hàm trên cho 1 điểm duy nhất |
+| `run_grabcut_box(img, x1, y1, x2, y2, iterations=5, pad_ratio=0.15)` | **Tự động, không cần chỉnh tham số**: kéo khung quanh object → `cv2.grabCut` tách foreground/background (xử lý trên crop quanh khung + đệm `pad_ratio` để nhanh hơn ảnh gốc) → trả mask cùng kích thước ảnh gốc |
+
+⇢ Được dùng bởi: `tab_segment.py` — mode "🟩 CV Box" dùng `run_grabcut_box` (tự động hoàn toàn); mode "🌀 CV Edge" dùng `compute_edge_mask`/`flood_region_mask`/`mask_to_polygon`/`empty_mask_like` qua `_start_cv_drag`/`_grow_cv_mask` để tinh chỉnh thủ công (kéo=cộng, Shift+kéo=trừ)
+
 #### `tool/shared/filmstrip.py`
 | Symbol | Mô tả |
 |---|---|
@@ -338,6 +357,48 @@ Tab đã đăng ký (theo thứ tự, 15 tab):
 | `_restore_session()` | Khởi động: auto load folder + jump tới ảnh cuối cùng đã mở |
 | `_do_restore_nav()` | Điều hướng đến `_restore_img` sau khi async filter hoàn thành |
 | `_relabel_batch()` | Đổi nhãn hàng loạt: thay class_id từ → đến trong tất cả file label của bộ lọc hiện tại; reload ảnh đang mở nếu bị ảnh hưởng |
+
+---
+
+#### `tab_segment.py` → Class `SegmentTab(Frame, CanvasZoomMixin)`
+Annotation tool tạo nhãn polygon (YOLO-Seg: `class x1 y1 x2 y2 … xn yn`). 6 mode vẽ (Radiobutton `_mode_var`): `draw` (click từng điểm), `edit` (kéo điểm), `sam`/`sam_box` (SAM click/box prompt), `cv_box` (**GrabCut tự động** — kéo khung, không cần chỉnh tham số), `cv` (CV Edge — Quick Selection thủ công, click+kéo cộng/trừ vùng).
+
+| Method | Mô tả |
+|---|---|
+| `_build_toolbar` | Thư mục ảnh, Class combobox, mode radio (Vẽ/Sửa/SAM/SAM Box/CV Box/CV Edge), nav ảnh (theo danh sách đã lọc), Lưu |
+| `_build_lbl_dir_row` | Ô **"Thư mục label (tùy chọn)"** (giống BBox Editor `lbl_dir_var`) — để trống thì đọc/ghi `.txt` cạnh ảnh; đổi giá trị → `_on_lbl_dir_change` tự reload nhãn ảnh đang mở |
+| `_build_left` | Danh sách ảnh + **bộ đếm** (`_img_count_lbl`, dạng "N/M ảnh") + filter **Tên** (debounce 250ms) + filter **"Chỉ hiện chưa có nhãn"** — giống panel trái BBox Editor |
+| `_build_canvas` | Bọc canvas trong `wrap` + thanh công cụ riêng phía trên: nút **− / Fit% / +** zoom (dùng `_zoom_step`/`_zoom_reset` có sẵn từ `CanvasZoomMixin`), nhãn `_zoom_lbl` cập nhật trong `_render()` |
+| `_build_sam_bar` | Nút load `mobile_sam.pt`/`sam_b.pt`/file .pt tùy chọn + slider Simplify (dùng chung cho SAM và CV) |
+| `_build_cv_bar` | Thanh tham số **CV Edge** (Blur kernel, Canny thấp/cao, Min area px²) — chỉ ảnh hưởng mode `cv`; mode `cv_box` không cần tham số nào |
+| `_label_path_for(img_path)` | Trả về đường dẫn `.txt` cho 1 ảnh bất kỳ, ưu tiên `_lbl_dir_var` nếu có set — dùng bởi `_lbl_path()` (ảnh hiện tại) và `_apply_filters()` (quét tất cả ảnh) |
+| `_schedule_filter` / `_apply_filters` | Debounce 250ms cho filter Tên; `_apply_filters` quét `_img_files` → `_filtered_idx`, populate lại `_img_lb`, cập nhật `_img_count_lbl` — điều hướng (`_on_list_sel`/`_prev_img`/`_next_img`/`_load_img`) đều thao tác trên `_filtered_idx`, không phải index thô vào `_img_files` |
+| `_load_dir` / `_load_img` | Quét thư mục ảnh (gọi `_apply_filters` để populate danh sách), load ảnh theo index tuyệt đối trong `_img_files`. **Thứ tự bắt buộc**: `_load_labels()` PHẢI chạy trước `_zoom_reset()` (render) — nếu render trước sẽ vẽ nhầm segment ảnh cũ lên ảnh mới (bug đã fix) |
+| `_load_labels` | Đọc `.txt` cạnh ảnh — nhận cả segment (>=7 phần tử) lẫn **bbox YOLO thô (đúng 5 phần tử: `cid cx cy w h`) → tự động quy đổi thành polygon hình chữ nhật 4 điểm**, gán vào `self._n_from_bbox` để hiện trong status. Nhờ vậy nhãn bbox có sẵn (từ BBox Editor) không bị mất khi mở bằng Segment tab và Lưu đè |
+| `_save` | Ghi `_segments` → `.txt` YOLO-Seg cạnh ảnh |
+| `_point_in_poly(px, py, poly)` | @static: ray-casting kiểm tra điểm nằm trong đa giác |
+| `_try_start_edit_drag(e) -> bool` | Hit-test: click trúng 1 điểm (ưu tiên) → kéo điểm đó (`_drag=(si,vi,...)`); không trúng điểm nhưng nằm trong thân 1 segment → chọn + kéo **cả segment** (`_drag=(si,None,...)`), ưu tiên segment có **diện tích nhỏ nhất** trong số các segment chứa điểm click (fix chọn nhầm segment lớn khi có segment nhỏ lồng bên trong, ví dụ license_plate nằm trong motorcycle); không trúng gì → `False`. Dùng chung bởi mode `edit` VÀ tự động bởi mode `draw` (xem `_on_click`) |
+| `_bind_shortcuts` | CHỈ bind phím số 0-9 (`root.bind_all`, không tab nào khác dùng chữ số nên an toàn). Ctrl+O/S/Z, Delete, Escape, ◀▶ KHÔNG tự `root.bind_all` nữa (từng bị `WebImageTab` tạo sau ghi đè `<Escape>`) — thay bằng alias method `_browse`/`_undo`/`_delete_selected`/`_stop`/`_prev_image`/`_next_image` để `App._global_*` (bind trên toplevel, không xung đột giữa các tab) tự tìm thấy và dispatch đúng |
+| `_render` (z-order) | Vẽ segment đang chọn (`_sel`) SAU CÙNG (`order = sorted(range(n), key=lambda i: i==_sel)`) + viền trắng dày đè thêm — đảm bảo segment nhỏ đang chọn không bị segment lớn khác che khuất khi chồng lấn |
+| `_on_click` | Dispatch theo mode: **`draw`** — nếu chưa vẽ dở và `_try_start_edit_drag` trúng thì tự chuyển sang sửa (không cần bấm đổi radio "Sửa"), ngược lại thêm điểm polygon mới; `edit` — luôn gọi `_try_start_edit_drag`; sam click / sam_box & cv_box bắt đầu kéo khung / cv bắt đầu drag flood-fill |
+| `_on_drag` | mode `edit`/`draw` với `_drag` đã set: `vi is None` → dịch **cả segment** theo delta chuột (tính bằng tọa độ ảnh, không phụ thuộc zoom); `vi` là số → di chuyển đúng điểm đó (như cũ) |
+| `_on_right_click` | `sam`/`cv`/`cv_box` có `_preview_poly` → xác nhận; ngược lại đóng polygon vẽ tay |
+| `_confirm_preview` | Thêm `_preview_poly` vào `_segments`, dùng chung cho SAM/CV Edge/CV Box |
+| `_fire_sam` / `_run_sam_thread` / `_after_sam` | Chạy SAM (thread) → set `_preview_poly` chờ xác nhận |
+| `_fire_cv_box` / `_run_cv_box_thread` / `_after_cv_box` | Thả chuột xong khung (mode `cv_box`) → chạy `cv_segment.run_grabcut_box` (thread, tự động — không tham số) → set `_cv_mask`/`_preview_poly` |
+| `_start_cv_drag(e, subtract=False)` | Click đầu tiên mode `cv` (hoặc Shift+click qua `_on_shift_click`): tính `_cv_edges` (compute_edge_mask) + khởi tạo `_cv_mask` nếu chưa có (giữ nguyên mask cũ nếu đến từ CV Box để tinh chỉnh tiếp), gọi `_grow_cv_mask` |
+| `_grow_cv_mask(ix, iy, subtract=False)` | Flood-fill vùng bao kín chứa điểm hiện tại; **cộng** (OR) hoặc **trừ** (AND NOT) vào `_cv_mask`; cập nhật `_preview_poly` từ `mask_to_polygon(_cv_mask)`. Gọi liên tục khi kéo chuột (đọc `e.state & 0x0001` mỗi frame để biết đang giữ Shift) — kiểu Quick Selection Photoshop |
+| `_render` | Vẽ segments đã lưu + polygon đang vẽ + preview (SAM/CV, vàng nhạt) + khung kéo (SAM Box/CV Box, tọa độ được sort trước khi vẽ — tránh lỗi PIL khi kéo khung ngược hướng) + SAM points |
+| `_on_numkey_label(n)` | Phím 0-9: chọn class n trong combobox; nếu có segment đang chọn (`_sel`) → relabel ngay (giống BBoxEditorTab) |
+| `_simplify_selected` | Áp `_simplify()` (Douglas-Peucker, theo slider Simplify) lại cho RIÊNG segment đang chọn — tăng/giảm số điểm polygon ("đổi độ phân giải") mà không cần vẽ lại |
+| `_auto_refine_selected` / `_auto_refine_all_bbox` / `_auto_refine_next` / `_start_auto_refine` | Dùng bbox (hộp bao) của segment đang chọn — hoặc TẤT CẢ segment còn trong `_bbox_derived` (bbox thô chưa tinh chỉnh) — làm khung cho `run_sam_box` (nếu đã load SAM) hoặc `run_grabcut_box` (fallback) để tự động tách polygon chính xác, **không cần kéo vẽ lại khung SAM Box/CV Box bằng tay**; `_auto_refine_all_bbox` xử lý tuần tự qua `_auto_refine_queue` |
+| `_run_auto_refine_sam` / `_run_auto_refine_cv` / `_after_auto_refine` | Worker thread + callback; **`eps` (Simplify) phải đọc ở main thread rồi truyền vào thread** — đọc Tkinter Var trực tiếp trong thread nền từng gây `RuntimeError: main thread is not in main loop` |
+| `_bbox_derived: set[int]` | Index trong `_segments` còn là bbox thô (rect 4 điểm, chưa auto-tách) của ảnh hiện tại — set lại mỗi lần `_load_labels()`, gỡ dần khi `_after_auto_refine` xử lý xong |
+| `_delete_seg` / `_undo_pt` / `_cancel` | Xóa segment / hoàn tác điểm / hủy thao tác đang dở (reset cả `_cv_mask`) |
+
+`_preview_poly: list|None` — polygon chờ xác nhận, dùng chung cho SAM/CV Edge/CV Box (chuột phải xác nhận, Esc hủy)
+`_cv_mask` — mask tích lũy dùng chung giữa CV Box (khởi tạo bằng GrabCut) và CV Edge (cộng/trừ tiếp bằng flood-fill) — cho phép quy trình: kéo khung CV Box lấy kết quả nhanh, rồi chuyển CV Edge tinh chỉnh viền
+Import: `...shared.canvas_zoom.CanvasZoomMixin`, `...shared.sam_utils.{run_sam_points, run_sam_box, simplify}`, `...shared.cv_segment.{compute_edge_mask, flood_region_mask, mask_to_polygon, empty_mask_like, run_grabcut_box}`
 
 ---
 
@@ -397,79 +458,201 @@ Yêu cầu: `_PADDLE_OK`
 
 ### tool/features/detection/
 
-#### `tab_yolo.py` → Class `YoloTab(Frame)`
+> **Mixin architecture (2026-07-03):** `tab_yolo.py` đã được refactor từ **7017 → 195 dòng**.
+> Toàn bộ ~180 method được tách sang 17 file sibling trong cùng thư mục (2 file helper thuần
+> không phụ thuộc `self` + 15 mixin); `YoloTab` kế thừa đa (multiple inheritance):
+> ```
+> YoloTab(Frame, YoloModelMixin, YoloImageListMixin, YoloReviewMixin,
+>         YoloNavMixin, YoloCanvasMixin, YoloGridMixin, YoloCacheMixin,
+>         YoloRenderMixin, YoloDetectMixin, YoloDetectAllMixin,
+>         YoloLprMixin, YoloEvalMixin, YoloEvalValidateMixin,
+>         YoloVideoMixin, YoloVideoWindowMixin, YoloLayoutMixin)
+> ```
+> `tab_yolo.py` chỉ còn: import + khai báo class + `__init__` + `_build` + `_build_statusbar`.
+> Các flag optional-dependency (`_PIL_OK`, `_CV2_OK`, `_YOLO_OK`, `_RFDETR_OK`, `_DND_OK`,
+> `_REQ_OK`, `_YTDLP_OK`) **không** import xuyên module (tránh circular import) — mỗi file mixin
+> tự khai báo `try/except ImportError` riêng cho thư viện nó cần, giống pattern gốc.
+> `_detect_mixin`, `_eval_mixin`, `_video_mixin` mỗi cái còn được tách tiếp làm 2 file vì gộp
+> chung sẽ vượt giới hạn cứng 800 dòng/file — `YoloVideoWindowMixin` (~823L) là ngoại lệ duy nhất
+> còn vượt nhẹ, do chứa nguyên vẹn 1 method gốc `_launch_video_window` dài ~789 dòng (nhiều
+> closure lồng nhau) — không thể chia nhỏ thân hàm mà không đổi logic.
+
+#### `yolo_onnx.py` — helper thuần (không dùng `self`)
+| Class / Hằng số | Mô tả |
+|---|---|
+| `_OnnxDetResult` | Container kết quả inference ONNX, interface giống `sv.Detections` |
+| `_OnnxRunner` | Chạy ONNX detection bằng `onnxruntime`, tự đọc input/output shape |
+| `_contrast_text(bg_rgb)` | Trả về đen/trắng tuỳ độ sáng nền — dùng vẽ label tương phản |
+| `_THUMB_PALETTE` | Bảng màu cố định cho thumbnail theo class id |
+| `_REVIEW_ICON` | `{"correct": "✓", "incorrect": "✗", "": "○"}` |
+
+⇢ Dùng bởi: `yolo_model_mixin`, `yolo_cache_mixin`, `yolo_grid_mixin`, `yolo_render_mixin`,
+`yolo_video_window_mixin`, `yolo_imagelist_mixin`, `yolo_review_mixin`, `yolo_lpr_mixin`
+
+#### `yolo_utils.py` — helper thuần dùng chung ≥2 mixin
+| Hàm | Mô tả |
+|---|---|
+| `_path_review_state(path)` | `'correct'/'incorrect'/''` dựa theo tên folder cha (`true`/`false`) |
+| `_iou_xywhn(...)` | IoU giữa 2 box dạng `(cx, cy, w, h)` normalized |
+
+⇢ Dùng bởi: `yolo_imagelist_mixin`, `yolo_grid_mixin` (`_path_review_state`); `yolo_eval_mixin`,
+`yolo_eval_validate_mixin` (`_iou_xywhn`)
+
+#### `yolo_model_mixin.py` → Mixin `YoloModelMixin`
 | Method | Mô tả |
 |---|---|
-| `_load_model` | Load YOLO model |
-| `_select_image` | Chọn ảnh |
-| `_run_detection` | Chạy detect 1 ảnh |
-| `_draw_boxes` | Vẽ kết quả |
-| `_batch_process` | Detect hàng loạt |
-| `_detect_all` | Detect toàn bộ ảnh, lưu cache, có nút Dừng |
-| `_on_detect_all_progress` | Cập nhật UI theo tiến độ detect all |
-| `_on_detect_all_done` | Kết thúc detect all |
+| `_select_model` / `_select_model2` / `_select_model3` | Chọn file model 1/2/3 |
+| `_on_model2_loaded` / `_on_model3_loaded` | Callback sau khi load xong model 2/3 |
+| `_clear_model2` / `_clear_model3` | Bỏ model 2/3 |
+| `_auto_load_pt` | Tự dò loại model (YOLO/RF-DETR/ONNX) từ đuôi file, load qua `_OnnxRunner` nếu `.onnx` |
+| `_load_model` / `_on_model_loaded` | Load model 1 (thread nền) |
+| `_auto_load_model` | Tự load model đã lưu trong config khi mở tab |
+| `_auto_restore_session` | Khôi phục folder + ảnh cuối (`yolo.session.*`) |
+| `_update_class_list` / `_update_path_combo` | Cập nhật UI sau khi có model/class list |
+
+#### `yolo_imagelist_mixin.py` → Mixin `YoloImageListMixin`
+| Method | Mô tả |
+|---|---|
+| `_on_drop` | Xử lý drag-drop file/folder vào canvas |
+| `_load_path_input` / `_select_image` / `_select_folder` / `_open_check_folder` | Nhập đường dẫn / chọn ảnh / chọn thư mục |
+| `_scan_images` / `_load_folder` / `_load_image_list` | Quét & load danh sách ảnh (hỗ trợ subfolder) |
+| `_rebuild_tree` | Build lại Treeview sidebar (icon review state) |
+| `_schedule_search` / `_toggle_search_hint` / `_do_search` | Tìm kiếm ảnh theo tên (debounce) |
+| `_apply_filter` / `_update_filter_counts` | Lọc all/correct/incorrect/chưa review |
+
+#### `yolo_review_mixin.py` → Mixin `YoloReviewMixin`
+| Method | Mô tả |
+|---|---|
+| `_save_image_and_label` / `_save_page_image` | Lưu ảnh + nhãn YOLO ra thư mục review |
+| `_mark_page_correct` / `_mark_page_incorrect` / `_mark_review` | Đánh dấu review đúng/sai, cập nhật `_review_state` |
+
+#### `yolo_nav_mixin.py` → Mixin `YoloNavMixin`
+| Method | Mô tả |
+|---|---|
+| `_open_image` / `_is_active` | Mở ảnh hiện tại, check tab đang active |
+| `_bind_keys` | Bind phím tắt điều hướng (←/→, Delete, Enter…) |
+| `_prev_image` / `_next_image` / `select_image` / `_nav_image` / `_on_image_select` | Điều hướng ảnh |
+| `_run_detect` / `_on_delete` / `_on_return` / `_copy_path` / `_restore_result_label` | Action theo phím tắt |
+| `_toggle_autoplay` / `_schedule_autoplay` / `_autoplay_step` | Auto-play qua các ảnh |
+
+#### `yolo_canvas_mixin.py` → Mixin `YoloCanvasMixin`
+| Method | Mô tả |
+|---|---|
+| `_on_canvas1_zoom` / `_on_canvas2_zoom` | Zoom riêng từng canvas so sánh model |
+| `_render_display` | Vẽ `_pil1_full`/`_pil2_full` lên canvas theo `_zoom_factor`/`_img_pos` |
+| `_on_canvas_configure` | Resize canvas → refit |
+| `_on_pan_press/_drag` | Kéo chuột trái để pan |
+| `_on_mmb_press/_drag/_release` | Pan bằng chuột giữa |
+| `_zoom_step` / `_on_canvas_scroll` | Zoom in/out/fit bằng scroll chuột |
+
+#### `yolo_grid_mixin.py` → Mixin `YoloGridMixin`
+| Method | Mô tả |
+|---|---|
+| `_build_grid_panel` | Build thumbnail grid UI, dùng `GridPageNav` (`tool/core/ui_helpers.py`) |
+| `_reflow_grid` / `_on_grid_frame_configure` | Tính lại số cột/hàng theo kích thước panel |
+| `_calc_thumb_size` | @static: tính kích thước thumbnail |
+| `_on_grid_size_change` / `_schedule_grid_rebuild` | Đổi cỡ thumbnail, debounce rebuild |
+| `_go_grid_page` / `_go_grid_page_abs` / `_go_grid_page_direct` | Điều hướng trang grid |
+| `_rebuild_grid` / `_make_blank_thumb` / `_schedule_film_render` / `_render_grid_thumb` | Render lại grid + thumbnail (bbox overlay từ cache) |
+| `_grid_click` / `_update_filmstrip` / `_refresh_grid_cell` | Click chọn ảnh, đồng bộ filmstrip |
+
+#### `yolo_cache_mixin.py` → Mixin `YoloCacheMixin`
+| Method | Mô tả |
+|---|---|
+| `_cache_sv_result` / `_sv_summary` | Lưu / tóm tắt kết quả `sv.Detections`/`_OnnxDetResult` |
 | `_update_class_filter_combo` | Cập nhật combo filter class từ cache |
-| `_schedule_det_filter` | Debounce 300ms khi gõ filter kích thước |
-| `_clear_det_filters` | Xóa tất cả detect filters |
-| `_apply_det_filters` | Áp dụng filter class/n_det/bbox vào danh sách ảnh |
-| `_save_det_cache_to_disk` | Lưu `_det_cache` ra `{folder}/.kztek_det_cache.json` sau Detect All |
-| `_load_det_cache_from_disk` | Load cache từ disk khi `_load_image_list`; validate model + iou |
-
-| `_browse_wrong_folder` | Mở dialog chọn thư mục lưu ảnh sai |
-| `_open_wrong_folder` | Mở Explorer tại thư mục lưu ảnh sai |
-| `_save_wrong_image` | Copy ảnh hiện tại vào `v_wrong_folder` (không move) |
-
-| `_open_video_detect` | Dialog chọn nguồn video (file / RTSP / YouTube / webcam) |
-| `_resolve_youtube_stream` (module-level) | yt-dlp: link YouTube + độ phân giải → (direct stream URL, title, is_live); chạy trong thread nền, không block dialog |
-| `_launch_video_window` | Cửa sổ detect liên tục: worker thread đọc frame + YOLO, main thread poll queue 16ms |
-
-| `_toggle_grid` | Ẩn/hiện grid panel bằng PanedWindow |
-| `_build_grid_panel` | Build thumbnail grid UI với nav bar ⏮◀Entry▶⏭ |
-| `_rebuild_grid` | Populate `_grid_inner` với cells từ `image_list`; cập nhật `_grid_page_entry_var` |
-| `_go_grid_page_abs(page)` | Nhảy tới trang đầu (0) hoặc trang cuối (-1) — nút ⏮ ⏭ |
-| `_go_grid_page_direct` | Nhảy tới số trang nhập trong Entry (validate + clamp, 1-indexed) |
-| `_grid_render_batch` | Render thumbnail theo batch 20 ảnh/16ms (lazy) |
-| `_render_grid_thumb` | Render thumbnail PIL với bbox overlay từ cache |
-| `_set_grid_thumb` | Gán PIL → PhotoImage vào Label |
-| `_grid_cell_bg` | Màu viền cell (current=ACCENT, correct=xanh, incorrect=đỏ) |
-| `_refresh_grid_highlights` | Cập nhật màu viền cell khi navigation |
-| `_grid_scroll_to_current` | Cuộn grid tới cell hiện tại |
-| `_on_grid_size_change` | Đổi kích thước thumbnail, xóa cache render |
-| `_schedule_grid_rebuild` | Debounce 200ms trước khi rebuild grid |
-| `_auto_restore_session` | Load lại folder + ảnh từ `yolo.session.*` trong config (chạy 1 lần sau model load) |
-
-| `_test_lpr_connection` | Test kết nối tới LPR server bằng ảnh giả 4×4, cập nhật `_lpr_conn_lbl` |
-| `_lpr_parse_plate` | Trích biển số từ JSON response (hỗ trợ nested Results[0].Plate và flat plate) |
-| `_lpr_call_crop` | POST PIL crop lên LPR URL (field `upload`), trả về plate string |
-| `_lpr_overlay_boxes` | Filter plate class → crop từng bbox → gọi LPR → vẽ nhãn xanh; lưu vào `_last_lpr_plates_result` |
-| `_extract_plate_from_filename` | @static: trích biển số từ tên file dạng `sub_<plate>[_...]` |
-| `_update_gt` | @static: thêm/cập nhật dòng `filename\tplate` trong `gt.txt` (upsert theo filename) |
-| `_save_lpr_error_image` | Lưu ảnh full + crops biển số vào wrong_folder; tạo/cập nhật `gt.txt` với plate GT |
+| `_save_det_cache_to_disk` / `_load_det_cache_from_disk` / `_clear_cache` | Persist `_det_cache` ra `{folder}/.kztek_det_cache.json` |
+| `_schedule_det_filter` / `_clear_det_filters` / `_apply_det_filters` | Debounce + áp dụng filter class/n_det/bbox |
+| `_get_must_have_ids` / `_get_must_not_have_ids` / `_update_must_have_lists` | Danh sách "phải có"/"không có" class khi filter |
+| `_cache_single_result` | Cache kết quả detect 1 ảnh (khác `_cache_sv_result` — dạng box tuple) |
 
 Cache: `_det_cache = {path: {"n": int, "classes": {cid: count}, "boxes": [(cid, cx_n, cy_n, w_n, h_n, w_px, h_px, conf_score)]}}`
-Disk cache: `{folder}/.kztek_det_cache.json` — persist giữa session; validate model path + iou khi load
 `conf_thresh` (slider Ngưỡng) là **display-time filter** — không xóa cache, filter boxes khi render
+
+#### `yolo_render_mixin.py` → Mixin `YoloRenderMixin`
+| Method | Mô tả |
+|---|---|
+| `_run_model` / `_results_summary` | Gọi model.predict + tóm tắt kết quả |
+| `_is_seg_model(mdl)` | @static: `True` nếu `mdl.task == "segment"` |
+| `_overlay_seg_masks` | Vẽ mask polygon (fill bán trong suốt + viền nét liền) |
+| `_seg_has_poly(masks, i)` | @static: check polygon hợp lệ (≥3 điểm) |
+| `_annotated_to_pil` / `_annotated_combined_pil` | Vẽ kết quả model 1 / M1+M2 lên PIL |
+| `_rfdetr_summary` / `_draw_sv_on_pil` / `_draw_rfdetr_on_pil` | Vẽ kết quả RF-DETR/`sv.Detections` |
+| `_draw_yolo_panel_on_pil` / `_draw_yolo_m3_on_pil` | Overlay model 2/3 lên panel |
+| `_annotated_from_cache` | Vẽ lại từ `_det_cache` (không chạy lại model) |
+| `_resize_pil` | Resize PIL giữ tỉ lệ |
+
+`_PANEL1_COLOR`/`_PANEL2_COLOR`/`_PANEL3_COLOR` (class attr) — màu cố định từng panel khi so sánh multi-model
+`_INSTANCE_COLORS` (class attr, 16 màu) — khi Segment chỉ có 1 class, tô mỗi đối tượng 1 màu riêng
+Model Segment KHÔNG vẽ khung bbox chữ nhật — chỉ hiện viền polygon (`_overlay_seg_masks`) + nhãn; bbox chỉ vẽ fallback khi thiếu polygon
+Nhãn model hiện `[SEG]` khi `mtype == "yolo"` và `_is_seg_model(mdl)` — áp dụng cho cả Model 1/2/3
+
+#### `yolo_detect_mixin.py` → Mixin `YoloDetectMixin`
+| Method | Mô tả |
+|---|---|
+| `_detect_and_display` | Pipeline detect 1 ảnh (thread nền) + hiển thị — đo thời gian `t1_ms/t2_ms/t3_ms` |
+| `_on_detect_done` / `_on_detect_error` | Callback sau detect — cập nhật label kết quả + `⏱ Xms` |
+| `_refresh_det_table` / `_on_det_row_select` | Cập nhật `DetTablePanel` (`det_table.py`), zoom khi click hàng |
+| `_on_plot_param_change` / `_do_replot` | Debounce 200ms khi đổi font/line width → vẽ lại |
+| `_sync_slider_labels` / `_on_conf_thresh_change` / `_on_slider_change` / `_get_sel_classes` | Slider conf/iou/ngưỡng hiển thị |
+
+Cache `_det_cache` chỉ lưu bbox (không lưu polygon mask) → khi model1 là Segment, `_detect_and_display` **bỏ qua cache**, luôn detect lại để hiện mask tươi
+
+#### `yolo_detect_all_mixin.py` → Mixin `YoloDetectAllMixin`
+| Method | Mô tả |
+|---|---|
+| `_batch_export` | Export ảnh + nhãn hàng loạt (vẽ hoặc rename) |
+| `_detect_all` / `_detect_all_run` / `_detect_page` | Detect toàn bộ ảnh trong folder, lưu cache, có nút Dừng |
+| `_on_detect_page_done` / `_on_detect_all_progress` / `_on_detect_all_done` | Cập nhật tiến độ / kết thúc Detect All |
+
+#### `yolo_lpr_mixin.py` → Mixin `YoloLprMixin`
+| Method | Mô tả |
+|---|---|
+| `_test_lpr_connection` | Test kết nối LPR server bằng ảnh giả 4×4 |
+| `_lpr_parse_plate` / `_lpr_call_crop` | Parse JSON response / POST crop ảnh lên LPR URL |
+| `_lpr_draw_lines` / `_lpr_draw_from_results` / `_lpr_batch_for_path` | Vẽ nhiều dòng kết quả LPR1/2/3 lên ảnh |
+| `_lpr_overlay_boxes_vid` / `_lpr_overlay_boxes` | Filter plate class → crop bbox → gọi LPR → vẽ nhãn; lưu `_last_lpr_plates_result` |
+| `_update_wrong_path` / `_browse_wrong_folder` / `_open_wrong_folder` | Quản lý thư mục lưu ảnh sai (`v_wrong_folder`, 5 segment) |
+| `_save_wrong_image` / `_save_wrong_page` | Copy ảnh hiện tại/trang vào wrong folder |
+| `_extract_plate_from_filename` | @static: trích biển số từ tên file `sub_<plate>[_...]` |
+| `_update_gt` | @static: upsert dòng `filename\tplate` trong `gt.txt` |
+| `_save_lpr_error_image` / `_open_gt_folder` | Lưu ảnh full + crop biển số + cập nhật `gt.txt` |
+
+#### `yolo_eval_mixin.py` → Mixin `YoloEvalMixin`
+| Method | Mô tả |
+|---|---|
+| `_save_result` | Lưu ảnh đã annotate + kết quả detect ra file |
+| `_start_map_calc` | Tính mAP so khớp với nhãn `.txt` (dùng `_iou_xywhn` từ `yolo_utils.py`) |
+
+#### `yolo_eval_validate_mixin.py` → Mixin `YoloEvalValidateMixin`
+| Method | Mô tả |
+|---|---|
+| `_validate_true_folder` | Validate thư mục true/false (positive/negative) — 1 method lớn duy nhất (~545 dòng), tách riêng file vì lý do kích thước |
+
+#### `yolo_video_mixin.py` → Mixin `YoloVideoMixin`
+| Method / Hằng số | Mô tả |
+|---|---|
+| `_open_video_detect` | Dialog chọn nguồn video (file / RTSP / YouTube / webcam) |
+| `_resolve_youtube_stream` (module-level) | yt-dlp: link YouTube + độ phân giải → (stream URL, title, is_live), chạy nền |
+| `_YT_QUALITY_FORMATS` / `_YT_QUALITY_DEFAULT` (module-level) | Map nhãn độ phân giải → format string yt-dlp |
+
+#### `yolo_video_window_mixin.py` → Mixin `YoloVideoWindowMixin`
+| Method | Mô tả |
+|---|---|
+| `_launch_video_window` | Cửa sổ detect liên tục: worker thread đọc frame + model, main thread poll queue 16ms, overlay LPR, seek bar |
+
+#### `yolo_layout_mixin.py` → Mixin `YoloLayoutMixin`
+| Method | Mô tả |
+|---|---|
+| `_build_toolbar` | Build toolbar: chọn model 1/2/3, cấu hình conf/iou/LPR/wrong-folder |
+| `_build_content` | Build panel nội dung chính: 2 canvas so sánh model, sidebar Treeview, filter, `DetTablePanel`, grid panel |
+
+Disk cache: `{folder}/.kztek_det_cache.json` — persist giữa session; validate model path + iou khi load
 Session keys: `yolo.session.folder`, `yolo.session.image`
 Hỗ trợ: YOLO v8/v11, dual-model, drag-drop, detect all + filter class/size + grid thumbnail panel + session restore + LPR overlay (crop bbox → API → vẽ biển số)
 Nguồn video: file / RTSP / HTTP / webcam / **YouTube URL** (yt-dlp resolve → cv2.VideoCapture); yêu cầu `pip install yt-dlp` (flag `_YTDLP_OK`); history key `h.yolo.youtube_url`
 YouTube độ phân giải: combobox readonly (Best/1080p/720p/480p/360p/240p/Worst) → `_YT_QUALITY_FORMATS` map sang yt-dlp `format` string; lưu lựa chọn cuối qua `_bind_cfg("yolo.youtube_quality", ...)` (không dùng history vì giá trị cố định)
 Seek bar (thanh tua): hiện với file video HOẶC YouTube VOD (`enable_seek=True`, `is_live=False` từ yt-dlp); ẩn với webcam/RTSP/YouTube livestream — `_launch_video_window(..., enable_seek=bool)`
-
-**Test model Segment (YOLO-Seg):**
-| Method | Mô tả |
-|---|---|
-| `_is_seg_model(mdl)` | @static: `True` nếu `mdl.task == "segment"` (model `yolo11*-seg.pt`) |
-| `_seg_has_poly(masks, i)` | @static: `True` nếu `masks.xy[i]` là polygon hợp lệ (≥3 điểm) cho instance thứ i |
-| `_overlay_seg_masks(pil_img, results, color_fn, alpha=90, line_width=2)` | Vẽ mask polygon (`results[0].masks.xy`): fill bán trong suốt + viền nét liền (`draw.line` khép kín); không đổi gì nếu model không có `.masks` |
-| `_run_model` | Thêm `retina_masks=True` khi model là Segment → mask nét theo đúng độ phân giải ảnh gốc |
-
-Gọi `_overlay_seg_masks` tại 3 điểm vẽ: `_annotated_to_pil` (panel model 1, màu theo class/palette), `_annotated_combined_pil` (M1+M2, màu theo `_PANEL1_COLOR`/`_PANEL2_COLOR`), `_draw_yolo_panel_on_pil` (overlay M2/M3 lên panel đã có sẵn, màu `panel_color`)
-**Model Segment KHÔNG vẽ khung bbox chữ nhật** — mỗi instance có polygon hợp lệ (`_seg_has_poly`) chỉ hiện viền polygon (từ `_overlay_seg_masks`) + nhãn tên/conf; bbox chữ nhật chỉ vẽ fallback khi instance đó thiếu polygon (ví dụ model Detect thường)
-Nhãn model hiện `[SEG]` (thay `[DETR]`/`[ONNX]`) khi `mtype == "yolo"` và `_is_seg_model(mdl)` — áp dụng cho cả Model 1/2/3
-`_INSTANCE_COLORS` (class attr, 16 màu) — khi Segment chỉ phát hiện 1 class duy nhất trong ảnh (`_annotated_to_pil` tự đếm unique class), mỗi đối tượng được tô 1 màu riêng theo thứ tự index (thay vì cùng 1 màu class) để dễ phân biệt; áp dụng cho cả mask fill/viền lẫn box fallback + nhãn. Không áp dụng cho `_annotated_combined_pil`/`_draw_yolo_panel_on_pil` (màu ở đó biểu thị model, không phải instance)
-
-**Thời gian nhận dạng (⏱):** `_detect_and_display._run()` đo `time.time()` quanh từng lệnh gọi model (`_run_model`/`model.predict`) riêng cho model1/2/3 → `t1_ms, t2_ms, t3_ms` truyền vào `_on_detect_done`. Hiển thị: panel đơn → nối `⏱ Xms` vào `lbl_result` (sau summary); combined mode → mỗi label `_lbl_m1_res/_lbl_m2_res/_lbl_m3_res` có `⏱Xms` riêng để so sánh tốc độ giữa các model. Nhánh cache-hit (redraw từ `_det_cache`, không chạy lại model) vẫn đo thời gian redraw+overlay, gán vào `t1_ms`
-Cache `_det_cache` chỉ lưu bbox (không lưu polygon mask) → khi `model1` là Segment, `_detect_and_display` **bỏ qua cache**, luôn detect lại để hiện mask tươi; ảnh hưởng: grid thumbnail (`_render_grid_thumb`) và Detect All vẫn chỉ hiện bbox (không mask) do dùng chung cache box-only — giới hạn đã biết, chỉ ảnh live single-image mới có mask overlay đầy đủ
 
 #### `tab_lpr_tester.py` → Class `LprTesterTab(Frame)`
 | Hàm / Method | Mô tả |

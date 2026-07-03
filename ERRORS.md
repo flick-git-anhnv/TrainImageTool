@@ -193,4 +193,34 @@
 
 ---
 
+## [E022] Refactor tab_yolo.py: mất method _update_class_filter_combo khi tách file
+- **File:** `tool/features/detection/yolo_cache_mixin.py` (khi tách từ `tab_yolo.py`)
+- **Triệu chứng:** Khi tách method theo range dòng (line-range extraction) và thêm section-comment
+  banner vào đầu range kế tiếp, method `_update_class_filter_combo` (nằm ngay trước banner
+  "# ===== CACHE DISK PERSISTENCE ==") bị bỏ sót hoàn toàn khỏi tất cả file mới → sẽ gây
+  `AttributeError: 'YoloTab' object has no attribute '_update_class_filter_combo'` khi
+  `_on_detect_all_done` gọi nó sau khi Detect All chạy xong.
+- **Nguyên nhân:** Khi điều chỉnh range bắt đầu của method kế tiếp để bao gồm banner comment phía
+  trước nó, quên giữ lại range riêng cho method đứng trước banner đó.
+- **Cách sửa:** Đối chiếu tập hợp tên method giữa file gốc (qua `git show HEAD:<path>`, parse bằng
+  `ast`) và tập hợp tên method trong toàn bộ file mới sau khi tách, phát hiện tên bị thiếu, chèn
+  lại đúng vị trí (trước banner "CACHE DISK PERSISTENCE") trong `yolo_cache_mixin.py`.
+- **Ngày:** 2026-07-03
+
+---
+
+## [E023] Refactor tab_yolo.py: import xuyên module từ tab_bbox.py bị đứt
+- **File:** `tool/features/annotation/tab_bbox.py` (`_auto_load_det_model`)
+- **Triệu chứng:** `tab_bbox.py` có dòng `from ..detection.tab_yolo import _OnnxRunner, _OnnxDetResult`
+  để tái dùng ONNX runner đã test kỹ bên tab YOLO. Sau khi tách `_OnnxRunner`/`_OnnxDetResult`
+  sang `yolo_onnx.py` (không còn định nghĩa trong `tab_yolo.py`), import này sẽ luôn `ImportError`
+  → auto-load model `.onnx` trong BBox Editor âm thầm rơi vào nhánh fallback (do có `except ImportError: pass`).
+- **Nguyên nhân:** Refactor tách file chỉ rà soát method bên trong `tab_yolo.py`, bỏ sót việc
+  grep toàn bộ `tool/` để tìm import xuyên module trỏ thẳng vào `tab_yolo.py` từ file khác.
+- **Cách sửa:** Luôn `grep -rn "from.*tab_yolo import" tool/` sau khi tách file để bắt các import
+  xuyên module; sửa `tab_bbox.py` trỏ sang `from ..detection.yolo_onnx import _OnnxRunner, _OnnxDetResult`.
+- **Ngày:** 2026-07-03
+
+---
+
 *Cập nhật file này mỗi khi gặp lỗi mới. Format: `[Ennn]` tăng dần.*

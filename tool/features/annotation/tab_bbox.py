@@ -3108,9 +3108,9 @@ class BBoxEditorTab(Frame):
         """Tự phân biệt YOLO / RF-DETR / ONNX, trả về (model, names, mtype)."""
         ext = os.path.splitext(path)[1].lower()
         if ext == ".onnx":
-            # Dùng _OnnxRunner từ tab_yolo (đã được test kỹ)
+            # Dùng _OnnxRunner từ yolo_onnx (đã được test kỹ; tách khỏi tab_yolo.py 2026-07-03)
             try:
-                from ..detection.tab_yolo import _OnnxRunner, _OnnxDetResult  # noqa
+                from ..detection.yolo_onnx import _OnnxRunner, _OnnxDetResult  # noqa
                 runner = _OnnxRunner(path)
                 return runner, {}, "onnx"
             except ImportError:
