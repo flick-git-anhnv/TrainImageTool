@@ -14,9 +14,10 @@ _DEFAULT_KEYWORDS = (
     "xe taxi mai linh xanh"
 )
 
-_IMG_EXTS  = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-_TIMEOUT   = 12   # giây timeout mỗi ảnh
-_CHUNK     = 65536
+_IMG_EXTS     = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+_TIMEOUT      = 12   # giây timeout mỗi ảnh
+_CHUNK        = 65536
+_DDG_PAGE_SIZE = 100  # ddgs không tự phân trang nội bộ — phải tự lặp page=1,2,3…
 
 
 def _safe_name(kw: str) -> str:
@@ -117,17 +118,45 @@ class WebImageWorker:
     # ── helpers ────────────────────────────────────────────────────────────
 
     def _search_ddg(self, kw: str, max_results: int, size_tag) -> list | None:
-        """Gọi DDG images search. Trả None nếu lỗi, list rỗng nếu không có kết quả."""
+        """Gọi DDG images search, tự lặp nhiều `page` để gom đủ max_results.
+
+        Thư viện `ddgs` chỉ gửi đúng 1 request (page=1) mỗi lần gọi images()
+        và không tự tăng page nội bộ — max_results chỉ cắt bớt kết quả của
+        1 trang chứ không ép DDG trả nhiều hơn. Phải tự lặp page=1,2,3… và
+        gộp (dedup theo URL ảnh) mới lấy được nhiều hơn ~35-100 URL/keyword.
+        Trả None nếu lỗi ngay từ trang đầu, list (có thể rỗng) nếu có kết quả.
+        """
+        max_pages = max(1, -(-max_results // _DDG_PAGE_SIZE))  # ceil
+        kwargs = {"max_results": _DDG_PAGE_SIZE}
+        if size_tag:
+            kwargs["size"] = size_tag
+
+        collected: list = []
+        seen_urls: set = set()
         try:
             with _DDGS() as ddgs:
-                kwargs = {"max_results": max_results}
-                if size_tag:
-                    kwargs["size"] = size_tag
-                return list(ddgs.images(kw, **kwargs))
+                for page in range(1, max_pages + 1):
+                    if self._stop.is_set() or len(collected) >= max_results:
+                        break
+                    try:
+                        batch = list(ddgs.images(kw, page=page, **kwargs))
+                    except Exception as e:
+                        if page == 1:
+                            raise
+                        self._log(f"    [!] DDG trang {page} lỗi: {e} — dừng phân trang.")
+                        break
+                    new_items = [r for r in batch if r.get("image") and r.get("image") not in seen_urls]
+                    if not new_items:
+                        break
+                    seen_urls.update(r["image"] for r in new_items)
+                    collected.extend(new_items)
+                    if page > 1:
+                        self._log(f"    DDG trang {page}: +{len(new_items)} URL (tổng {len(collected)})")
         except Exception as e:
             self._log(f"  [LỖI] DuckDuckGo search: {e}")
             self.stats["error"] += 1
             return None
+        return collected
 
     # ── per-keyword ────────────────────────────────────────────────────────
 

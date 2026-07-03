@@ -50,6 +50,12 @@ try:
 except ImportError:
     _REQ_OK = False
 
+try:
+    import yt_dlp as _yt_dlp
+    _YTDLP_OK = True
+except ImportError:
+    _YTDLP_OK = False
+
 _REVIEW_ICON = {"correct": "✓", "incorrect": "✗", "": "○"}
 
 try:
@@ -222,6 +228,48 @@ def _contrast_text(bg_rgb: tuple) -> tuple:
     r, g, b = bg_rgb
     lum = 0.299 * r + 0.587 * g + 0.114 * b
     return (0, 0, 0) if lum > 150 else (255, 255, 255)
+
+
+# Nhãn hiển thị → format string yt-dlp. "best"/"worst" trước [ext=mp4] ưu tiên
+# progressive stream (video+audio 1 URL) để cv2.VideoCapture mở trực tiếp được;
+# height<=N giới hạn độ phân giải để giảm băng thông / tăng tốc detect.
+_YT_QUALITY_FORMATS = {
+    "Tốt nhất (Best)": "best[ext=mp4][protocol^=http]/best[protocol^=http]/best",
+    "1080p":           "best[height<=1080][ext=mp4][protocol^=http]/best[height<=1080][protocol^=http]/best[height<=1080]/best",
+    "720p":            "best[height<=720][ext=mp4][protocol^=http]/best[height<=720][protocol^=http]/best[height<=720]/best",
+    "480p":            "best[height<=480][ext=mp4][protocol^=http]/best[height<=480][protocol^=http]/best[height<=480]/best",
+    "360p":            "best[height<=360][ext=mp4][protocol^=http]/best[height<=360][protocol^=http]/best[height<=360]/best",
+    "240p":            "best[height<=240][ext=mp4][protocol^=http]/best[height<=240][protocol^=http]/best[height<=240]/best",
+    "Thấp nhất (Worst)": "worst[ext=mp4][protocol^=http]/worst[protocol^=http]/worst",
+}
+_YT_QUALITY_DEFAULT = "Tốt nhất (Best)"
+
+
+def _resolve_youtube_stream(url: str, quality_label: str = _YT_QUALITY_DEFAULT) -> tuple:
+    """Dùng yt-dlp lấy direct stream URL (progressive mp4/HLS) + tiêu đề video.
+
+    Trả về (stream_url, title, is_live). Ném exception nếu không lấy được.
+    `is_live=True` (livestream/HLS đang phát) → không cho tua vì không có
+    frame count cố định; VOD progressive mp4 → tua được như file thường.
+    """
+    fmt = _YT_QUALITY_FORMATS.get(quality_label, _YT_QUALITY_FORMATS[_YT_QUALITY_DEFAULT])
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "skip_download": True,
+        "format": fmt,
+    }
+    with _yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        if "entries" in info and info["entries"]:
+            info = info["entries"][0]
+        stream_url = info.get("url")
+        if not stream_url:
+            raise RuntimeError("Không tìm thấy stream URL khả dụng")
+        title = info.get("title") or url
+        is_live = bool(info.get("is_live") or info.get("live_status") == "is_live")
+        return stream_url, title, is_live
 
 
 class YoloTab(Frame):
@@ -1234,6 +1282,8 @@ class YoloTab(Frame):
         self._model2_names = names
         self.v_model2_path.set(path)
         tag = {"rfdetr": " [DETR]", "onnx": " [ONNX]"}.get(mtype, "")
+        if mtype == "yolo" and self._is_seg_model(mdl):
+            tag = " [SEG]"
         self.lbl_model2.config(text=f"  {os.path.basename(path)}{tag}", fg=SUCCESS)
         if self.current_image_path and self.model:
             self._detect_and_display()
@@ -1289,6 +1339,8 @@ class YoloTab(Frame):
         self._model3_type  = mtype
         self.v_model3_path.set(path)
         ext_tag = {"onnx": " [ONNX]", "rfdetr": " [DETR]"}.get(mtype, "")
+        if mtype == "yolo" and self._is_seg_model(mdl):
+            ext_tag = " [SEG]"
         self.lbl_model3.config(text=f"  {os.path.basename(path)}{ext_tag}", fg=SUCCESS)
         if self.current_image_path and self.model:
             self._detect_and_display()
@@ -1423,6 +1475,8 @@ class YoloTab(Frame):
         self._model1_names = names
         self.v_model_path.set(path)
         tag = {"rfdetr": " [DETR]", "onnx": " [ONNX]"}.get(mtype, "")
+        if mtype == "yolo" and self._is_seg_model(mdl):
+            tag = " [SEG]"
         self.lbl_model.config(text=f"  {os.path.basename(path)}{tag}", fg=SUCCESS)
         self._update_class_list()
         if self.current_image_path:
@@ -3527,6 +3581,8 @@ class YoloTab(Frame):
 
     def _run_model(self, mdl, image_path, sel_cls,
                    conf: float = 0.25, iou: float = 0.45):
+        # Model Segment → retina_masks=True cho mask nét theo đúng độ phân giải ảnh gốc
+        seg_kw = {"retina_masks": True} if self._is_seg_model(mdl) else {}
         return mdl.predict(
             source=image_path,
             classes=sel_cls,
@@ -3535,6 +3591,7 @@ class YoloTab(Frame):
             imgsz=640,
             agnostic_nms=True,
             verbose=False,
+            **seg_kw,
         )
 
     def _results_summary(self, results, model_names):
@@ -3583,6 +3640,50 @@ class YoloTab(Frame):
     _PANEL2_COLOR = (240, 89, 34)    # orange ACCENT — Model 2
     _PANEL3_COLOR = (50, 220, 50)    # lime green — Model 3 (RF-DETR)
 
+    # Bảng màu theo instance — dùng khi Segment chỉ có 1 class, tô mỗi đối tượng 1 màu
+    _INSTANCE_COLORS = [
+        (66, 133, 244), (234, 67, 53),  (52, 168, 83),  (251, 188, 5),
+        (154, 52, 182), (0, 172, 193),  (255, 112, 67), (156, 204, 101),
+        (63, 81, 181),  (233, 30, 99),  (0, 150, 136),  (255, 193, 7),
+        (121, 85, 72),  (96, 125, 139), (244, 67, 54),  (139, 195, 74),
+    ]
+
+    @staticmethod
+    def _is_seg_model(mdl) -> bool:
+        """True nếu model YOLO đã load là model Segment (yolo11*-seg.pt)."""
+        return mdl is not None and getattr(mdl, "task", "") == "segment"
+
+    def _overlay_seg_masks(self, pil_img, results, color_fn, alpha=90, line_width=2):
+        """Vẽ mask (polygon) của model YOLO-Seg lên PIL Image: fill bán trong suốt
+        + viền polygon nét liền (thay cho khung bbox chữ nhật).
+        color_fn(cls_id, idx) -> (r,g,b) — idx là thứ tự instance trong ảnh
+        (dùng khi cần tô mỗi đối tượng 1 màu, ví dụ model chỉ có 1 class).
+        Không đổi gì nếu results không có masks (model Detect hoặc không phát hiện gì)."""
+        masks = getattr(results[0], "masks", None) if results else None
+        if masks is None or masks.xy is None or len(masks.xy) == 0:
+            return pil_img
+        boxes   = results[0].boxes
+        overlay = Image.new("RGBA", pil_img.size, (0, 0, 0, 0))
+        odraw   = ImageDraw.Draw(overlay)
+        for i, poly in enumerate(masks.xy):
+            if poly is None or len(poly) < 3:
+                continue
+            cls_id = int(boxes.cls[i]) if boxes is not None and i < len(boxes) else 0
+            r, g, b = color_fn(cls_id, i)
+            pts = [(float(x), float(y)) for x, y in poly]
+            odraw.polygon(pts, fill=(r, g, b, alpha))
+            odraw.line(pts + [pts[0]], fill=(r, g, b, 255),
+                       width=max(1, line_width), joint="curve")
+        return Image.alpha_composite(pil_img.convert("RGBA"), overlay).convert("RGB")
+
+    @staticmethod
+    def _seg_has_poly(masks, i: int) -> bool:
+        """True nếu masks.xy[i] là polygon hợp lệ (≥3 điểm) — dùng để quyết định
+        vẽ viền polygon thay vì khung bbox chữ nhật cho instance thứ i."""
+        return bool(masks is not None and masks.xy is not None
+                    and i < len(masks.xy) and masks.xy[i] is not None
+                    and len(masks.xy[i]) >= 3)
+
     def _annotated_to_pil(self, results, single_color=None):
         """Vẽ annotation bằng PIL để font_size hoạt động độc lập với line_width.
         single_color: tuple RGB — dùng màu cố định này cho mọi box (bỏ qua class).
@@ -3595,7 +3696,6 @@ class YoloTab(Frame):
         orig_bgr = results[0].orig_img
         orig_rgb = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2RGB)
         pil_img  = Image.fromarray(orig_rgb)
-        draw     = _Draw.Draw(pil_img)
 
         try:
             font = ImageFont.truetype("arial.ttf", fs)
@@ -3605,36 +3705,54 @@ class YoloTab(Frame):
             except Exception:
                 font = ImageFont.load_default()
 
-        # Màu theo class (single panel) hoặc màu cố định (dual panel)
-        if single_color is None:
-            try:
-                from ultralytics.utils.plotting import colors as _yc
-                def _color(cls_id):
-                    c = _yc(int(cls_id), True)
-                    return (int(c[2]), int(c[1]), int(c[0]))
-            except Exception:
-                _pal = [(0,200,255),(0,255,0),(255,100,0),(255,0,200),(200,200,0)]
-                def _color(cls_id):
-                    return _pal[int(cls_id) % len(_pal)]
-        else:
-            def _color(_):
-                return single_color
-
         boxes = results[0].boxes
         names = getattr(results[0], "names", {}) or {}
         if not isinstance(names, dict):
             names = {}
+        masks = getattr(results[0], "masks", None)
+
+        # Segment + chỉ 1 class trong ảnh → tô mỗi đối tượng 1 màu riêng (theo index)
+        # cho dễ phân biệt, thay vì tất cả cùng 1 màu class.
+        _n_uniq_cls = (len({int(b.cls[0]) for b in boxes})
+                       if boxes is not None and len(boxes) else 0)
+        _use_instance_color = (single_color is None and masks is not None
+                                and masks.xy is not None and len(masks.xy) > 0
+                                and _n_uniq_cls <= 1)
+
+        # Màu theo class (single panel), theo instance (segment 1-class), hoặc cố định (dual panel)
+        if single_color is not None:
+            def _color(_cls_id, _idx):
+                return single_color
+        elif _use_instance_color:
+            def _color(_cls_id, idx):
+                return self._INSTANCE_COLORS[idx % len(self._INSTANCE_COLORS)]
+        else:
+            try:
+                from ultralytics.utils.plotting import colors as _yc
+                def _color(cls_id, _idx):
+                    c = _yc(int(cls_id), True)
+                    return (int(c[2]), int(c[1]), int(c[0]))
+            except Exception:
+                _pal = [(0,200,255),(0,255,0),(255,100,0),(255,0,200),(200,200,0)]
+                def _color(cls_id, _idx):
+                    return _pal[int(cls_id) % len(_pal)]
+
+        # Model Segment (YOLO-Seg) → vẽ mask polygon (fill + viền) trước, label sau
+        pil_img = self._overlay_seg_masks(pil_img, results, _color, line_width=lw)
+        draw    = _Draw.Draw(pil_img)
 
         if boxes is not None and len(boxes):
-            for box in boxes:
+            for i, box in enumerate(boxes):
                 x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
                 cls_id   = int(box.cls[0])
                 conf     = float(box.conf[0])
                 cls_name = names.get(cls_id, str(cls_id))
                 label    = f"{cls_name} {conf:.2f}"
-                color    = _color(cls_id)
+                color    = _color(cls_id, i)
 
-                draw.rectangle([x1, y1, x2, y2], outline=color, width=lw)
+                # Segment: viền polygon đã vẽ trong _overlay_seg_masks → không vẽ khung chữ nhật
+                if not self._seg_has_poly(masks, i):
+                    draw.rectangle([x1, y1, x2, y2], outline=color, width=lw)
 
                 try:
                     tb = draw.textbbox((0, 0), label, font=font)
@@ -3660,7 +3778,6 @@ class YoloTab(Frame):
         orig_bgr = results1[0].orig_img
         orig_rgb = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2RGB)
         pil_img  = Image.fromarray(orig_rgb)
-        draw     = _Draw.Draw(pil_img)
 
         try:
             font = ImageFont.truetype("arial.ttf", fs)
@@ -3670,15 +3787,22 @@ class YoloTab(Frame):
             except Exception:
                 font = ImageFont.load_default()
 
-        def _draw_boxes(boxes, names, color, prefix):
+        # Model Segment (YOLO-Seg) → overlay mask (fill + viền) theo màu panel trước khi vẽ bbox
+        pil_img = self._overlay_seg_masks(pil_img, results1, lambda _c, _i: self._PANEL1_COLOR, line_width=lw)
+        pil_img = self._overlay_seg_masks(pil_img, results2, lambda _c, _i: self._PANEL2_COLOR, line_width=lw)
+        draw    = _Draw.Draw(pil_img)
+
+        def _draw_boxes(boxes, names, color, prefix, masks=None):
             if boxes is None or not len(boxes):
                 return
-            for box in boxes:
+            for i, box in enumerate(boxes):
                 x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
                 cls_id = int(box.cls[0])
                 conf   = float(box.conf[0])
                 label  = f"{prefix}{names.get(cls_id, str(cls_id))} {conf:.2f}"
-                draw.rectangle([x1, y1, x2, y2], outline=color, width=lw)
+                # Segment: viền polygon đã vẽ ở overlay → không vẽ khung chữ nhật
+                if not self._seg_has_poly(masks, i):
+                    draw.rectangle([x1, y1, x2, y2], outline=color, width=lw)
                 try:
                     tb = draw.textbbox((0, 0), label, font=font)
                     tw, th = tb[2]-tb[0], tb[3]-tb[1]
@@ -3691,10 +3815,12 @@ class YoloTab(Frame):
 
         _draw_boxes(results1[0].boxes,
                     getattr(self.model, "names", {}) or {},
-                    self._PANEL1_COLOR, "M1:")
+                    self._PANEL1_COLOR, "M1:",
+                    getattr(results1[0], "masks", None))
         _draw_boxes(results2[0].boxes,
                     getattr(model2, "names", {}) or {},
-                    self._PANEL2_COLOR, "M2:")
+                    self._PANEL2_COLOR, "M2:",
+                    getattr(results2[0], "masks", None) if results2 else None)
 
         ann_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         return pil_img, ann_bgr
@@ -3778,7 +3904,9 @@ class YoloTab(Frame):
             return pil_img
         lw = max(1, self.v_line_width.get())
         fs = max(6, self.v_font_size.get())
-        pil_out = pil_img.copy()
+        masks = getattr(results[0], "masks", None) if results else None
+        # Model Segment (YOLO-Seg) → overlay mask (fill + viền) theo panel_color trước khi vẽ bbox
+        pil_out = self._overlay_seg_masks(pil_img.copy(), results, lambda _c, _i: panel_color, line_width=lw)
         draw    = _Draw.Draw(pil_out)
         try:
             font = ImageFont.truetype("arial.ttf", fs)
@@ -3787,12 +3915,14 @@ class YoloTab(Frame):
                 font = ImageFont.load_default(size=fs)
             except Exception:
                 font = ImageFont.load_default()
-        for box in boxes:
+        for i, box in enumerate(boxes):
             x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
             cls_id = int(box.cls[0])
             conf   = float(box.conf[0])
             label  = f"{prefix}{names.get(cls_id, str(cls_id))} {conf:.2f}"
-            draw.rectangle([x1, y1, x2, y2], outline=panel_color, width=lw)
+            # Segment: viền polygon đã vẽ ở overlay → không vẽ khung chữ nhật
+            if not self._seg_has_poly(masks, i):
+                draw.rectangle([x1, y1, x2, y2], outline=panel_color, width=lw)
             try:
                 tb = draw.textbbox((0, 0), label, font=font)
                 tw, th = tb[2] - tb[0], tb[3] - tb[1]
@@ -3915,15 +4045,18 @@ class YoloTab(Frame):
                         if v.get().strip()] if check_lpr else [])
         lpr_timeout = self._lpr_timeout_var.get() if check_lpr else 10
         lpr_fullimg = [v.get() for v in self._lpr_fullimg_vars] if check_lpr else []
-        # Dùng cache nếu có (nhất quán với grid thumbnail), trừ dual-model mode
+        # Dùng cache nếu có (nhất quán với grid thumbnail), trừ dual-model mode.
+        # Cache chỉ lưu bbox (không lưu mask) → model Segment luôn detect lại để hiện mask.
         with self._det_cache_lock:
             cached = (self._det_cache.get(img_path)
-                      if (model2 is None and model3 is None) else None)
+                      if (model2 is None and model3 is None
+                          and not self._is_seg_model(model1)) else None)
 
         def _run():
             try:
                 if cached is not None:
                     # ── Cache hit: vẽ từ cache, filter theo max(conf_thresh, conf) ──
+                    _t1 = time.time()
                     pil1     = self._annotated_from_cache(img_path)
                     ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
                     try:
@@ -3971,10 +4104,12 @@ class YoloTab(Frame):
                                 self._lpr_cache[img_path] = list(
                                     self._last_lpr_plates_result)
                         ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
+                    t1_ms = (time.time() - _t1) * 1000
                     self.root.after(0, lambda: self._on_detect_done(
                         img_path, None, pil1, ann1_bgr, pil_orig,
                         n_det, summary, None, None, None, 0, "",
-                        None, None, 0, ""))
+                        None, None, 0, "",
+                        t1_ms, None, None))
                 else:
                     # ── Không có cache: chạy model, lưu cache ──
                     try:
@@ -3985,7 +4120,9 @@ class YoloTab(Frame):
                         pil_orig = None
 
                     if model1_type == "yolo":
+                        _t1 = time.time()
                         results1 = self._run_model(model1, img_path, sel_cls, conf_val, iou_val)
+                        t1_ms = (time.time() - _t1) * 1000
                         n_det, summary = self._results_summary(results1, model1.names)
                         self._cache_single_result(img_path, results1)
                         pil1, ann1_bgr = self._annotated_to_pil(results1)
@@ -4012,11 +4149,13 @@ class YoloTab(Frame):
                                 ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
                     else:
                         # M1 là RF-DETR hoặc ONNX
+                        _t1 = time.time()
                         if model1_type == "rfdetr":
                             _pil_in1 = pil_orig.copy() if pil_orig else Image.open(img_path).convert("RGB")
                             dets1 = model1.predict(_pil_in1, threshold=conf_val)
                         else:
                             dets1 = model1.predict(img_path, threshold=conf_val)
+                        t1_ms   = (time.time() - _t1) * 1000
                         n_det   = len(dets1.xyxy) if hasattr(dets1, "xyxy") and dets1.xyxy is not None else 0
                         summary = self._sv_summary(dets1, model1_names_cap)
                         self._cache_sv_result(img_path, dets1)
@@ -4026,9 +4165,12 @@ class YoloTab(Frame):
                         results1 = None
 
                     # ── Model 2 ────────────────────────────────────────────
+                    t2_ms = None
                     if model2 is not None:
                         if model2_type == "yolo":
+                            _t2 = time.time()
                             results2 = self._run_model(model2, img_path, sel_cls, conf_val, iou_val)
+                            t2_ms = (time.time() - _t2) * 1000
                             n_det2, summary2 = self._results_summary(results2, model2.names)
                             if model1_type == "yolo":
                                 # Gộp 2 model YOLO lên 1 ảnh (cyan M1, cam M2)
@@ -4043,11 +4185,13 @@ class YoloTab(Frame):
                                 ann1_bgr = cv2.cvtColor(np.array(pil1), cv2.COLOR_RGB2BGR)
                         else:
                             # M2 là RF-DETR hoặc ONNX
+                            _t2 = time.time()
                             if model2_type == "rfdetr":
                                 _pil_in2 = pil_orig.copy() if pil_orig else Image.open(img_path).convert("RGB")
                                 dets2 = model2.predict(_pil_in2, threshold=conf_val)
                             else:
                                 dets2 = model2.predict(img_path, threshold=conf_val)
+                            t2_ms    = (time.time() - _t2) * 1000
                             n_det2   = len(dets2.xyxy) if hasattr(dets2, "xyxy") and dets2.xyxy is not None else 0
                             summary2 = self._sv_summary(dets2, model2_names_cap)
                             pil1 = self._draw_sv_on_pil(pil1, dets2, model2_names_cap,
@@ -4065,19 +4209,24 @@ class YoloTab(Frame):
                     else:
                         results2, pil2, n_det2, summary2 = None, None, 0, ""
                     # ── Model 3 (RF-DETR .pt  hoặc  YOLO .onnx) ──────────
+                    t3_ms = None
                     if model3 is not None:
                         try:
                             if model3_type == "onnx":
                                 # Generic ONNX via _OnnxRunner (tự đọc input name)
+                                _t3    = time.time()
                                 dets3  = model3.predict(img_path, threshold=conf_val)
+                                t3_ms  = (time.time() - _t3) * 1000
                                 n_det3 = len(dets3.xyxy) if dets3.xyxy is not None else 0
                                 summary3 = self._rfdetr_summary(dets3)
                                 pil1   = self._draw_rfdetr_on_pil(pil1, dets3)
                                 dets3  = dets3
                             elif model3_type == "yolo":
                                 # ONNX dùng ultralytics (legacy, kept for safety)
+                                _t3      = time.time()
                                 _res3    = self._run_model(model3, img_path, sel_cls,
                                                            conf_val, iou_val)
+                                t3_ms    = (time.time() - _t3) * 1000
                                 n_det3, summary3 = self._results_summary(
                                     _res3, model3.names)
                                 pil1 = self._draw_yolo_m3_on_pil(pil1, _res3)
@@ -4090,7 +4239,9 @@ class YoloTab(Frame):
                                     _pil_in = _IOps.exif_transpose(_pil_in)
                                 except Exception:
                                     pass
+                                _t3   = time.time()
                                 dets3 = model3.predict(_pil_in, threshold=conf_val)
+                                t3_ms = (time.time() - _t3) * 1000
                                 _d3_len = (len(dets3.xyxy)
                                            if hasattr(dets3, "xyxy") and dets3.xyxy is not None
                                            else 0)
@@ -4109,7 +4260,8 @@ class YoloTab(Frame):
                     self.root.after(0, lambda: self._on_detect_done(
                         img_path, results1, pil1, ann1_bgr, pil_orig, n_det, summary,
                         model2, results2, pil2, n_det2, summary2,
-                        _m3_ref, _d3_ref, _n3_ref, _s3_ref))
+                        _m3_ref, _d3_ref, _n3_ref, _s3_ref,
+                        t1_ms, t2_ms, t3_ms))
             except Exception as e:
                 err = str(e)
                 self.root.after(0, lambda: self._on_detect_error(err))
@@ -4118,7 +4270,8 @@ class YoloTab(Frame):
 
     def _on_detect_done(self, img_path, results1, pil1, ann1_bgr, pil_orig,
                          n_det, summary, model2, results2, pil2, n_det2, summary2,
-                         model3=None, dets3=None, n_det3=0, summary3=""):
+                         model3=None, dets3=None, n_det3=0, summary3="",
+                         t1_ms=None, t2_ms=None, t3_ms=None):
         self._detecting = False
         pending = self._det_pending
         self._det_pending = False
@@ -4180,18 +4333,24 @@ class YoloTab(Frame):
                 if count != majority: return "⚠ "
                 return "✓ "
 
-            # Cập nhật 3 label riêng
-            m1txt = f"{_model_prefix(n_det, True)}Model1{_m1_tag}: {n_det} obj" + (f"  [{summary}]" if summary else "")
+            # Cập nhật 3 label riêng (kèm thời gian nhận dạng ⏱ của từng model)
+            _t1_txt = f"  ⏱{t1_ms:.0f}ms" if t1_ms is not None else ""
+            _t2_txt = f"  ⏱{t2_ms:.0f}ms" if t2_ms is not None else ""
+            _t3_txt = f"  ⏱{t3_ms:.0f}ms" if t3_ms is not None else ""
+            m1txt = (f"{_model_prefix(n_det, True)}Model1{_m1_tag}: {n_det} obj"
+                     + (f"  [{summary}]" if summary else "") + _t1_txt)
             self._lbl_m1_res.config(text=m1txt, fg=_model_color(n_det, True))
 
             if model2 is not None:
-                m2txt = f"{_model_prefix(n_det2, True)}Model2{_m2_tag}: {n_det2} obj" + (f"  [{summary2}]" if summary2 else "")
+                m2txt = (f"{_model_prefix(n_det2, True)}Model2{_m2_tag}: {n_det2} obj"
+                         + (f"  [{summary2}]" if summary2 else "") + _t2_txt)
                 self._lbl_m2_res.config(text=m2txt, fg=_model_color(n_det2, True))
             else:
                 self._lbl_m2_res.config(text="")
 
             if model3 is not None:
-                m3txt = f"{_model_prefix(n_det3, True)}Model3({m3_tag}): {n_det3} obj" + (f"  [{summary3}]" if summary3 else "")
+                m3txt = (f"{_model_prefix(n_det3, True)}Model3({m3_tag}): {n_det3} obj"
+                         + (f"  [{summary3}]" if summary3 else "") + _t3_txt)
                 self._lbl_m3_res.config(text=m3txt, fg=_model_color(n_det3, True))
             else:
                 self._lbl_m3_res.config(text="")
@@ -4210,11 +4369,13 @@ class YoloTab(Frame):
             self._last_n_det = n_det
             self._render_display()
 
+            _time_txt = f"   ⏱ {t1_ms:.0f}ms" if t1_ms is not None else ""
             if n_det > 0:
                 self.lbl_result.config(
-                    text=f"Phát hiện {n_det} đối tượng  —  {summary}", fg=SUCCESS)
+                    text=f"Phát hiện {n_det} đối tượng  —  {summary}{_time_txt}", fg=SUCCESS)
             else:
-                self.lbl_result.config(text="Không phát hiện đối tượng nào", fg=DIM)
+                self.lbl_result.config(
+                    text=f"Không phát hiện đối tượng nào{_time_txt}", fg=DIM)
 
         # Nếu slider thay đổi trong lúc detect → re-detect ngay với params mới
         if pending:
@@ -5802,7 +5963,6 @@ class YoloTab(Frame):
         dlg.title("Chọn nguồn video")
         dlg.configure(bg=BG)
         dlg.resizable(False, False)
-        dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
         dlg.grab_set()
 
         Label(dlg, text="Nhận dạng YOLO liên tục từ video",
@@ -5862,6 +6022,42 @@ class YoloTab(Frame):
         combo_rtsp.pack(side=LEFT, fill=X, expand=True)
         _bind_history("h.yolo.rtsp_url", combo_rtsp)
 
+        # YouTube row
+        yt_row = Frame(dlg, bg=BG)
+        yt_row.pack(fill=X, padx=16, pady=(8, 2))
+        Label(yt_row, text="YouTube URL:", bg=BG, fg=DIM, font=F_MAIN,
+              width=14, anchor=W).pack(side=LEFT)
+        v_yt = StringVar()
+        yt_hist = _get_history("h.yolo.youtube_url")
+        combo_yt = ttk.Combobox(yt_row, textvariable=v_yt,
+                                 font=F_MAIN, width=36)
+        combo_yt["values"] = yt_hist
+        if yt_hist:
+            combo_yt.set(yt_hist[0])
+        combo_yt.pack(side=LEFT, fill=X, expand=True)
+        _bind_history("h.yolo.youtube_url", combo_yt)
+
+        # Độ phân giải YouTube
+        yt_q_row = Frame(dlg, bg=BG)
+        yt_q_row.pack(fill=X, padx=16, pady=(2, 2))
+        Label(yt_q_row, text="Độ phân giải:", bg=BG, fg=DIM, font=F_MAIN,
+              width=14, anchor=W).pack(side=LEFT)
+        v_yt_quality = StringVar(value=_YT_QUALITY_DEFAULT)
+        _bind_cfg("yolo.youtube_quality", v_yt_quality)
+        if v_yt_quality.get() not in _YT_QUALITY_FORMATS:
+            v_yt_quality.set(_YT_QUALITY_DEFAULT)
+        combo_yt_q = ttk.Combobox(yt_q_row, textvariable=v_yt_quality,
+                                   font=F_MAIN, width=18, state="readonly",
+                                   values=list(_YT_QUALITY_FORMATS.keys()))
+        combo_yt_q.pack(side=LEFT)
+
+        yt_status_row = Frame(dlg, bg=BG)
+        yt_status_row.pack(fill=X, padx=16, pady=(0, 2))
+        Label(yt_status_row, text="", bg=BG, width=14).pack(side=LEFT)
+        lbl_yt_status = Label(yt_status_row, text="", bg=BG, fg=DIM,
+                               font=("Segoe UI", 8), anchor=W)
+        lbl_yt_status.pack(side=LEFT, fill=X, expand=True)
+
         # Separator
         Frame(dlg, bg=DIM, height=1).pack(fill=X, padx=16, pady=4)
 
@@ -5919,16 +6115,70 @@ class YoloTab(Frame):
             _result[0] = ("rtsp", url, False)
             dlg.destroy()
 
+        _dlg_open = [True]
+
+        def _cancel_dlg():
+            _dlg_open[0] = False
+            dlg.destroy()
+
+        dlg.protocol("WM_DELETE_WINDOW", _cancel_dlg)
+
+        def _start_youtube():
+            url = v_yt.get().strip()
+            if not url:
+                messagebox.showwarning("Chưa nhập URL",
+                                       "Vui lòng nhập link YouTube.", parent=dlg)
+                return
+            if not _YTDLP_OK:
+                messagebox.showerror("Thiếu thư viện",
+                                     "pip install yt-dlp", parent=dlg)
+                return
+            _push_history("h.yolo.youtube_url", url)
+            combo_yt["values"] = _get_history("h.yolo.youtube_url")
+            quality_label = v_yt_quality.get()
+
+            btn_yt.config(state="disabled")
+            lbl_yt_status.config(text="⏳ Đang phân giải link YouTube…", fg=DIM)
+
+            def _worker():
+                try:
+                    stream_url, title, is_live = _resolve_youtube_stream(url, quality_label)
+                except Exception as ex:
+                    msg = str(ex)
+                    self.root.after(0, lambda: _on_yt_error(msg))
+                    return
+                self.root.after(0, lambda: _on_yt_success(stream_url, title, is_live))
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        def _on_yt_error(msg):
+            if not _dlg_open[0]:
+                return
+            btn_yt.config(state="normal")
+            lbl_yt_status.config(text="", fg=DIM)
+            messagebox.showerror("Lỗi YouTube",
+                                 f"Không lấy được stream:\n{msg}", parent=dlg)
+
+        def _on_yt_success(stream_url, title, is_live):
+            if not _dlg_open[0]:
+                return
+            _result[0] = ("youtube", (stream_url, title, is_live), False)
+            _cancel_dlg()
+
         Button(btn_frame, text="▶ Mở File Video", command=_start_file,
                bg=ACCENT, fg="white", font=F_BOLD, relief="flat",
                padx=12, cursor="hand2").pack(side=LEFT, padx=(0, 8))
         Button(btn_frame, text="📡 Mở RTSP", command=_start_rtsp,
                bg="#1a6b3c", fg="white", font=F_BOLD, relief="flat",
                padx=12, cursor="hand2").pack(side=LEFT, padx=(0, 8))
+        btn_yt = Button(btn_frame, text="▶ Mở YouTube", command=_start_youtube,
+               bg="#c4302b", fg="white", font=F_BOLD, relief="flat",
+               padx=12, cursor="hand2")
+        btn_yt.pack(side=LEFT, padx=(0, 8))
         Button(btn_frame, text="📷 Mở Webcam", command=_start_cam,
                bg="#2e5fa3", fg="white", font=F_BOLD, relief="flat",
                padx=12, cursor="hand2").pack(side=LEFT, padx=(0, 8))
-        Button(btn_frame, text="Hủy", command=dlg.destroy,
+        Button(btn_frame, text="Hủy", command=_cancel_dlg,
                bg=CARD, fg=DIM, font=F_MAIN, relief="flat",
                padx=8, cursor="hand2").pack(side=LEFT)
 
@@ -5949,10 +6199,15 @@ class YoloTab(Frame):
             self._launch_video_window(src_val, os.path.basename(src_val), do_loop)
         elif src_type == "rtsp":
             self._launch_video_window(src_val, src_val, False)
+        elif src_type == "youtube":
+            stream_url, yt_title, is_live = src_val
+            self._launch_video_window(stream_url, f"YouTube: {yt_title}", False,
+                                       enable_seek=not is_live)
         else:
             self._launch_video_window(src_val, f"Webcam #{src_val}", False)
 
-    def _launch_video_window(self, source, source_name: str, loop_video: bool):
+    def _launch_video_window(self, source, source_name: str, loop_video: bool,
+                              enable_seek: bool = False):
         """Cửa sổ detect video liên tục — worker thread gửi frame qua queue."""
         # speed map: label → multiplier (0.0 = tối đa, không sleep)
         _SPEED_MAP = {
@@ -6088,12 +6343,12 @@ class YoloTab(Frame):
 
         win.bind("<space>", lambda _: _toggle_pause())
 
-        # ── Seek bar (chỉ file video, không phải webcam/RTSP) ────────────
+        # ── Seek bar (file video hoặc YouTube VOD; không cho webcam/RTSP/live) ──
         _total_frames   = [0]
         _seek_requested = [None]   # frame index cần seek, None = không seek
         _seeking        = [False]  # đang kéo slider (tạm dừng cập nhật tự động)
 
-        is_file_source = isinstance(source, str) and os.path.isfile(source)
+        is_file_source = (isinstance(source, str) and os.path.isfile(source)) or enable_seek
         if is_file_source:
             seek_bar = Frame(win, bg=CARD, padx=8, pady=4)
             seek_bar.pack(fill=X)

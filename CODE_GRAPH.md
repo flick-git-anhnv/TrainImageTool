@@ -1,5 +1,5 @@
 # CODE_GRAPH.md — KZTEK Image Tools
-<!-- Cập nhật: 2026-06-26 | Thêm Web Image tab: thu thập ảnh Bing/Google → anh_chua_co/ -->
+<!-- Cập nhật: 2026-07-03 | YOLO Detect: test model Segment (viền polygon, màu theo instance khi 1 class, hiện thời gian nhận dạng ⏱); YOLO Train: thêm model Segment (yolo11*-seg.pt) vào dropdown Model -->
 
 ## Hướng dẫn sử dụng
 
@@ -419,7 +419,8 @@ Yêu cầu: `_PADDLE_OK`
 | `_open_wrong_folder` | Mở Explorer tại thư mục lưu ảnh sai |
 | `_save_wrong_image` | Copy ảnh hiện tại vào `v_wrong_folder` (không move) |
 
-| `_open_video_detect` | Dialog chọn nguồn video (file / webcam) |
+| `_open_video_detect` | Dialog chọn nguồn video (file / RTSP / YouTube / webcam) |
+| `_resolve_youtube_stream` (module-level) | yt-dlp: link YouTube + độ phân giải → (direct stream URL, title, is_live); chạy trong thread nền, không block dialog |
 | `_launch_video_window` | Cửa sổ detect liên tục: worker thread đọc frame + YOLO, main thread poll queue 16ms |
 
 | `_toggle_grid` | Ẩn/hiện grid panel bằng PanedWindow |
@@ -450,6 +451,25 @@ Disk cache: `{folder}/.kztek_det_cache.json` — persist giữa session; validat
 `conf_thresh` (slider Ngưỡng) là **display-time filter** — không xóa cache, filter boxes khi render
 Session keys: `yolo.session.folder`, `yolo.session.image`
 Hỗ trợ: YOLO v8/v11, dual-model, drag-drop, detect all + filter class/size + grid thumbnail panel + session restore + LPR overlay (crop bbox → API → vẽ biển số)
+Nguồn video: file / RTSP / HTTP / webcam / **YouTube URL** (yt-dlp resolve → cv2.VideoCapture); yêu cầu `pip install yt-dlp` (flag `_YTDLP_OK`); history key `h.yolo.youtube_url`
+YouTube độ phân giải: combobox readonly (Best/1080p/720p/480p/360p/240p/Worst) → `_YT_QUALITY_FORMATS` map sang yt-dlp `format` string; lưu lựa chọn cuối qua `_bind_cfg("yolo.youtube_quality", ...)` (không dùng history vì giá trị cố định)
+Seek bar (thanh tua): hiện với file video HOẶC YouTube VOD (`enable_seek=True`, `is_live=False` từ yt-dlp); ẩn với webcam/RTSP/YouTube livestream — `_launch_video_window(..., enable_seek=bool)`
+
+**Test model Segment (YOLO-Seg):**
+| Method | Mô tả |
+|---|---|
+| `_is_seg_model(mdl)` | @static: `True` nếu `mdl.task == "segment"` (model `yolo11*-seg.pt`) |
+| `_seg_has_poly(masks, i)` | @static: `True` nếu `masks.xy[i]` là polygon hợp lệ (≥3 điểm) cho instance thứ i |
+| `_overlay_seg_masks(pil_img, results, color_fn, alpha=90, line_width=2)` | Vẽ mask polygon (`results[0].masks.xy`): fill bán trong suốt + viền nét liền (`draw.line` khép kín); không đổi gì nếu model không có `.masks` |
+| `_run_model` | Thêm `retina_masks=True` khi model là Segment → mask nét theo đúng độ phân giải ảnh gốc |
+
+Gọi `_overlay_seg_masks` tại 3 điểm vẽ: `_annotated_to_pil` (panel model 1, màu theo class/palette), `_annotated_combined_pil` (M1+M2, màu theo `_PANEL1_COLOR`/`_PANEL2_COLOR`), `_draw_yolo_panel_on_pil` (overlay M2/M3 lên panel đã có sẵn, màu `panel_color`)
+**Model Segment KHÔNG vẽ khung bbox chữ nhật** — mỗi instance có polygon hợp lệ (`_seg_has_poly`) chỉ hiện viền polygon (từ `_overlay_seg_masks`) + nhãn tên/conf; bbox chữ nhật chỉ vẽ fallback khi instance đó thiếu polygon (ví dụ model Detect thường)
+Nhãn model hiện `[SEG]` (thay `[DETR]`/`[ONNX]`) khi `mtype == "yolo"` và `_is_seg_model(mdl)` — áp dụng cho cả Model 1/2/3
+`_INSTANCE_COLORS` (class attr, 16 màu) — khi Segment chỉ phát hiện 1 class duy nhất trong ảnh (`_annotated_to_pil` tự đếm unique class), mỗi đối tượng được tô 1 màu riêng theo thứ tự index (thay vì cùng 1 màu class) để dễ phân biệt; áp dụng cho cả mask fill/viền lẫn box fallback + nhãn. Không áp dụng cho `_annotated_combined_pil`/`_draw_yolo_panel_on_pil` (màu ở đó biểu thị model, không phải instance)
+
+**Thời gian nhận dạng (⏱):** `_detect_and_display._run()` đo `time.time()` quanh từng lệnh gọi model (`_run_model`/`model.predict`) riêng cho model1/2/3 → `t1_ms, t2_ms, t3_ms` truyền vào `_on_detect_done`. Hiển thị: panel đơn → nối `⏱ Xms` vào `lbl_result` (sau summary); combined mode → mỗi label `_lbl_m1_res/_lbl_m2_res/_lbl_m3_res` có `⏱Xms` riêng để so sánh tốc độ giữa các model. Nhánh cache-hit (redraw từ `_det_cache`, không chạy lại model) vẫn đo thời gian redraw+overlay, gán vào `t1_ms`
+Cache `_det_cache` chỉ lưu bbox (không lưu polygon mask) → khi `model1` là Segment, `_detect_and_display` **bỏ qua cache**, luôn detect lại để hiện mask tươi; ảnh hưởng: grid thumbnail (`_render_grid_thumb`) và Detect All vẫn chỉ hiện bbox (không mask) do dùng chung cache box-only — giới hạn đã biết, chỉ ảnh live single-image mới có mask overlay đầy đủ
 
 #### `tab_lpr_tester.py` → Class `LprTesterTab(Frame)`
 | Hàm / Method | Mô tả |
@@ -546,6 +566,7 @@ Targets: KZTEK LPR AI Server, OpenALPR
 | `_continue_train` | Train thêm epochs từ best.pt/last.pt sau khi train đã hoàn tất |
 
 Models: yolo11n/s/m/l/x, rtdetr-l/x (tự chọn class YOLO/RTDETR theo tên model; rtdetr bỏ close_mosaic)
+Model Segment: `_MODELS_SEG` = yolo11{n,s,m,l,x}-seg.pt (dropdown Model có separator "── Segment ──"); dùng chung class `YOLO` (ultralytics tự nhận diện task='segment' theo hậu tố `-seg`) + toàn bộ pipeline dataset/data.yaml/script train hiện có (format-agnostic); `_on_model_change` hiện cảnh báo "⚠ Cần nhãn dạng polygon (YOLO-Seg: class x1 y1 x2 y2 … xn yn)" — **KHÔNG tương thích** với nhãn bbox do BBox Editor tạo ra
 
 #### `tab_classifier.py` → Class `ClassifierTrainTab(Frame)`
 | Method | Mô tả |

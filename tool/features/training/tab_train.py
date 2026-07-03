@@ -57,6 +57,15 @@ class TrainTab(Frame):
         ("rtdetr-l.pt", "RT-DETR L – transformer, độ chính xác cao"),
         ("rtdetr-x.pt", "RT-DETR X – transformer, độ chính xác tối đa"),
     ]
+    # Model Segment (YOLO11-seg) — cần nhãn dạng polygon (YOLO-Seg: class x1 y1 x2 y2 … xn yn),
+    # không tương thích với nhãn bbox (cx cy w h) do BBox Editor tạo ra.
+    _MODELS_SEG = [
+        ("yolo11n-seg.pt", "YOLO11 Nano  Segment – nhanh nhất, nhẹ nhất"),
+        ("yolo11s-seg.pt", "YOLO11 Small Segment"),
+        ("yolo11m-seg.pt", "YOLO11 Medium Segment"),
+        ("yolo11l-seg.pt", "YOLO11 Large Segment"),
+        ("yolo11x-seg.pt", "YOLO11 XLarge Segment – chính xác nhất"),
+    ]
 
     def __init__(self, master, root):
         super().__init__(master, bg=BG)
@@ -225,9 +234,11 @@ class TrainTab(Frame):
         _mc_frame = Frame(pf, bg=CARD)
         _mc_frame.grid(row=1, column=1, sticky=W, padx=(4, 16))
 
-        mc = ttk.Combobox(_mc_frame, textvariable=self._model_var, width=13,
+        mc = ttk.Combobox(_mc_frame, textvariable=self._model_var, width=15,
                           state="readonly", font=F_MAIN,
-                          values=[m for m, _ in self._MODELS])
+                          values=[m for m, _ in self._MODELS]
+                                 + ["── Segment ──"]
+                                 + [m for m, _ in self._MODELS_SEG])
         mc.pack(side=LEFT)
         mc.current(0)
 
@@ -239,7 +250,10 @@ class TrainTab(Frame):
                            if Path(self._model_var.get()).is_file() else ".")
             if p:
                 self._model_var.set(p)
-                self._model_desc.config(text=f"Custom: {Path(p).name}")
+                _seg_note = ("  ⚠ Cần nhãn dạng polygon (YOLO-Seg)"
+                             if "-seg" in Path(p).name.lower() else "")
+                self._model_desc.config(text=f"Custom: {Path(p).name}" + _seg_note,
+                                         fg="#f0c040" if _seg_note else DIM)
 
         Button(_mc_frame, text="📂", command=_browse_model,
                bg=CARD, fg=TEXT, activebackground=ACCENT2, activeforeground="white",
@@ -1842,11 +1856,20 @@ class TrainTab(Frame):
 
     def _on_model_change(self, _event):
         val = self._model_var.get()
+        if val.startswith("──"):
+            # Người dùng chọn nhầm dòng phân cách nhóm Segment → nhảy tới model seg đầu tiên
+            val = self._MODELS_SEG[0][0]
+            self._model_var.set(val)
         is_rtdetr = "rtdetr" in val.lower()
+        is_seg    = "-seg" in val.lower()
         suffix = "  ※ không dùng Close Mosaic" if is_rtdetr else ""
-        for name, desc in self._MODELS:
+        if is_seg:
+            suffix += "  ⚠ Cần nhãn dạng polygon (YOLO-Seg: class x1 y1 x2 y2 … xn yn)"
+        for name, desc in self._MODELS + self._MODELS_SEG:
             if name == val:
-                self._model_desc.config(text=desc + suffix); break
+                self._model_desc.config(text=desc + suffix,
+                                         fg="#f0c040" if is_seg else DIM)
+                break
         if hasattr(self, "_close_mosaic_lbl"):
             self._close_mosaic_lbl.config(fg="#555570" if is_rtdetr else DIM)
             self._close_mosaic_ent.config(
