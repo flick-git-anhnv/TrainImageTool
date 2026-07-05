@@ -7,6 +7,9 @@ dist/
 *.pkg
 *.spec
 
+# ── External test tools (nested repos, không track trong repo chính) ─────────
+locate-anything.cpp/
+
 # PyInstaller working dirs
 GetImageApp/build/
 GetImageApp/dist/

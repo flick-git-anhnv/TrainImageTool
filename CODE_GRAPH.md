@@ -1,5 +1,24 @@
 # CODE_GRAPH.md — KZTEK Image Tools
-<!-- Cập nhật: 2026-07-03 | Segment tab: FIX phím tắt (bỏ root.bind_all riêng cho Ctrl+O/S/Z/Delete/Escape/◀▶ — bị WebImageTab tạo sau ghi đè; thêm alias method để App._global_* dispatcher tìm thấy); FIX chọn/kéo nhầm segment lớn khi 2 segment chồng nhau (ưu tiên diện tích nhỏ nhất chứa điểm click); FIX segment nhỏ bị đè khuất (vẽ segment đang chọn sau cùng + viền trắng nổi bật); thêm PanedWindow kéo được cho panel trái/phải; "Auto-tách segment"/"Auto-tách TẤT CẢ bbox" dùng bbox làm khung SAM/CV Box tự động | Refactor tab_yolo.py (7017→195 dòng) thành 17 file mixin/helper (yolo_*.py), theo pattern IParkingImageTab -->
+<!-- Cập nhật: 2026-07-05 (2) | Thêm engine thứ 2 cho `tab_locate_anything.py`: YOLOE (model `yoloe-11s-seg.pt` có sẵn trong dự án) bên cạnh `locate-anything.cpp` CLI — GPU 4GB VRAM của máy KHÔNG đủ chứa cả bản GGUF nhỏ nhất (~4.7GB) nên CLI chỉ chạy CPU (chậm); YOLOE chạy in-process, nhẹ, nhanh, và test thực tế cho kết quả CHÍNH XÁC HƠN (bắt được "bus" mà CLI q4_k bỏ sót). Thêm `tool/shared/yoloe_utils.run_yoloe_detect` (bbox thô, không cần mask) + `tool/shared/yoloe_detect_runner.run_yoloe_one` (wrapper trả cùng shape dict với `locate_anything_runner.run_one` để tab dùng chung 1 code path qua `_current_engine_runner`). Tách `tool/features/detection/locate_anything_layout_mixin.py` (build UI) khỏi `tab_locate_anything.py` (orchestration) vì file gốc chạm giới hạn cứng 500 dòng sau khi thêm engine mới |
+<!-- Cập nhật: 2026-07-05 | Tích hợp thử nghiệm locate-anything.cpp (open-vocabulary detection theo text prompt, https://github.com/mudler/locate-anything.cpp) — build C++/ggml test tại `d:/Tool/locate-anything.cpp/` (KHÔNG track git, xem `.gitignore`). Thêm `tool/shared/locate_anything_runner.py` (subprocess CLI, KHÔNG Tkinter) + `tool/features/detection/tab_locate_anything.py` (`LocateAnythingTab`, 2 pane detect ảnh đơn/batch folder) + app standalone `LocateAnythingApp/RunLocateAnything.py`. **Bug quan trọng đã fix:** downscale nội bộ của locate-anything.cpp chỉ kích hoạt khi lưới patch > 25600 token — ngưỡng quá cao cho RAM máy thường (self-attention bậc hai theo token), ảnh gần ngưỡng (VD 1920x2560) khiến `ggml` xin cấp ~39GB RAM và fail âm thầm (0 detections). Fix: `_safe_resize` resize client-side xuống cạnh dài ≤1280px (cấu hình được qua UI "Max cạnh ảnh") trước khi gọi CLI -->
+<!-- Cập nhật: 2026-07-04 | Web Image tab: thêm nút 📂 mở thư mục lưu đang chọn (`_open_dir`, `os.startfile`) cạnh nút "Chọn…" | Segment tab: thêm thanh "🔤 Text Prompt (YOLOE)" — text-prompt segmentation thay thế SAM3 (SAM3 yêu cầu Python 3.12+/PyTorch 2.7+/CUDA 12.6+/HuggingFace auth, KHÔNG khả dụng trên máy hiện tại Python 3.10/torch 2.5/CUDA 12.1 — đã kiểm tra kỹ trước khi chọn hướng thay thế). Nhập mô tả tiếng Anh (cách nhau dấu phẩy) → `shared/yoloe_utils.run_yoloe_text` quét toàn ảnh, tự thêm 1 segment/object tìm được, map nhãn → CLASS_NAMES id qua `_label_to_cid` (không khớp thì dùng class đang chọn ở toolbar). `cv_segment.mask_array_to_polygon` (findContours RETR_EXTERNAL + contour lớn nhất) tách ra dùng CHUNG giữa `sam_utils._extract` và `yoloe_utils` — tránh trùng lặp code trích polygon sạch từ mask pixel | cv_segment.polygon_to_mask + Segment tab: CV Edge MỞ RỘNG THÊM segment đang chọn (seed `_cv_mask` từ polygon có sẵn qua `_cv_seed_si`) thay vì luôn tạo mới — khắc phục Auto-tách/SAM Box chỉ bắt 1 phần object (VD thân xe, bỏ sót bánh xe/đuôi xe do khác màu/lẫn bóng) | mode "draw" tự nhận diện Sửa/SAM Box theo cử chỉ (click=vẽ, click+kéo=SAM Box, click trúng điểm=sửa) qua `_pending_click` | sam_utils._extract lấy `masks.data` (mask pixel thô) thay vì `masks.xy` (tránh seam nối mảnh rời/lỗ của ultralytics `strategy="all"`); `clean_polygon` dùng convex hull sửa segment CŨ | run_grabcut_box: fallback GC_INIT_WITH_RECT khi object hình chữ nhật khớp sát khung | FIX Enter nhảy 2 ảnh; undo-stack thật; "Đệ quy subfolder"; `.kztek_progress.json`; "👁 Hiện segment H"; PanedWindow | Refactor tab_yolo.py (7017→195 dòng) thành 17 file mixin/helper | Web Image tab: bổ sung nguồn **Pexels** (bên cạnh Bing/Google qua DDG) — thêm `web_image._search_pexels` (Pexels API `/v1/search`, header `Authorization: <api_key>`, tự lặp trang tới 80 ảnh/trang), engine combobox thêm giá trị "Pexels", hàng nhập **Pexels API Key** (ẩn/hiện theo engine qua `_on_engine_change`, lưu `web_img.pexels_api_key` + history) | Segment tab: thay thanh YOLOE bằng "🔤 Text Prompt (SAM 3)" (`shared/sam3_onnx_utils.py`, ONNX qua vietanhdev/segment-anything-3-onnx-models, không cần HF gated, chạy CPU vì onnxruntime-gpu 1.23.2 chưa hỗ trợ opset21/Squeeze trên CUDA) + Spinbox Ngưỡng | Fix crash `NameError: free variable 'ex'` (7 chỗ, closure tham chiếu biến exception sau khi Python tự xóa — xem ERRORS.md [E024]) | Vật cản chia object: `cv_segment._bridge_fragments` bắc cầu (morphological CLOSE tăng dần kernel) nối mảnh rời do vật cản (VD bánh xe tách khỏi thân xe) thành ĐÚNG 1 segment — không tách nhiều segment, không mất mảnh, không convexHull lấn vùng vật cản | Màu segment theo index (mỗi object 1 màu) thay vì theo class | **FIX** Web Image tab: `req_count = min(need * 3, 300)` cap CỨNG 300 ứng viên bất kể "Max ảnh/từ khóa" đặt bao nhiêu (VD đặt 500 vẫn chỉ tải được ~300-320 ảnh dù nguồn còn nhiều) — tách cap riêng theo engine: `_DDG_MAX_CAND=300` (giữ nguyên, tránh spam DDG), `_PEXELS_MAX_CAND=8000` (đúng giới hạn thực tế của Pexels API); log thêm cảnh báo khi Pexels trả về ít hơn `need` — do thư viện Pexels là ảnh stock chọn lọc, số ảnh khớp 1 từ khóa thường ít hơn nhiều so với ước tính hiển thị trên web Bing/Google/trang chủ Pexels -->
+
+## Nguyên tắc thiết kế: gộp về 1 segment khi vật cản chia object
+
+**Vấn đề:** khi 1 vật cản (cột điện, xe khác…) đứng giữa object trong ảnh, mask nhận
+diện bị chia thành ≥2 vùng pixel rời rạc (VD thân xe + bánh xe tách nhau). Logic cũ
+chỉ lấy 1 mảnh — SAM/CV Box chọn mảnh LỚN NHẤT (mất mảnh nhỏ), CV Edge gộp bằng
+convex hull (lấn vào vùng vật cản, sai hình dạng).
+
+**Fix:** `cv_segment._bridge_fragments` — khi phát hiện ≥2 mảnh đủ lớn (diện tích
+≥15% mảnh lớn nhất, `min_area_ratio=0.15`, lọc nhiễu pixel lẻ tẻ), thử morphological
+CLOSE với kernel TĂNG DẦN (9→17→31→51→81px) cho tới khi các mảnh "bắc cầu" nối liền
+thành 1 vùng — rồi lấy contour đó làm polygon DUY NHẤT. Object vẫn là **1 segment**
+(đúng thực tế — đó LÀ 1 object, chỉ bị che ở giữa), hình dạng bám sát viền thật (không
+cắt thẳng qua vật cản như hull, không mất mảnh như chỉ lấy lớn nhất). Nếu khoảng cách
+quá xa để bắc cầu hợp lý (vượt `max_kernel=81`) → fallback lấy mảnh lớn nhất, an toàn.
+Dùng CHUNG bởi `mask_array_to_polygon` (SAM/YOLOE/SAM3) và `mask_to_polygon` (CV Box/
+CV Edge) — không cần đổi gì ở nơi gọi, tất cả vẫn nhận về đúng 1 polygon như trước.
 
 ## Hướng dẫn sử dụng
 
@@ -44,6 +63,7 @@ tool/utils/*      → ..core.*    (2 dots)
 | `SlotDetect.py` | `_Cfg`, `SlotDetectApp` | `__init__`, `_build`, `_load`, `_on_click_canvas`, `_detect`, `_update_status` | — |
 | `GetImageApp/RunGetParkingImage.py` | `GetParkingImageApp` | `__init__`, `_bind_shortcuts`, `_on_close` | `tab_iparking_image.IParkingImageTab` |
 | `GetPgsImageApp/RunGetPgsImage.py` | `GetPgsImageApp` | `__init__`, `_bind_shortcuts`, `_on_close` | `tab_pgs_image.PgsImageTab` |
+| `LocateAnythingApp/RunLocateAnything.py` | `LocateAnythingApp` | `__init__`, `_bind_shortcuts`, `_on_close` | `tab_locate_anything.LocateAnythingTab` |
 
 ---
 
@@ -127,6 +147,7 @@ Class: `GridPageNav(Frame)`, `DateTimePicker(Frame)`
 | `_folder_row` | `(parent, label_text, var, row, ...)` | Build hàng chọn thư mục |
 | `_load_label_bboxes` | `(img_path, lbl_path=None)` | Đọc YOLO bbox từ .txt |
 | `_zoom_image_window` | `(root, pil_img, title)` | Mở popup phóng to ảnh |
+| `_attach_treeview_tooltip` | `(tree, text_fn)` | Hover 1 dòng Treeview → hiện tooltip text đầy đủ (khi panel hẹp cắt bớt chữ) |
 | `_pb_row` | `(parent)` | Build hàng progress bar |
 | `_set_progress` | `(lbl, pb, done, total, root)` | Cập nhật tiến trình |
 | `_action_btn` | `(parent, text, cmd, color, **kw)` | Tạo nút hành động |
@@ -272,6 +293,12 @@ Tab đã đăng ký (theo thứ tự trong `_tab_defs`, xem `app.py` để biế
 | `_on_zoom_wheel(event)` | Handler scroll-wheel zoom tại cursor |
 | `_on_pan_start/drag/end(event)` | Middle-mouse pan handlers |
 | `_calc_zoom_offsets()` | Trả về `(scale, nw, nh, off_x, off_y)` để render |
+| `canvas_view_to_image_box(scale, off_x, off_y, canvas_w, canvas_h, img_w, img_h)` | (module-level, không phải method) Vùng ảnh gốc đang hiển thị trong viewport hiện tại (clamp biên ảnh) — dùng để crop đúng vùng đang zoom rồi detect lại (BBoxEditor "Test vùng zoom") |
+
+#### `tool/shared/model_infer.py`
+| Symbol | Mô tả |
+|---|---|
+| `run_model_predict(model, model_type, pil_img, conf)` | Chạy model (yolo / rfdetr / onnx) trên 1 ảnh PIL → list `[cid, x1, y1, x2, y2, conf]`; gom nhánh yolo vs rfdetr/onnx (cùng interface `.xyxy/.class_id/.confidence`) dùng chung cho `tab_bbox.py` Detect/Verify/Test vùng zoom |
 
 #### `tool/shared/detect_cache.py`
 | Symbol | Mô tả |
@@ -295,18 +322,60 @@ Tab đã đăng ký (theo thứ tự trong `_tab_defs`, xem `app.py` để biế
 | `run_sam_points(model, img, pts_labels)` | SAM inference point-prompt → list polygon points |
 | `run_sam_box(model, img, x1, y1, x2, y2)` | SAM inference box-prompt → list polygon points |
 | `simplify(pts, epsilon_pct)` | Douglas-Peucker (`cv2.approxPolyDP`) đơn giản hóa polygon; fallback stride-sampling nếu thiếu cv2 |
+| `_extract(results)` | Lấy mask pixel thô (`masks.data`) → `cv_segment.mask_array_to_polygon` — KHÔNG dùng `masks.xy` |
+
+#### `tool/shared/yoloe_utils.py`
+| Symbol | Mô tả |
+|---|---|
+| `load_yoloe(model_path="yoloe-11s-seg.pt")` | Load model YOLOE (ultralytics) — dùng khi chưa cấu hình SAM 3 (ONNX), xem `sam3_onnx_utils.py` |
+| `run_yoloe_text(model, img, prompts, conf=0.25)` | Text-prompt segmentation: `model.set_classes(prompts, model.get_text_pe(prompts))` rồi predict; trả về list `(label, conf, polygon)` cho MỖI object tìm được trong ảnh |
+| `run_yoloe_detect(model, img, prompts, conf=0.25)` | Giống trên nhưng CHỈ lấy `r.boxes.xyxy` (bbox thô, bỏ qua mask/polygon) — nhẹ hơn, dùng làm engine thay thế cho `locate-anything.cpp` trong `tab_locate_anything.py` (xem `yoloe_detect_runner.py`). Trả về list `(label, conf, [x1,y1,x2,y2])` |
+
+⇢ `run_yoloe_detect` dùng bởi: `tool/shared/yoloe_detect_runner.run_yoloe_one`
+
+#### `tool/shared/yoloe_detect_runner.py`
+| Symbol | Mô tả |
+|---|---|
+| `run_yoloe_one(model, image_path, prompts, *, conf=0.25, out_dir=None)` | Chạy `run_yoloe_detect`, tự vẽ box + lưu annotated PNG + JSON — trả về **CÙNG SHAPE dict** `{detections, annotated, json_path, error}` với `locate_anything_runner.run_one` (dùng chung 1 code path trong `tab_locate_anything.py` bất kể engine nào đang chọn) |
+
+#### `tool/shared/sam3_onnx_utils.py`
+Text-prompt segmentation bằng SAM 3, chạy qua ONNX Runtime (bộ export
+`vietanhdev/segment-anything-3-onnx-models`, Apache 2.0, không cần quyền HuggingFace
+gated) — thay bản PyTorch gốc `facebook/sam3` (yêu cầu torch/CUDA mới hơn + xin quyền).
+3 ONNX model: image encoder, language encoder (tokenize qua package `clip` gốc OpenAI,
+context_length=32), decoder (masks + scores + boxes).
+
+| Symbol | Mô tả |
+|---|---|
+| `find_sam3_onnx_files(model_dir)` | Quét đệ quy tìm 3 file `.onnx` theo tên khớp keyword (`image`/`language`/`decoder`) |
+| `load_sam3_onnx(model_dir)` | Trả về `Sam3Onnx` đã load đủ 3 session |
+| `run_sam3_text(model, img, prompts, conf=0.5)` | Trả về list `(prompt, score, polygon)` — 1 polygon/instance (vật cản chia mảnh thì tự bắc cầu qua `mask_array_to_polygon`, xem `cv_segment.py`) |
+| `Sam3Onnx` | `.predict_text(cv_img_bgr, text_prompt, confidence_threshold)` → `(masks, scores)` đã lọc theo threshold |
+| `_create_ort_session(path)` | Thử `CUDAExecutionProvider` trước, bắt MỌI exception (kể cả crash giữa lúc init, không chỉ lỗi thiếu DLL — onnxruntime không tự fallback trường hợp này) rồi fallback `CPUExecutionProvider`. **Hiện luôn fallback CPU** vì onnxruntime-gpu 1.23.2 (bản mới nhất) chưa hỗ trợ kernel CUDA cho "Squeeze" ở opset 21 (model SAM3 export dùng opset này) |
+
+⇢ Được dùng bởi: `tab_segment.py` thanh "🔤 Text Prompt (SAM 3)" — `_run_sam3_prompt`/`_load_sam3_model`/`_browse_sam3_dir`, `_label_to_cid` map nhãn trả về sang class id
 
 #### `tool/shared/cv_segment.py`
 | Symbol | Mô tả |
 |---|---|
 | `compute_edge_mask(img, blur_ksize, canny_low, canny_high)` | Bản đồ biên nhị phân: GaussianBlur (thông thấp) → Canny (thông cao) → dilate nối biên đứt |
+| `_bridge_fragments(mask_u8, min_area_ratio=0.15, max_kernel=81)` | Nếu mask có ≥2 mảnh RỜI đáng kể (vật cản — cột điện, xe khác… — chia object, VD bánh xe tách khỏi thân xe), morphological CLOSE **tăng dần kernel** (9→17→31→51→81) để BẮC CẦU nối chúng thành 1 vùng liên thông — hình dạng tự nhiên, không cắt thẳng qua vật cản như convexHull, không mất mảnh như chỉ lấy mảnh lớn nhất. Nếu khoảng cách quá xa (vượt `max_kernel`) → trả mask gốc, nơi gọi tự lấy mảnh lớn nhất (an toàn) |
+| `mask_array_to_polygon(mask_arr, orig_h, orig_w)` | Trích polygon SẠCH từ 1 mask pixel thô bất kỳ — resize đúng kích thước ảnh, gọi `_bridge_fragments` rồi `findContours(RETR_EXTERNAL)` lấy contour lớn nhất (sau khi bắc cầu, thường chỉ còn 1). Dùng CHUNG giữa `sam_utils._extract`, `yoloe_utils`, `sam3_onnx_utils` |
+| `polygon_to_mask(pts, img_w, img_h)` | Rasterize 1 polygon đơn giản (không tự cắt chéo) thành mask — dùng để seed phiên CV Edge mở rộng segment có sẵn |
 | `empty_mask_like(edge_mask)` | Mask rỗng cùng shape, dùng làm accumulator ban đầu |
 | `flood_region_mask(edge_mask, x, y)` | Flood-fill vùng liên thông bị bao kín bởi biên, chứa điểm (x,y); `None` nếu điểm nằm trên biên/ngoài ảnh |
-| `mask_to_polygon(mask, close_ksize=15)` | Contour của mask → 1 polygon; morphological CLOSE nối các đảo rời rạc gần nhau, nếu vẫn nhiều mảnh thì gộp bằng `convexHull` → luôn trả về đúng 1 polygon |
+| `mask_to_polygon(mask, close_ksize=15)` | Contour của mask → 1 polygon; CLOSE (`close_ksize`, nối đảo do brush kéo nhiều nét) rồi `_bridge_fragments` (bắc cầu tăng dần nếu vẫn còn nhiều mảnh, VD vật cản chia object trong GrabCut/CV Box), chỉ khi cả 2 bước đều không gộp được (click ở 2 vị trí quá xa nhau) mới fallback `convexHull` — LUÔN trả về đúng 1 polygon. Dùng cho CV Edge VÀ CV Box |
 | `run_cv_edge_segment(img, click_x, click_y, *, blur_ksize, canny_low, canny_high, min_area)` | Tiện ích 1-click: kết hợp 3 hàm trên cho 1 điểm duy nhất |
 | `run_grabcut_box(img, x1, y1, x2, y2, iterations=5, pad_ratio=0.15)` | **Tự động, không cần chỉnh tham số**: kéo khung quanh object → `cv2.grabCut` tách foreground/background (xử lý trên crop quanh khung + đệm `pad_ratio` để nhanh hơn ảnh gốc) → trả mask cùng kích thước ảnh gốc |
 
 ⇢ Được dùng bởi: `tab_segment.py` — mode "🟩 CV Box" dùng `run_grabcut_box` (tự động hoàn toàn); mode "🌀 CV Edge" dùng `compute_edge_mask`/`flood_region_mask`/`mask_to_polygon`/`empty_mask_like` qua `_start_cv_drag`/`_grow_cv_mask` để tinh chỉnh thủ công (kéo=cộng, Shift+kéo=trừ)
+
+**Vật cản chia object (2026-07-04):** SAM Box/CV Box (auto-tách + interactive), YOLOE, SAM3
+đều gọi qua `mask_array_to_polygon`/`mask_to_polygon` — khi vật cản (cột, xe khác…) chia mask
+thành ≥2 mảnh rời thật (VD bánh xe tách khỏi thân xe), `_bridge_fragments` bắc cầu chúng
+thành **ĐÚNG 1 segment** (không tách thành nhiều segment, không mất mảnh, không convexHull
+lấn vùng vật cản). Chỉ khi khoảng cách quá xa để bắc cầu hợp lý (>~81px sau vài lần CLOSE)
+mới fallback về mảnh lớn nhất.
 
 #### `tool/shared/filmstrip.py`
 | Symbol | Mô tả |
@@ -316,6 +385,18 @@ Tab đã đăng ký (theo thứ tự trong `_tab_defs`, xem `app.py` để biế
 | `.load(file_list, current_path)` | Nạp danh sách ảnh mới |
 | `.set_current(path)` | Cập nhật ảnh đang chọn, scroll tới trang |
 | `.invalidate_cache(path)` | Xóa thumbnail cache (khi label thay đổi) |
+
+#### `tool/shared/locate_anything_runner.py`
+Business logic gọi `locate-anything-cli.exe` qua subprocess — KHÔNG import Tkinter,
+dùng bởi `tab_locate_anything.py`.
+
+| Symbol | Mô tả |
+|---|---|
+| `DEFAULT_MAX_LONG_SIDE` | `1280` — cạnh dài tối đa trước khi resize an toàn RAM |
+| `_safe_resize(image_path, out_dir, max_long_side, on_log)` | Resize ảnh nếu cạnh dài vượt ngưỡng. **Lý do:** downscale nội bộ của locate-anything.cpp chỉ kích hoạt khi lưới patch > 25600 token (`kInTokenLimit`, xem `third_party` `image_io.cpp`) — ngưỡng này quá cao cho RAM máy thường vì self-attention tốn bộ nhớ bậc hai theo số token; ảnh chạm gần giới hạn (VD 1920x2560, ~24934 token — dưới ngưỡng nên KHÔNG bị downscale) khiến `ggml_backend_cpu_buffer_type_alloc_buffer` xin cấp ~39GB và fail (0 detections, không crash hẳn nhưng vô dụng). Resize client-side xuống cạnh dài 1280px trước khi gọi CLI để tránh lỗi này |
+| `build_cmd(...)` | Build list argv cho `locate-anything-cli detect` |
+| `run_one(cli_exe, model_path, image_path, prompt, *, mode, out_dir, threads, max_long_side, on_log, proc_holder)` | Chạy detect 1 ảnh (đồng bộ — gọi trong thread nền), trả `{detections, annotated, json_path, error}`. `proc_holder=[None]` cho phép caller `.terminate()` subprocess từ thread khác |
+| `list_images(folder, exts)` | Liệt kê ảnh trong thư mục theo extension |
 
 ---
 
@@ -357,6 +438,9 @@ Tab đã đăng ký (theo thứ tự trong `_tab_defs`, xem `app.py` để biế
 | `_restore_session()` | Khởi động: auto load folder + jump tới ảnh cuối cùng đã mở |
 | `_do_restore_nav()` | Điều hướng đến `_restore_img` sau khi async filter hoàn thành |
 | `_relabel_batch()` | Đổi nhãn hàng loạt: thay class_id từ → đến trong tất cả file label của bộ lọc hiện tại; reload ảnh đang mở nếu bị ảnh hưởng |
+| `_load_det_model` / `_auto_load_det_model` / `_run_detect` / `_run_verify` | Load model YOLO/RF-DETR/ONNX (`bbox.det_model_path`) → **Detect** (thêm bbox vào label) hoặc **Kiểm tra** (`_run_verify`/`_draw_verify_overlay`, so khớp IoU với GT, chỉ overlay tạm không ghi label) |
+| `_run_zoomtest_detect` / `_on_zoomtest_done` / `_clear_zoomtest` / `_draw_zoomtest_overlay` | **"🔎 Test vùng zoom"**: crop đúng vùng đang hiển thị trên canvas (theo `_scale/_off_x/_off_y` hiện tại, qua `shared.canvas_zoom.canvas_view_to_image_box`) từ ẢNH GỐC → detect lại trên crop (`shared.model_infer.run_model_predict`) → overlay tạm màu tím (`zoomtest_item` tag), tọa độ quy đổi về ảnh gốc để tự căn chỉnh khi pan/zoom tiếp. CHỈ xem, không ghi `_bboxes`/label — dùng để kiểm tra model có nhận ra vật thể nhỏ khi "phóng to" hay không |
+| `_commit_zoomtest_to_label` | Nút **"➕ Thêm vào label"** — sau khi xem "Test vùng zoom" thấy đúng, ghi thẳng `self._zoomtest_boxes` (đã detect sẵn trên crop, KHÔNG detect lại) vào `_bboxes` + `_save_labels`, rồi xóa overlay tím |
 
 ---
 
@@ -369,8 +453,9 @@ Annotation tool tạo nhãn polygon (YOLO-Seg: `class x1 y1 x2 y2 … xn yn`). 6
 | `_build_lbl_dir_row` | Ô **"Thư mục label (tùy chọn)"** (giống BBox Editor `lbl_dir_var`) — để trống thì đọc/ghi `.txt` cạnh ảnh; đổi giá trị → `_on_lbl_dir_change` tự reload nhãn ảnh đang mở |
 | `_build_left` | Danh sách ảnh + **bộ đếm** (`_img_count_lbl`, dạng "N/M ảnh") + filter **Tên** (debounce 250ms) + filter **"Chỉ hiện chưa có nhãn"** — giống panel trái BBox Editor |
 | `_build_canvas` | Bọc canvas trong `wrap` + thanh công cụ riêng phía trên: nút **− / Fit% / +** zoom (dùng `_zoom_step`/`_zoom_reset` có sẵn từ `CanvasZoomMixin`), nhãn `_zoom_lbl` cập nhật trong `_render()` |
-| `_build_sam_bar` | Nút load `mobile_sam.pt`/`sam_b.pt`/file .pt tùy chọn + slider Simplify (dùng chung cho SAM và CV) |
+| `_build_sam_bar` | Nút load `mobile_sam.pt`/`sam_b.pt`/file .pt tùy chọn + Spinbox Simplify (0.05 bước, gõ số trực tiếp — dùng chung cho SAM và CV) |
 | `_build_cv_bar` | Thanh tham số **CV Edge** (Blur kernel, Canny thấp/cao, Min area px²) — chỉ ảnh hưởng mode `cv`; mode `cv_box` không cần tham số nào |
+| `_build_sam3_bar` | Thanh "🔤 Text Prompt (SAM 3)" — chọn thư mục model ONNX (`_browse_sam3_dir`), `_load_sam3_model` (thread), prompt combobox + Spinbox Ngưỡng (0.05-0.95) + `_run_sam3_prompt` — thay thế bar YOLOE cũ (2026-07-04) |
 | `_label_path_for(img_path)` | Trả về đường dẫn `.txt` cho 1 ảnh bất kỳ, ưu tiên `_lbl_dir_var` nếu có set — dùng bởi `_lbl_path()` (ảnh hiện tại) và `_apply_filters()` (quét tất cả ảnh) |
 | `_schedule_filter` / `_apply_filters` | Debounce 250ms cho filter Tên; `_apply_filters` quét `_img_files` → `_filtered_idx`, populate lại `_img_lb`, cập nhật `_img_count_lbl` — điều hướng (`_on_list_sel`/`_prev_img`/`_next_img`/`_load_img`) đều thao tác trên `_filtered_idx`, không phải index thô vào `_img_files` |
 | `_load_dir` / `_load_img` | Quét thư mục ảnh (gọi `_apply_filters` để populate danh sách), load ảnh theo index tuyệt đối trong `_img_files`. **Thứ tự bắt buộc**: `_load_labels()` PHẢI chạy trước `_zoom_reset()` (render) — nếu render trước sẽ vẽ nhầm segment ảnh cũ lên ảnh mới (bug đã fix) |
@@ -381,7 +466,7 @@ Annotation tool tạo nhãn polygon (YOLO-Seg: `class x1 y1 x2 y2 … xn yn`). 6
 | `_bind_shortcuts` | CHỈ bind phím số 0-9 (`root.bind_all`, không tab nào khác dùng chữ số nên an toàn). Ctrl+O/S/Z, Delete, Escape, ◀▶ KHÔNG tự `root.bind_all` nữa (từng bị `WebImageTab` tạo sau ghi đè `<Escape>`) — thay bằng alias method `_browse`/`_undo`/`_delete_selected`/`_stop`/`_prev_image`/`_next_image` để `App._global_*` (bind trên toplevel, không xung đột giữa các tab) tự tìm thấy và dispatch đúng |
 | `_render` (z-order) | Vẽ segment đang chọn (`_sel`) SAU CÙNG (`order = sorted(range(n), key=lambda i: i==_sel)`) + viền trắng dày đè thêm — đảm bảo segment nhỏ đang chọn không bị segment lớn khác che khuất khi chồng lấn |
 | `_on_click` | Dispatch theo mode: **`draw`** — nếu chưa vẽ dở và `_try_start_edit_drag` trúng thì tự chuyển sang sửa (không cần bấm đổi radio "Sửa"), ngược lại thêm điểm polygon mới; `edit` — luôn gọi `_try_start_edit_drag`; sam click / sam_box & cv_box bắt đầu kéo khung / cv bắt đầu drag flood-fill |
-| `_on_drag` | mode `edit`/`draw` với `_drag` đã set: `vi is None` → dịch **cả segment** theo delta chuột (tính bằng tọa độ ảnh, không phụ thuộc zoom); `vi` là số → di chuyển đúng điểm đó (như cũ) |
+| `_on_drag` | mode `edit`/`draw` với `_drag` đã set: `vi is None` → dịch **cả segment** theo delta chuột (tính bằng tọa độ ảnh, không phụ thuộc zoom); `vi` là số → nếu segment còn trong `_bbox_derived` (bbox thô 4 điểm, thứ tự cố định TL/TR/BR/BL) thì **resize giữ nguyên hình chữ nhật** (góc đối diện làm anchor, 2 góc kề cập nhật theo 1 trục) — để chỉnh bbox chuẩn trước khi Auto-tách; nếu đã là polygon thật (không còn trong `_bbox_derived`) → di chuyển tự do đúng điểm đó như polygon thường |
 | `_on_right_click` | `sam`/`cv`/`cv_box` có `_preview_poly` → xác nhận; ngược lại đóng polygon vẽ tay |
 | `_confirm_preview` | Thêm `_preview_poly` vào `_segments`, dùng chung cho SAM/CV Edge/CV Box |
 | `_fire_sam` / `_run_sam_thread` / `_after_sam` | Chạy SAM (thread) → set `_preview_poly` chờ xác nhận |
@@ -392,13 +477,18 @@ Annotation tool tạo nhãn polygon (YOLO-Seg: `class x1 y1 x2 y2 … xn yn`). 6
 | `_on_numkey_label(n)` | Phím 0-9: chọn class n trong combobox; nếu có segment đang chọn (`_sel`) → relabel ngay (giống BBoxEditorTab) |
 | `_simplify_selected` | Áp `_simplify()` (Douglas-Peucker, theo slider Simplify) lại cho RIÊNG segment đang chọn — tăng/giảm số điểm polygon ("đổi độ phân giải") mà không cần vẽ lại |
 | `_auto_refine_selected` / `_auto_refine_all_bbox` / `_auto_refine_next` / `_start_auto_refine` | Dùng bbox (hộp bao) của segment đang chọn — hoặc TẤT CẢ segment còn trong `_bbox_derived` (bbox thô chưa tinh chỉnh) — làm khung cho `run_sam_box` (nếu đã load SAM) hoặc `run_grabcut_box` (fallback) để tự động tách polygon chính xác, **không cần kéo vẽ lại khung SAM Box/CV Box bằng tay**; `_auto_refine_all_bbox` xử lý tuần tự qua `_auto_refine_queue` |
-| `_run_auto_refine_sam` / `_run_auto_refine_cv` / `_after_auto_refine` | Worker thread + callback; **`eps` (Simplify) phải đọc ở main thread rồi truyền vào thread** — đọc Tkinter Var trực tiếp trong thread nền từng gây `RuntimeError: main thread is not in main loop` |
+| `_run_auto_refine_sam` / `_run_auto_refine_cv` / `_after_auto_refine` | Worker thread + callback; **`eps` (Simplify) phải đọc ở main thread rồi truyền vào thread** — đọc Tkinter Var trực tiếp trong thread nền từng gây `RuntimeError: main thread is not in main loop`. Vật cản chia object (VD bánh xe tách khỏi thân xe) được tự bắc cầu về 1 polygon duy nhất trong `mask_array_to_polygon`/`mask_to_polygon` (`cv_segment._bridge_fragments`) — không cần xử lý multi-polygon ở đây |
 | `_bbox_derived: set[int]` | Index trong `_segments` còn là bbox thô (rect 4 điểm, chưa auto-tách) của ảnh hiện tại — set lại mỗi lần `_load_labels()`, gỡ dần khi `_after_auto_refine` xử lý xong |
 | `_delete_seg` / `_undo_pt` / `_cancel` | Xóa segment / hoàn tác điểm / hủy thao tác đang dở (reset cả `_cv_mask`) |
 
 `_preview_poly: list|None` — polygon chờ xác nhận, dùng chung cho SAM/CV Edge/CV Box (chuột phải xác nhận, Esc hủy)
 `_cv_mask` — mask tích lũy dùng chung giữa CV Box (khởi tạo bằng GrabCut) và CV Edge (cộng/trừ tiếp bằng flood-fill) — cho phép quy trình: kéo khung CV Box lấy kết quả nhanh, rồi chuyển CV Edge tinh chỉnh viền
-Import: `...shared.canvas_zoom.CanvasZoomMixin`, `...shared.sam_utils.{run_sam_points, run_sam_box, simplify}`, `...shared.cv_segment.{compute_edge_mask, flood_region_mask, mask_to_polygon, empty_mask_like, run_grabcut_box}`
+Import: `...shared.canvas_zoom.CanvasZoomMixin`, `...shared.sam_utils.{run_sam_points, run_sam_box, simplify}`, `...shared.cv_segment.{compute_edge_mask, flood_region_mask, mask_to_polygon, empty_mask_like, run_grabcut_box}`, `...shared.sam3_onnx_utils.{load_sam3_onnx, run_sam3_text}`
+
+**Màu segment (2026-07-04):** `_render` tô màu theo INDEX trong `_segments` (`_COLORS[si % 8]`),
+KHÔNG theo `cid` — mỗi object 1 màu riêng để phân biệt nhiều object cùng class đứng cạnh/chồng
+nhau (VD nhiều instance "person" từ SAM3 text-prompt), thay vì tất cả cùng class trước đây
+trùng màu.
 
 ---
 
@@ -544,6 +634,7 @@ Yêu cầu: `_PADDLE_OK`
 | `_on_pan_press/_drag` | Kéo chuột trái để pan |
 | `_on_mmb_press/_drag/_release` | Pan bằng chuột giữa |
 | `_zoom_step` / `_on_canvas_scroll` | Zoom in/out/fit bằng scroll chuột |
+| `_draw_zoomtest_overlay` | Vẽ overlay tạm (tím, tag `zoomtest_item`) cho "🔎 Test vùng zoom" — gọi cuối `_render_display`; `_on_pan_press`/`_on_mmb_press` xóa overlay trước khi pan (raw drag chỉ move ảnh, không re-render → overlay sẽ lệch nếu không xóa) |
 
 #### `yolo_grid_mixin.py` → Mixin `YoloGridMixin`
 | Method | Mô tả |
@@ -595,6 +686,7 @@ Nhãn model hiện `[SEG]` khi `mtype == "yolo"` và `_is_seg_model(mdl)` — á
 | `_refresh_det_table` / `_on_det_row_select` | Cập nhật `DetTablePanel` (`det_table.py`), zoom khi click hàng |
 | `_on_plot_param_change` / `_do_replot` | Debounce 200ms khi đổi font/line width → vẽ lại |
 | `_sync_slider_labels` / `_on_conf_thresh_change` / `_on_slider_change` / `_get_sel_classes` | Slider conf/iou/ngưỡng hiển thị |
+| `_run_zoomtest_detect` / `_on_zoomtest_done` / `_clear_zoomtest_overlay` | **"🔎 Test vùng zoom"**: crop đúng vùng đang hiển thị trên canvas (theo `_zoom_factor`/`_img_pos` hiện tại, qua `shared.canvas_zoom.canvas_view_to_image_box`) từ `_pil1_orig` (ẢNH GỐC, chưa annotate) → detect lại trên crop (`shared.model_infer.run_model_predict`) → `_draw_zoomtest_overlay` (yolo_canvas_mixin.py). CHỈ overlay tạm, KHÔNG đụng `_det_cache`/label — dùng để kiểm tra model có nhận vật thể nhỏ khi "phóng to" hay không, giống tính năng cùng tên ở `tab_bbox.py` |
 
 Cache `_det_cache` chỉ lưu bbox (không lưu polygon mask) → khi model1 là Segment, `_detect_and_display` **bỏ qua cache**, luôn detect lại để hiện mask tươi
 
@@ -645,7 +737,16 @@ Cache `_det_cache` chỉ lưu bbox (không lưu polygon mask) → khi model1 là
 | Method | Mô tả |
 |---|---|
 | `_build_toolbar` | Build toolbar: chọn model 1/2/3, cấu hình conf/iou/LPR/wrong-folder |
+| `_toggle_lpr_panel` | Ẩn/hiện panel cấu hình LPR (URL/timeout/cỡ chữ) — thu gọn mặc định, cùng pattern `_toggle_adv` |
 | `_build_content` | Build panel nội dung chính: 2 canvas so sánh model, sidebar Treeview, filter, `DetTablePanel`, grid panel |
+
+**Tối ưu hiển thị (2026-07-03):** Row "Lọc class" (`Listbox height=1/2` cạnh `Scrollbar`)
+từng bị kéo giãn theo chiều cao mặc định của `Scrollbar` (~50px) bất kể `height` đặt bao
+nhiêu — fix bằng `cls_wrap.pack_propagate(False)` + ép `height=22`. Panel cấu hình LPR
+(`r4`) thu gọn mặc định qua `_toggle_lpr_panel`, chỉ hàng tiêu đề (checkbox + trạng thái
+kết nối) luôn hiển thị. `tree_images` (sidebar) gắn `_attach_treeview_tooltip`
+(`tool/core/ui_helpers.py`) để hiện tên file đầy đủ khi hover — vì panel hẹp thường cắt
+bớt tên file dài.
 
 Disk cache: `{folder}/.kztek_det_cache.json` — persist giữa session; validate model path + iou khi load
 Session keys: `yolo.session.folder`, `yolo.session.image`
@@ -719,6 +820,42 @@ Targets: KZTEK LPR AI Server, OpenALPR
 | `_on_persp_done` | Nhận kết quả warp, hiển thị preview, auto-classify |
 | `_warp_perspective` | Thực hiện perspective transform (cv2 → PIL → bbox fallback) |
 | `_review_state` (module-level) | Xác định trạng thái correct/incorrect/unreviewed |
+
+#### `tab_locate_anything.py` → Class `LocateAnythingTab(Frame, LocateAnythingLayoutMixin)`
+Open-vocabulary detection theo mô tả text tự do — **2 engine chọn được qua Radiobutton**
+(bổ sung cho YOLO cố định class, không thay thế). Dùng cả trong tab main tool và
+standalone `LocateAnythingApp/`. File tách làm 2 để dưới giới hạn 500 dòng: layout UI ở
+`locate_anything_layout_mixin.py`, orchestration (engine dispatch + threading) ở đây.
+
+| Engine | Backend | Đặc điểm |
+|---|---|---|
+| `cli` (mặc định) | `locate-anything-cli.exe` (subprocess, xem `locate_anything_runner.py`) | Model 3B tham số, chính xác cao với `q8_0`+, nhưng CHẬM trên CPU (vài phút/ảnh) và **không fit VRAM 4GB** (kể cả bản q4_k nhỏ nhất ~4.7GB) |
+| `yoloe` | `yoloe-11s-seg.pt` (in-process, ultralytics, xem `yoloe_detect_runner.py`) | Nhẹ, nhanh (vài giây/ảnh), fit GPU 4GB thoải mái. Test thực tế trên `bus_in.png`: YOLOE bắt được CẢ "bus" lẫn "person" — chính xác hơn `locate-anything.cpp` bản q4_k (bản đó bỏ sót "bus") |
+
+Prompt format khác nhau theo engine: CLI dùng câu tự nhiên + `</c>` phân tách category
+(theo format huấn luyện gốc của NVIDIA LocateAnything-3B, dùng dấu phẩy KHÔNG đảm bảo
+đúng vì CLI không hề parse prompt — gửi thẳng text vào model, xem `src/prompt.cpp`);
+YOLOE dùng danh sách nhãn cách nhau dấu phẩy (`model.set_classes`).
+
+| Method | Mô tả |
+|---|---|
+| `_get_yoloe_model(model_path)` | Cache model YOLOE đã load (tránh load lại mỗi lần detect); reload nếu đổi path |
+| `_current_engine_runner()` | **Điểm mấu chốt** — đọc `self._engine_var`, trả về `(callable(image_path)->result_dict, lỗi\|None)`. Cả 2 engine trả cùng shape dict nên `_single_worker`/`_batch_worker` không cần biết đang chạy engine nào |
+| `_detect_single` / `_single_worker` / `_on_single_done` | Detect 1 ảnh — chạy nền qua `threading.Thread`, cập nhật UI qua `root.after(0, ...)` |
+| `_detect_batch` / `_batch_worker` / `_on_batch_item_done` / `_on_batch_finished` | Detect cả thư mục, Treeview kết quả từng ảnh, preview khi chọn dòng |
+| `_stop` | Set cờ hủy + `proc.terminate()` (chỉ có tác dụng với engine `cli`; YOLOE không có subprocess để kill, batch sẽ dừng sau ảnh đang xử lý) |
+| `_export_csv` | Xuất kết quả batch ra CSV (Ctrl+S) |
+| `_nav_batch` | Điều hướng dòng batch trước/sau (←/→) |
+
+⇢ Dùng: `tool.shared.{locate_anything_runner, yoloe_detect_runner, yoloe_utils}` (business
+logic, KHÔNG import Tkinter), `.locate_anything_layout_mixin.LocateAnythingLayoutMixin`
+
+#### `locate_anything_layout_mixin.py` → Class `LocateAnythingLayoutMixin`
+Toàn bộ code build widget cho `LocateAnythingTab` (tách khỏi orchestration để tab chính
+gọn dưới 300 dòng). Chứa `_build`, `_build_config` (Engine Radiobutton + cấu hình CLI/
+YOLOE), `_prefill_defaults`, `_build_single`, `_build_batch`, `_browse_file`/`_browse_image`/
+`_browse_folder`/`_browse_outdir`. Không chứa business logic — chỉ gọi method của
+`LocateAnythingTab` (vd `self._detect_single`) qua command callback.
 
 ---
 
@@ -1027,34 +1164,44 @@ Bad image reasons: `"none"` (thiếu biển), `"in_out_mismatch"`, `"register_mi
 
 #### `web_image.py` → `WebImageWorker`
 
-Thu thập ảnh từ Bing/Google theo keyword, lưu vào `anh_chua_co/`.
+Thu thập ảnh từ DuckDuckGo (Bing/Google, engine chọn trên UI chỉ mang tính hiển thị —
+thực tế luôn gọi qua `ddgs`) hoặc từ **Pexels API** (engine = "Pexels", thực sự đổi
+nguồn), lưu vào `anh_chua_co/`.
 
 | Symbol | Mô tả |
 |---|---|
 | `_DEFAULT_KEYWORDS` | Default keywords: viettelpost, taxi mai linh |
+| `_PEXELS_API_URL` / `_PEXELS_PAGE_SIZE` | Endpoint `https://api.pexels.com/v1/search`, tối đa 80 ảnh/trang |
 | `_safe_name(kw)` | Chuyển keyword tiếng Việt → tên thư mục ASCII |
 | `_count_images(d)` | Đếm ảnh trong thư mục |
 | `WebImageWorker` | Class chạy trong thread phụ |
-| `WebImageWorker.run()` | Vòng lặp chính: crawl từng keyword |
+| `WebImageWorker.run()` | Vòng lặp chính: crawl từng keyword; dispatch DDG hoặc Pexels theo `cfg["engine"]` |
+| `WebImageWorker._search_ddg(kw, max_results, size_tag)` | Tìm ảnh qua `ddgs`, tự lặp trang |
+| `WebImageWorker._search_pexels(kw, max_results)` | Tìm ảnh qua Pexels API (header `Authorization: <api_key>`), tự lặp trang tới khi hết `next_page`; trả `None` nếu key sai (401) |
+| `WebImageWorker._collect_keyword(..., is_pexels)` | Tải ảnh cho 1 keyword — chọn nguồn tìm theo `is_pexels`, phần tải file dùng chung |
 | `WebImageWorker.stop()` | Set stop event |
 
-Import: `...core.imports._ICRAWLER_OK`, `_BingCrawler`, `_GoogleCrawler`
+Cfg keys thêm cho Pexels: `cfg["pexels_api_key"]` (bắt buộc khi `engine == "Pexels"`)
+Import: `...core.imports.{_DDGS_OK, _DDGS, _REQUESTS_OK, _req_mod}`
 
 ---
 
 #### `tab_web_image.py` → `WebImageTab(Frame)`
 
-Tab UI thu thập ảnh web.
+Tab UI thu thập ảnh web (Bing/Google qua DDG, hoặc Pexels).
 
 | Method | Mô tả |
 |---|---|
 | `__init__` | Khởi tạo, gọi `_build()`, `_poll()` |
-| `_build / _build_content` | Xây dựng layout: output dir, engine, keywords, log |
-| `_start()` | Đọc config → tạo `WebImageWorker` → chạy thread |
+| `_build / _build_content` | Xây dựng layout: output dir (+ nút 📂 mở thư mục), engine, Pexels API Key (ẩn/hiện theo engine), keywords, log |
+| `_on_engine_change` | Engine = "Pexels" → hiện hàng nhập API Key + disable "Lọc size DDG"; ngược lại ẩn/enable lại |
+| `_open_dir()` | Mở thư mục lưu đang chọn (`os.startfile`) nếu tồn tại |
+| `_start()` | Đọc config (gồm `pexels_api_key` nếu engine Pexels) → tạo `WebImageWorker` → chạy thread |
 | `_stop()` | Gọi `worker.stop()` |
 | `_poll()` | Drain log_q + stat_q mỗi 300ms |
 | `_update_stat(s)` | Cập nhật thanh trạng thái |
 
+Settings keys: `web_img.engine` (Bing/Google/Pexels), `web_img.pexels_api_key` + history `h.web_img.pexels_api_key`
 Import: `.web_image.WebImageWorker`, `...core.{constants,imports,settings}`
 
 ---
@@ -1065,6 +1212,21 @@ Import: `.web_image.WebImageWorker`, `...core.{constants,imports,settings}`
 |---|---|---|
 | `RunGetParkingImage.py` | `GetParkingImageApp(_AppBase)` | Standalone GUI wrapper IParkingImageTab |
 | `BuildGetImageGUI.py` | `BuildApp(Tk)` | PyInstaller build utility với progress window |
+
+---
+
+### LocateAnythingApp/
+
+| File | Class | Mô tả |
+|---|---|---|
+| `RunLocateAnything.py` | `LocateAnythingApp(Tk)` | Standalone GUI wrapper `LocateAnythingTab` — detect vật thể theo mô tả text (open-vocabulary) qua `locate-anything-cli.exe`. Chưa có build script PyInstaller riêng (chỉ chạy `python RunLocateAnything.py`) |
+
+Phụ thuộc ngoài dự án (không track git, xem `.gitignore`): `d:/Tool/locate-anything.cpp/`
+— build từ [mudler/locate-anything.cpp](https://github.com/mudler/locate-anything.cpp)
+(`cmake -B build -DLA_BUILD_CLI=ON && cmake --build build --config Release`), model GGUF
+tải từ HuggingFace `mudler/locate-anything.cpp-gguf`. Đường dẫn CLI exe + model được cấu
+hình trong tab (lưu vào `.kztek_tools_settings.json` key `h.la.cli_exe`/`h.la.model`), tab
+tự gợi ý đường dẫn test mặc định nếu tồn tại (`tab_locate_anything._prefill_defaults`).
 
 ---
 

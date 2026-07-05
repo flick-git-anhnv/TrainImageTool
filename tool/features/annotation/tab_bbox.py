@@ -163,6 +163,10 @@ class BBoxEditorTab(Frame):
         _bind_cfg("bbox.verify_iou",        self._verify_iou_var)
         _bind_cfg("bbox.verify_wrong_only", self._verify_show_wrong_only)
 
+        # ── Test detect vùng đang zoom (crop vùng hiển thị → detect lại, chỉ xem không ghi) ──
+        self._zoomtest_boxes  = []    # [cid, x1, y1, x2, y2, conf] tọa độ ẢNH GỐC
+        self._zoomtest_active = False
+
         # ── Batch Relabel ──────────────────────────────────────────────────
         self._rl_from_var  = StringVar()
         self._rl_to_var    = StringVar()
@@ -549,6 +553,21 @@ class BBoxEditorTab(Frame):
                     bg=CARD, fg=TEXT, selectcolor="#16162a",
                     activebackground=CARD, font=F_MAIN,
                     command=self._on_verify_filter_change).pack(side=LEFT, padx=(6, 0))
+
+        Frame(det_tb, bg=DIM, width=1).pack(side=LEFT, fill=Y, padx=(6, 2))
+        self._btn_zoomtest = Button(det_tb, text="🔎 Test vùng zoom",
+               command=self._run_zoomtest_detect,
+               bg="#8e24aa", fg="white", activebackground="#6a1b9a",
+               activeforeground="white", font=F_BOLD,
+               relief="flat", padx=10, cursor="hand2")
+        self._btn_zoomtest.pack(side=LEFT, padx=(2, 0))
+        Button(det_tb, text="➕ Thêm vào label", command=self._commit_zoomtest_to_label,
+               bg="#2e7d32", fg="white", activebackground="#1b5e20",
+               activeforeground="white", font=F_MAIN, relief="flat",
+               padx=8, cursor="hand2").pack(side=LEFT, padx=(2, 0))
+        Button(det_tb, text="✕", command=self._clear_zoomtest,
+               bg=CARD, fg=DIM, activebackground="#333355",
+               font=F_MAIN, relief="flat", cursor="hand2").pack(side=LEFT, padx=(2, 0))
 
         Label(det_tb, text="Conf:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT, padx=(10, 2))
         self._det_conf_lbl = Label(det_tb, text=f"{self._det_conf_var.get():.2f}",
@@ -1027,6 +1046,8 @@ class BBoxEditorTab(Frame):
         self._verify_matched_det = set()
         self._verify_gt_iou      = {}
         self._verify_active      = False
+        self._zoomtest_boxes     = []
+        self._zoomtest_active    = False
         if self._zoom_settle_after:
             self._canvas.after_cancel(self._zoom_settle_after)
             self._zoom_settle_after = None
@@ -1226,6 +1247,7 @@ class BBoxEditorTab(Frame):
                                   anchor=NW, image=self._tk_img)
         self._draw_all_bboxes()
         self._draw_verify_overlay()
+        self._draw_zoomtest_overlay()
 
         # Update zoom indicator
         pct = int(actual_scale * 100)
@@ -1285,8 +1307,10 @@ class BBoxEditorTab(Frame):
         """Xóa và vẽ lại chỉ bbox — không reload ảnh nền."""
         self._canvas.delete("bbox_item")
         self._canvas.delete("verify_item")
+        self._canvas.delete("zoomtest_item")
         self._draw_all_bboxes()
         self._draw_verify_overlay()
+        self._draw_zoomtest_overlay()
 
     def _draw_all_bboxes(self):
         only_cid = self._active_label_filter_id()
@@ -3568,3 +3592,135 @@ class BBoxEditorTab(Frame):
                 fill=color, outline="", tags="verify_item")
             self._canvas.create_text(cx1 + 3, cy2 + 8, text=txt, fill="white",
                 font=("Segoe UI", 8, "bold"), anchor=W, tags="verify_item")
+
+    # ═══════════════════════════════════════════════════ TEST VÙNG ZOOM ══
+
+    def _run_zoomtest_detect(self):
+        """Crop đúng vùng đang hiển thị trên canvas (theo zoom/pan hiện tại) từ ẢNH GỐC
+        rồi detect lại trên crop đó — kiểm tra model có nhận ra vật thể khi được "phóng to"
+        hay không. CHỈ hiển thị overlay tạm trên canvas, KHÔNG ghi vào _bboxes/label."""
+        path = self._det_model_path.get().strip()
+        if not path:
+            messagebox.showwarning("Chưa chọn model",
+                                   "Chọn file model (.pt hoặc .onnx).", parent=self.root)
+            return
+        if self._pil_img is None:
+            messagebox.showwarning("Chưa có ảnh", "Vui lòng tải ảnh trước.", parent=self.root)
+            return
+        if self._det_model is None:
+            self._load_det_model(path)
+            self._det_status_lbl.config(text="⏳ Đang load model, nhấn lại sau…", fg=DIM)
+            return
+
+        from ...shared.canvas_zoom import canvas_view_to_image_box
+        iw, ih = self._pil_img.size
+        cw = self._canvas.winfo_width()
+        ch = self._canvas.winfo_height()
+        x1, y1, x2, y2 = canvas_view_to_image_box(self._scale, self._off_x, self._off_y,
+                                                    cw, ch, iw, ih)
+        if (x2 - x1) < 10 or (y2 - y1) < 10:
+            messagebox.showwarning("Vùng zoom quá nhỏ",
+                                   "Zoom to hơn để có vùng ảnh đủ lớn khi test.", parent=self.root)
+            return
+
+        crop_box = (int(x1), int(y1), int(x2), int(y2))
+        crop     = self._pil_img.crop(crop_box)
+
+        self._btn_zoomtest.config(state="disabled")
+        self._det_status_lbl.config(text="⏳ Đang test detect vùng zoom…", fg=DIM)
+
+        import threading
+        from ...shared.model_infer import run_model_predict
+        conf  = self._det_conf_var.get()
+        model = self._det_model
+        mtype = self._det_model_type
+
+        def _do():
+            try:
+                boxes = run_model_predict(model, mtype, crop, conf)
+                self.root.after(0, lambda b=boxes: self._on_zoomtest_done(b, crop_box, None))
+            except Exception as e:
+                self.root.after(0, lambda err=str(e): self._on_zoomtest_done([], crop_box, err))
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _on_zoomtest_done(self, crop_boxes: list, crop_box: tuple, err: str | None):
+        self._btn_zoomtest.config(state="normal")
+        if err:
+            self._det_status_lbl.config(text=f"✗ {err[:50]}", fg=ACCENT)
+            return
+
+        # Quy đổi tọa độ crop-local → ảnh gốc (cộng offset góc trên-trái của crop)
+        ox, oy = crop_box[0], crop_box[1]
+        self._zoomtest_boxes = [[cid, x1 + ox, y1 + oy, x2 + ox, y2 + oy, conf]
+                                 for cid, x1, y1, x2, y2, conf in crop_boxes]
+        self._zoomtest_active = True
+        self._render()
+
+        n = len(self._zoomtest_boxes)
+        self._det_status_lbl.config(
+            text=f"🔎 Test vùng zoom: {n} object (chỉ xem, chưa ghi label)",
+            fg="#4caf50" if n else DIM)
+
+    def _clear_zoomtest(self):
+        self._zoomtest_boxes  = []
+        self._zoomtest_active = False
+        self._canvas.delete("zoomtest_item")
+        self._det_status_lbl.config(text="", fg=DIM)
+
+    def _draw_zoomtest_overlay(self):
+        """Vẽ overlay tạm (màu tím/magenta) cho kết quả Test vùng zoom — không phải _bboxes."""
+        if not self._zoomtest_active or self._pil_img is None:
+            return
+        lw    = max(1, self._line_width_var.get())
+        color = "#e040fb"
+        for cid, x1, y1, x2, y2, conf in self._zoomtest_boxes:
+            cx1 = int(x1 * self._scale) + self._off_x
+            cy1 = int(y1 * self._scale) + self._off_y
+            cx2 = int(x2 * self._scale) + self._off_x
+            cy2 = int(y2 * self._scale) + self._off_y
+
+            cls_name = self.label_list[cid] if cid < len(self.label_list) else str(cid)
+            txt      = f" 🔎{cid}:{cls_name} {conf:.2f} "
+            txt_w    = max(len(txt) * 7, 30)
+
+            self._canvas.create_rectangle(cx1, cy1, cx2, cy2,
+                outline=color, width=lw, dash=(3, 2), tags="zoomtest_item")
+            self._canvas.create_rectangle(cx1, cy1 - 17, cx1 + txt_w, cy1,
+                fill=color, outline="", tags="zoomtest_item")
+            self._canvas.create_text(cx1 + 3, cy1 - 8, text=txt, fill="white",
+                font=("Segoe UI", 8, "bold"), anchor=W, tags="zoomtest_item")
+
+    def _commit_zoomtest_to_label(self):
+        """Ghi các bbox từ 'Test vùng zoom' (đã xác nhận đúng bằng mắt) vào _bboxes thật
+        rồi lưu label — khác _run_detect (chạy trên toàn ảnh); ở đây dùng lại kết quả đã
+        detect trên crop, không detect lại."""
+        if not self._zoomtest_boxes:
+            messagebox.showinfo("Chưa có kết quả",
+                                "Bấm '🔎 Test vùng zoom' trước để có bbox cần thêm.",
+                                parent=self.root)
+            return
+
+        iw, ih = self._pil_img.size
+        self._push_undo()
+
+        n_added = 0
+        for cid, x1, y1, x2, y2, conf in self._zoomtest_boxes:
+            x1 = max(0.0, min(float(x1), float(iw)))
+            y1 = max(0.0, min(float(y1), float(ih)))
+            x2 = max(0.0, min(float(x2), float(iw)))
+            y2 = max(0.0, min(float(y2), float(ih)))
+            if x2 > x1 and y2 > y1:
+                self._bboxes.append([int(cid), x1, y1, x2, y2])
+                self._bbox_attrs.append(self._default_attrs())
+                n_added += 1
+
+        self._modified = True
+        self._save_labels()
+        self._clear_zoomtest()
+        self._redraw_bboxes_only()
+        self._refresh_present_labels()
+
+        self._det_status_lbl.config(
+            text=f"✓ Đã thêm {n_added} bbox từ vùng zoom vào label", fg="#4caf50")
+        self.after(5000, lambda: self._det_status_lbl.config(text="", fg=DIM))

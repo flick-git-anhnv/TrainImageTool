@@ -76,6 +76,8 @@ class YoloTab(Frame, YoloModelMixin, YoloImageListMixin, YoloReviewMixin,
         self._pil1_orig = None
         self._pil2_full = None
         self._last_results1 = None
+        self._zoomtest_boxes  = []    # [cid, x1, y1, x2, y2, conf] tọa độ ẢNH GỐC — "Test vùng zoom"
+        self._zoomtest_active = False
         self._zoom_factor = 0.0
         self._img_pos     = [0, 0]   # vị trí ảnh trên canvas (top-left)
         self._pan_start   = None     # điểm bắt đầu kéo chuột (left drag)

@@ -1,3 +1,4 @@
+import os
 import queue
 import threading
 from tkinter import *
@@ -5,12 +6,12 @@ from tkinter import filedialog, ttk
 
 from ...core.constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD, F_MONO
 from ...core.imports import _DDGS_OK, _REQUESTS_OK
-from ...core.settings import _CFG, _cfg_save, _bind_cfg, _cfg_dir
+from ...core.settings import _CFG, _cfg_save, _bind_cfg, _bind_history, _cfg_dir
 from .web_image import WebImageWorker, _DEFAULT_KEYWORDS
 
 
 class WebImageTab(Frame):
-    """Tab thu thập ảnh từ Bing/Google theo keyword → anh_chua_co/."""
+    """Tab thu thập ảnh từ Bing/Google/Pexels theo keyword → anh_chua_co/."""
 
     _LOG_MAX = 1500
 
@@ -30,7 +31,7 @@ class WebImageTab(Frame):
     def _build(self):
         hdr = Frame(self, bg=CARD, padx=16, pady=8)
         hdr.pack(fill=X)
-        Label(hdr, text="Web Image — Thu thập ảnh từ Bing/Google để label",
+        Label(hdr, text="Web Image — Thu thập ảnh từ Bing/Google/Pexels để label",
               bg=CARD, fg=TEXT, font=F_BOLD).pack(side=LEFT)
         if not _DDGS_OK:
             Label(hdr, text="  ⚠ pip install duckduckgo-search",
@@ -75,6 +76,9 @@ class WebImageTab(Frame):
         Button(row, text="Chọn…", bg=ACCENT2, fg="white", font=F_MAIN,
                relief=FLAT, padx=8, cursor="hand2",
                command=self._pick_dir).pack(side=LEFT, padx=(6, 0))
+        Button(row, text="📂", bg=CARD, fg=TEXT, font=F_MAIN,
+               relief=FLAT, padx=6, cursor="hand2",
+               command=self._open_dir).pack(side=LEFT, padx=(4, 0))
 
         # ── Engine + limits ──────────────────────────────────────────────────
         sec2 = Frame(p, bg=CARD, padx=12, pady=10)
@@ -87,9 +91,11 @@ class WebImageTab(Frame):
         Label(row2, text="Engine:", bg=CARD, fg=TEXT, font=F_MAIN).pack(side=LEFT)
         self._engine_var = StringVar(value="Bing")
         _bind_cfg("web_img.engine", self._engine_var)
-        ttk.Combobox(row2, textvariable=self._engine_var, values=["Bing", "Google"],
-                     state="readonly", width=9, font=F_MAIN
-                     ).pack(side=LEFT, padx=(4, 28))
+        engine_combo = ttk.Combobox(row2, textvariable=self._engine_var,
+                                     values=["Bing", "Google", "Pexels"],
+                                     state="readonly", width=9, font=F_MAIN)
+        engine_combo.pack(side=LEFT, padx=(4, 28))
+        engine_combo.bind("<<ComboboxSelected>>", self._on_engine_change)
 
         Label(row2, text="Max ảnh/từ khóa:", bg=CARD, fg=TEXT, font=F_MAIN).pack(side=LEFT)
         self._max_var = StringVar(value="100")
@@ -100,10 +106,10 @@ class WebImageTab(Frame):
         Label(row2, text="Lọc size DDG:", bg=CARD, fg=TEXT, font=F_MAIN).pack(side=LEFT)
         self._size_tag_var = StringVar(value="Large")
         _bind_cfg("web_img.size_tag", self._size_tag_var)
-        ttk.Combobox(row2, textvariable=self._size_tag_var,
+        self._size_tag_combo = ttk.Combobox(row2, textvariable=self._size_tag_var,
                      values=["Large", "Medium", "Small", "Wallpaper"],
-                     state="readonly", width=11, font=F_MAIN
-                     ).pack(side=LEFT, padx=(4, 28))
+                     state="readonly", width=11, font=F_MAIN)
+        self._size_tag_combo.pack(side=LEFT, padx=(4, 28))
 
         Label(row2, text="Kích thước tối thiểu:", bg=CARD, fg=TEXT, font=F_MAIN).pack(side=LEFT)
         self._minw_var = StringVar(value="200")
@@ -114,6 +120,21 @@ class WebImageTab(Frame):
         Label(row2, text=" × ", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
         ttk.Entry(row2, textvariable=self._minh_var, width=5, font=F_MAIN).pack(side=LEFT)
         Label(row2, text=" px", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+
+        # ── Pexels API key (chỉ hiện khi engine = Pexels) ───────────────────
+        self._pexels_row = Frame(sec2, bg=CARD)
+        Label(self._pexels_row, text="Pexels API Key:", bg=CARD, fg=TEXT, font=F_MAIN
+              ).pack(side=LEFT)
+        self._pexels_key_var = StringVar()
+        _bind_cfg("web_img.pexels_api_key", self._pexels_key_var)
+        pexels_key_combo = ttk.Combobox(self._pexels_row, textvariable=self._pexels_key_var,
+                                         font=F_MAIN, width=40, show="•")
+        pexels_key_combo.pack(side=LEFT, padx=(4, 8))
+        _bind_history("h.web_img.pexels_api_key", pexels_key_combo)
+        Label(self._pexels_row, text="Lấy miễn phí tại pexels.com/api",
+              bg=CARD, fg=DIM, font=("Segoe UI", 9)).pack(side=LEFT)
+
+        self._on_engine_change()
 
         # ── Keywords ─────────────────────────────────────────────────────────
         sec3 = Frame(p, bg=CARD, padx=12, pady=10)
@@ -188,6 +209,14 @@ class WebImageTab(Frame):
 
     # ── Actions ──────────────────────────────────────────────────────────────
 
+    def _on_engine_change(self, *_):
+        if self._engine_var.get() == "Pexels":
+            self._pexels_row.pack(fill=X, pady=(8, 0))
+            self._size_tag_combo.config(state=DISABLED)
+        else:
+            self._pexels_row.pack_forget()
+            self._size_tag_combo.config(state="readonly")
+
     def _bind_shortcuts(self):
         self.root.bind_all("<F5>",     lambda e: self._start() if not self._running else None)
         self.root.bind_all("<Escape>", lambda e: self._stop())
@@ -201,6 +230,13 @@ class WebImageTab(Frame):
             self._out_var.set(d)
             _CFG["web_img.output_dir"] = d
             _cfg_save()
+
+    def _open_dir(self):
+        d = self._out_var.get().strip()
+        if d and os.path.isdir(d):
+            os.startfile(d)
+        else:
+            self._append_log("[LỖI] Thư mục không tồn tại.")
 
     def _save_keywords(self, *_):
         _CFG["web_img.keywords"] = self._kw_text.get("1.0", "end-1c")
@@ -217,16 +253,20 @@ class WebImageTab(Frame):
         if not kws:
             self._append_log("[LỖI] Chưa nhập từ khóa.")
             return
+        if self._engine_var.get() == "Pexels" and not self._pexels_key_var.get().strip():
+            self._append_log("[LỖI] Chưa nhập Pexels API Key.")
+            return
 
         self._save_keywords()
         cfg = {
-            "output_dir": out,
-            "keywords":   kws,
-            "engine":     self._engine_var.get(),
-            "max_per_kw": self._max_var.get() or "100",
-            "min_w":      self._minw_var.get() or "200",
-            "min_h":      self._minh_var.get() or "200",
-            "size_tag":   self._size_tag_var.get(),
+            "output_dir":      out,
+            "keywords":        kws,
+            "engine":          self._engine_var.get(),
+            "max_per_kw":      self._max_var.get() or "100",
+            "min_w":           self._minw_var.get() or "200",
+            "min_h":           self._minh_var.get() or "200",
+            "size_tag":        self._size_tag_var.get(),
+            "pexels_api_key":  self._pexels_key_var.get().strip(),
         }
         self._log_q  = queue.Queue()
         self._stat_q = queue.Queue()

@@ -1,5 +1,5 @@
 {
-  "bbox.line_width": 3,
+  "bbox.line_width": 2,
   "ip.page_size": 100,
   "ip.max_pages": 10000,
   "ip.max_per_lane": 0,
@@ -7,21 +7,26 @@
   "ip.max_per_hour": 15,
   "ip.parallel": 16,
   "yolo.interval": "0.5",
-  "yolo.line_width": 8,
+  "yolo.line_width": 16,
   "yolo.font_size": 32,
   "lpr.timeout": 10,
   "lpr.rotate": 0,
   "lpr.f_rotate": 0,
   "lpr.workers": 8,
-  "bbox.img": "K:/Software/Label/PhanLoaiPhuongTien",
+  "bbox.img": "C:/Users/nguye/Desktop/GiaoThongVietNam",
   "h.bbox.img": [
+    "C:/Users/nguye/Desktop/GiaoThongVietNam",
+    "D:/Software/PhanLoaiPhuongTien-TrainDataset/train/images",
+    "K:/Software/Label/PhanLoaiPhuongTien/WEB/BluePlate",
     "K:/Software/Label/PhanLoaiPhuongTien",
+    "K:/Software/Label/PhanLoaiPhuongTien/285NguyenTrai-HCM",
+    "K:\\Software\\Label\\PhanLoaiPhuongTien",
+    "K:\\Software\\Label\\PhanLoaiPhuongTien\\WEB\\BluePlate",
     "K:/Software/Label/PhanLoaiPhuongTien/WEB/RedPlate",
     "C:/Users/nguye/Desktop",
     "C:\\Users\\nguye\\Desktop\\ImagesByClaude",
     "K:/Software/Label/PhanLoaiPhuongTien/Gelex/PGS",
     "K:/Software/Label/PhanLoaiPhuongTien/Lotte-VoChiCong/PGS",
-    "K:\\Software\\Label\\PhanLoaiPhuongTien",
     "K:\\Software\\Label\\PhanLoaiPhuongTien\\Lotte-VoChiCong\\Parking\\01_07__02_07",
     "K:\\Software\\Label\\PhanLoaiPhuongTien\\Lotte-VoChiCong\\Parking\\Bike",
     "K:\\Software\\Label\\PhanLoaiPhuongTien\\Lotte-VoChiCong\\01_07__02_07",
@@ -29,12 +34,7 @@
     "K:\\Software\\Label\\PhanLoaiPhuongTien\\285NguyenTrai-HCM\\anh_xe_bien_xanh_true",
     "K:/Software/Label/PhanLoaiPhuongTien/285NguyenTrai-HCM/anh_0207",
     "K:/Software/Label/PhanLoaiPhuongTien/285NguyenTrai-HCM/anh_xe",
-    "K:/Software/Label/PhanLoaiPhuongTien/285NguyenTrai-HCM/anh_toan_canh",
-    "K:/Software/Label/PhanLoaiPhuongTien/285NguyenTrai-HCM/anh_cat",
-    "K:/Software/Label/PhanLoaiPhuongTien/DuAnKhac/1_7_2026",
-    "K:\\Software\\Label\\PhanLoaiPhuongTien\\Gelex\\Parking",
-    "K:\\Software\\3.Label\\PhanLoaiPhuongTien",
-    "K:\\Software\\3.Label\\PhanLoaiPhuongTien\\TNG"
+    "K:/Software/Label/PhanLoaiPhuongTien/285NguyenTrai-HCM/anh_toan_canh"
   ],
   "history.slot_cls.model_path": [
     "H:/Software/2.AI-Tranining/3.Tools/models/detect.pt",
@@ -98,8 +98,9 @@
     "K:\\Software\\PhanLoaiPhuongTien",
     "K:\\Software\\PhanLoaiPhuongTien\\TruongDinh"
   ],
-  "crop.out": "K:/Software/plate_dataset",
+  "crop.out": "K:/Software/Label/PhanLoaiPhuongTien-Crop",
   "h.crop.out": [
+    "K:/Software/Label/PhanLoaiPhuongTien-Crop",
     "K:/Software/plate_dataset",
     "K:/Software/01_07__02_07-Crop",
     "K:/Software/PhanLoaiPhuongTien-Crop",
@@ -118,8 +119,7 @@
     "K:/Software/PhanLoaiPhuongTien-Crop/LotteParking\\Car_Motor",
     "K:/Software/PhanLoaiPhuongTien-Crop/Golden",
     "K:/Software/PhanLoaiPhuongTien-Crop/DuAnKhac\\INPUT2",
-    "K:/Software/PhanLoaiPhuongTien-Crop/BaoTrong1906",
-    "K:/Software/PhanLoaiPhuongTien-Crop/"
+    "K:/Software/PhanLoaiPhuongTien-Crop/BaoTrong1906"
   ],
   "lpr.folder": "K:\\Software\\PhanLoaiPhuongTien-Crop\\license_plate",
   "h.lpr.folder": [
@@ -134,8 +134,9 @@
     "K:/Software/2.AI-Tranining/1.Images/2.Output-crop1/license_plate"
   ],
   "lotte.kw_xe_may": "xe máy,motor",
-  "ip.out": "K:/Software/Train/Ảnh Parking/Lotte/bien31/31-390T9",
+  "ip.out": "K:/Software/Train/Ảnh Parking/Lotte/0307_0407",
   "h.ip.out": [
+    "K:/Software/Train/Ảnh Parking/Lotte/0307_0407",
     "K:/Software/Train/Ảnh Parking/Lotte/bien31/31-390T9",
     "K:/Software/Train/Ảnh Parking/Lotte/bien31/31637-U7",
     "K:/Software/Train/Ảnh Parking/Lotte/bien31/31 904-R5",
@@ -154,8 +155,7 @@
     "K:/Software/Train/Ảnh Parking/Lotte/bien31",
     "K:/Software/Train/Ảnh Parking/Lotte/01_07__02_07",
     "C:/Users/nguye/Desktop/lotte-rain2",
-    "C:/Users/nguye/Desktop/lotte/bien_do",
-    "C:/Users/nguye/Desktop/lotte/bien_vang"
+    "C:/Users/nguye/Desktop/lotte/bien_do"
   ],
   "ip.sleep": 0.0001,
   "ip.collect_bad": true,
@@ -181,8 +181,11 @@
     "97H43617",
     "37H43617"
   ],
-  "ip.to": "2026-07-02 23:59:59",
+  "ip.to": "2026-07-04 23:59:59",
   "h.yolo.model": [
+    "D:/Software/Model/kztek_v6_scratch_200ep/weights/best.pt",
+    "D:/Software/Model/kztek_train_1280_05072026_2_s1/weights/best.pt",
+    "K:/Software/Label/Model/VietAnh/kztek_train_03072026/weights/best.pt",
     "D:/Software/Model/kztek_train_segment_03072026/weights/best.pt",
     "C:/Users/nguye/Desktop/rfdetr-nano (1).onnx",
     "K:/Software/Label/Model/VietAnh/kztek_train_02072026/weights/best.pt",
@@ -199,14 +202,22 @@
     "D:/Software/Model/kztek_train/weights/best.pt",
     "D:/Software/Model/kztek_test_150ep_v2/weights/best.pt",
     "D:/Software/Model/kztek_test_100ep/weights/best.pt",
-    "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best2306.pt",
-    "K:/Software/1.PhanLoaiPhuongTienChuan/Model/VietAnh/kztek_train_2406/weights/best.pt",
-    "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best.pt",
-    "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best (22).pt"
+    "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best2306.pt"
   ],
-  "yolo.model_path": "D:/Software/Model/kztek_train_segment_03072026/weights/best.pt",
-  "yolo.check_folder": "C:\\Users\\nguye\\Desktop\\New folder (2)",
+  "yolo.model_path": "D:/Software/Model/kztek_v6_scratch_200ep/weights/best.pt",
+  "yolo.check_folder": "K:/Software/Train/Ảnh Parking/Lotte/0307_0407",
   "h.yolo.path": [
+    "K:/Software/Train/Ảnh Parking/Lotte/0307_0407",
+    "C:/Users/nguye/Desktop/GiaoThongVietNam",
+    "K:/Software/Train/Ảnh Parking/285NguyenTrai-HCM",
+    "C:/Users/nguye/Desktop/ImagesByClaude",
+    "C:/Users/nguye/Desktop/ImagesByClaude/anh_chua_co",
+    "\\\\192.168.21.202\\images\\train",
+    "K:\\Software\\Train\\xe_cong_an",
+    "K:\\Software\\Train\\Ảnh Parking\\285NguyenTrai-HCM\\anh_03_07",
+    "K:/Software/Train/Ảnh Parking/285NguyenTrai-HCM/anh_toan_canh",
+    "K:/Software/Train/Ảnh Parking/285NguyenTrai-HCM/anh_cat",
+    "C:/Users/nguye/Desktop/ImagesByClaude/anh_chua_co/person",
     "C:\\Users\\nguye\\Desktop\\New folder (2)",
     "D:/Software/PhanLoaiPhuongTien-TrainDataset/train",
     "C:/Users/nguye/Desktop/FaceBCTT",
@@ -215,18 +226,7 @@
     "K:/Software/lotte-lpr-false",
     "K:/Software/Train/Ảnh Parking/Lotte/bien31",
     "K:/Software/Train/Ảnh Parking/Lotte/bien31/31636V1",
-    "K:/Software/Train/Ảnh Parking/Lotte/bien31/31157-S8",
-    "K:/Software/Train/Ảnh Parking/Lotte/01_07__02_07/bad",
-    "K:/Software/lotte-lpr-false-qqqqqq",
-    "C:/Users/nguye/Desktop/ImagesByClaude/anh_chua_co",
-    "K:/Software/Train/Ảnh Parking/Lotte/01_07__02_07",
-    "K:\\Software\\Label\\PhanLoaiPhuongTien\\Lotte-VoChiCong\\01_07__02_07",
-    "K:\\Software\\Label\\PhanLoaiPhuongTien\\Lotte-VoChiCong",
-    "K:/Software/Train/Ảnh Parking/285NguyenTrai-HCM/285NguyenTrai-HCM/image/anh_cat",
-    "K:/Software/Train/Ảnh Parking/285NguyenTrai-HCM/285NguyenTrai-HCM/image/anh_toan_canh",
-    "K:/Software/Train/Ảnh Parking/285NguyenTrai-HCM/285NguyenTrai-HCM/image/anh_xe",
-    "K:/Software/Train/Ảnh Parking/285NguyenTrai-HCM/285NguyenTrai-HCM/image",
-    "K:/Software/Train/Ảnh Parking/Gelex/anh_toan_canh"
+    "K:/Software/Train/Ảnh Parking/Lotte/bien31/31157-S8"
   ],
   "yolo.subfolder": true,
   "yolo.review_states": {
@@ -5038,7 +5038,9 @@
     "K:/Software/Train/Ảnh Parking/Lotte/01_07__02_07\\xe_may\\anh_toan_canh\\2026-07-02\\sang\\CONG 5-VAO-XM-3\\101730_15K136877.jpg": "correct",
     "K:/Software/Train/Ảnh Parking/Lotte/01_07__02_07\\xe_may\\anh_toan_canh\\2026-07-02\\sang\\CONG 5-VAO-XM-3\\102200_29AP04476.jpg": "correct",
     "K:/Software/Train/Ảnh Parking/Lotte/01_07__02_07\\xe_may\\anh_toan_canh\\2026-07-02\\sang\\CONG 5-VAO-XM-3\\102450_29AD91349.jpg": "correct",
-    "K:/Software/Train/Ảnh Parking/Lotte/01_07__02_07\\xe_may\\anh_toan_canh\\2026-07-02\\sang\\CONG 5-VAO-XM-3\\103339_29F168964.jpg": "correct"
+    "K:/Software/Train/Ảnh Parking/Lotte/01_07__02_07\\xe_may\\anh_toan_canh\\2026-07-02\\sang\\CONG 5-VAO-XM-3\\103339_29F168964.jpg": "correct",
+    "K:/Software/Train/Ảnh Parking/Lotte/0307_0407\\bad\\CONG 5-VAO-XM-2\\none\\2026-07-03\\466491cd-c354-464c-9d25-d7a0989a536b\\in\\182533.jpg": "incorrect",
+    "K:/Software/Train/Ảnh Parking/Lotte/0307_0407\\bad\\CONG 5-VAO-XM-2\\none\\2026-07-03\\466491cd-c354-464c-9d25-d7a0989a536b\\out\\223147.jpg": "incorrect"
   },
   "split.out": "D:\\Software\\PhanLoaiPhuongTien-TrainDataset",
   "h.split.out": [
@@ -5137,6 +5139,7 @@
   ],
   "cls_test.subfolder": true,
   "h.yolo.model2": [
+    "D:/Software/Model/kztek_v6_scratch_200ep/weights/best.pt",
     "C:/Users/nguye/Desktop/rfdetr-nano (1).onnx",
     "K:/Software/Label/Model/VietAnh/kztek_train_02072026/weights/best.pt",
     "C:/Users/nguye/Desktop/rfdetr-nano.onnx",
@@ -5155,19 +5158,18 @@
     "K:/Software/1.PhanLoaiPhuongTienChuan/Model/VietAnh/best.pt",
     "K:/Software/PhanLoaiPhuongTien/TrainModel/kztek_train_20062026_1/weights/best.pt",
     "K:/Software/PhanLoaiPhuongTien/TrainModel/kztek_train_19062026_3/weights/best.pt",
-    "K:/Software/TrainModel/kztek_train_18062026/weights/best.pt",
-    "K:/Software/PhanLoaiPhuongTien/TrainModel/kztek_train_19062026_2/weights/best.pt"
+    "K:/Software/TrainModel/kztek_train_18062026/weights/best.pt"
   ],
   "yolo.conf_thresh": 0.0,
-  "yolo.conf": 0.19276923076923078,
-  "yolo.iou": 0.4897692307692308,
+  "yolo.conf": 0.4745384615384615,
+  "yolo.iou": 0.4745384615384615,
   "cls.optimizer": "auto",
   "cls.epochs": "100",
   "cls.cache": "False",
-  "train.dir": "C:\\Users\\nguye\\Desktop\\People instance Segmentation.v3i.yolov11/train",
+  "train.dir": "D:\\Software\\PhanLoaiPhuongTien-TrainDataset/train",
   "h.train.dir": [
-    "C:\\Users\\nguye\\Desktop\\People instance Segmentation.v3i.yolov11/train",
     "D:\\Software\\PhanLoaiPhuongTien-TrainDataset/train",
+    "C:\\Users\\nguye\\Desktop\\People instance Segmentation.v3i.yolov11/train",
     "K:/Software/PhanLoaiPhuongTien-TrainDataset/train",
     "D:/Software/Dataset/train",
     "K:\\Software\\PhanLoaiPhuongTien-TrainDataset\\train",
@@ -5176,10 +5178,10 @@
     "K:\\Software\\PhanLoaiPhuongTien\\TrainModel\\train",
     "K:/Software/2.AI-Tranining/1.Images/A/train"
   ],
-  "train.val": "C:\\Users\\nguye\\Desktop\\People instance Segmentation.v3i.yolov11/valid",
+  "train.val": "D:\\Software\\PhanLoaiPhuongTien-TrainDataset/valid",
   "h.train.val": [
-    "C:\\Users\\nguye\\Desktop\\People instance Segmentation.v3i.yolov11/valid",
     "D:\\Software\\PhanLoaiPhuongTien-TrainDataset/valid",
+    "C:\\Users\\nguye\\Desktop\\People instance Segmentation.v3i.yolov11/valid",
     "K:/Software/PhanLoaiPhuongTien-TrainDataset/valid",
     "D:/Software/Dataset/valid",
     "K:\\Software\\PhanLoaiPhuongTien-TrainDataset\\valid",
@@ -5198,7 +5200,7 @@
     "K:\\Software\\PhanLoaiPhuongTien\\TrainModelOut",
     "K:/Software/2.AI-Tranining/1.Images/A/output"
   ],
-  "train.lr0": "0.01",
+  "train.lr0": "0.001",
   "train.lrf": "0.01",
   "labelnorm.img": "K:/Software/2.AI-Tranining/1.Images/1.Input/Lotte/XeDap",
   "h.labelnorm.img": [
@@ -5213,17 +5215,17 @@
     "K:\\Software\\2.AI-Tranining\\1.Images\\2.Output\\Lotte\\XeDap"
   ],
   "ip.only_gt": true,
-  "ip.vtype.toan_canh_o_to": false,
-  "ip.vtype.toan_canh_xe_may": false,
-  "ip.vtype.toan_canh_xe_dap": false,
-  "ip.vtype.o_to": false,
+  "ip.vtype.toan_canh_o_to": true,
+  "ip.vtype.toan_canh_xe_may": true,
+  "ip.vtype.toan_canh_xe_dap": true,
+  "ip.vtype.o_to": true,
   "ip.vtype.xe_may": true,
-  "ip.vtype.xe_dap": false,
-  "ip.vtype.o_to_bsx_cut": false,
-  "ip.vtype.xe_may_bsx_cut": false,
-  "ip.vtype.xe_dap_bsx_cut": false,
-  "ip.vtype.toan_canh": false,
-  "ip.vtype.xe_tai": false,
+  "ip.vtype.xe_dap": true,
+  "ip.vtype.o_to_bsx_cut": true,
+  "ip.vtype.xe_may_bsx_cut": true,
+  "ip.vtype.xe_dap_bsx_cut": true,
+  "ip.vtype.toan_canh": true,
+  "ip.vtype.xe_tai": true,
   "h.bbox.labels": [
     "car,motorcycle,bus,truck,bicycle,license_plate,plate_vang,plate_xanh,plate_do",
     "car,motorcycle,bus,truck,bicycle,license_plate",
@@ -5231,10 +5233,10 @@
     "car, motorbike, bus, truck, bicycle, license_plate"
   ],
   "bbox.labels": "car,motorcycle,bus,truck,bicycle,license_plate,plate_vang,plate_xanh,plate_do",
-  "train.labels": "Humans",
+  "train.labels": "car,motorcycle,bus,truck,bicycle,license_plate,plate_vang,plate_xanh,plate_do",
   "h.train.labels": [
-    "Humans",
     "car,motorcycle,bus,truck,bicycle,license_plate,plate_vang,plate_xanh,plate_do",
+    "Humans",
     "car, motorbike, bus, truck, bicycle, license_plate",
     "unoccupied,occupied"
   ],
@@ -5255,11 +5257,16 @@
   "lpr.sv4_line_w": 2,
   "lpr.last_dir": "K:/Software/PhanLoaiPhuongTien-Crop/license_plate",
   "ip.source": "LotteImage",
-  "ip.from": "2026-01-01 19:00:00",
+  "ip.from": "2026-07-03 00:00:00",
   "ip.max_per_buoi": 0,
   "train.optimizer": "auto",
   "train.cache": "False",
   "h.train.name": [
+    "kztek_train_1280_05072026_3",
+    "kztek_train_1280_05072026_2",
+    "kztek_train_1280_05072026",
+    "kztek_train_1280_04072026",
+    "kztek_train_04072026",
     "kztek_train_segment2_03072026",
     "kztek_train_segment_03072026",
     "kztek_train_03072026",
@@ -5274,12 +5281,7 @@
     "kztek_train_22062026_4",
     "kztek_train_22062026_3",
     "kztek_train_22062026_2",
-    "kztek_train_22062026",
-    "kztek_train_21062026",
-    "kztek_train_21062026_1",
-    "kztek_train_20062026_1",
-    "kztek_train_19062026_3",
-    "kztek_train_19062026_2"
+    "kztek_train_22062026"
   ],
   "yolo.export_dir": "K:/Software/2.AI-Tranining/1.Images/1.Input/tng/New folder",
   "train.workers": "4",
@@ -5323,8 +5325,9 @@
     "K:\\Software\\PhanLoaiPhuongTien\\BaoTrong_OK",
     "K:\\Software\\PhanLoaiPhuongTien\\BaoTrong"
   ],
-  "bbox.lbl": "K:\\Software\\Gelex-False",
+  "bbox.lbl": "D:/Software/PhanLoaiPhuongTien-TrainDataset/train/labels",
   "h.bbox.lbl": [
+    "D:/Software/PhanLoaiPhuongTien-TrainDataset/train/labels",
     "K:\\Software\\Gelex-False",
     "D:/Software/Dataset/train/labels",
     "K:/Software/1.PhanLoaiPhuongTienChuan/Dataset-PhanLoaiPhuongTien/1.Lối vào-ra trong nhà/car/Chéo-Dưới-Lên-Trên/1.Sáng-Bình-Thường",
@@ -5391,9 +5394,9 @@
     "K:/Software/1.PhanLoaiPhuongTienChuan/Dataset-PhanLoaiPhuongTien/2.Lối vào-ra ngoài trời/car/Ngang-Phải-Qua-Trái\n/1.Ngày-Nắng",
     "K:/Software/1.PhanLoaiPhuongTienChuan/Dataset-PhanLoaiPhuongTien/2.Lối vào-ra ngoài trời/motor/Ngang-Phải-Qua-Trái/1.Ngày-Nắng"
   ],
-  "bbox.last_image": "K:\\Software\\Label\\PhanLoaiPhuongTien\\XuanCuong\\toan_canh\\150505_99E01785.jpg",
-  "yolo.session.folder": "C:\\Users\\nguye\\Desktop\\New folder (2)",
-  "yolo.session.image": "C:\\Users\\nguye\\Desktop\\New folder (2)\\z8003826797354_86fb29fd974146085417a1cfda97b6ee.jpg",
+  "bbox.last_image": "C:\\Users\\nguye\\Desktop\\GiaoThongVietNam\\7.jpg",
+  "yolo.session.folder": "K:/Software/Train/Ảnh Parking/Lotte/0307_0407",
+  "yolo.session.image": "K:/Software/Train/Ảnh Parking/Lotte/0307_0407\\bad\\CONG 5-VAO-XM-2\\none\\2026-07-03\\496790c8-bfa0-4641-bd89-c8238407693a\\in\\203529.jpg",
   "bbox.show_label": false,
   "bbox.show_size": true,
   "lotte.keyword": "41703A27",
@@ -5431,13 +5434,14 @@
   "ip.target_per_slot": 100,
   "ip.phase_mode": "auto",
   "h.yolo.search": [
+    "bad",
+    "thong",
     "xm",
     "142813",
     "00103",
     "23366",
     "02682",
     "20*",
-    "bad",
     "xe_da",
     "anh_xe",
     "30a41329",
@@ -5449,12 +5453,14 @@
     "anh_toa",
     "anh_toa ramp",
     "anh_toa RAMP7-v",
-    "anh_toa RAMP",
-    "anh_toa RAMP4"
+    "anh_toa RAMP"
   ],
-  "yolo.wf_s1": "K:\\Software\\lotte-lpr-false",
+  "yolo.wf_s1": "K:\\Software\\anh_cuc_xau",
   "h.bbox.det_model": [
     "C:/Users/nguye/Desktop/rfdetr-nano (1).onnx",
+    "C:/Users/nguye/Desktop/best.pt",
+    "D:/Software/Model/kztek_v6_scratch_200ep/weights/best.pt",
+    "D:/Software/Model/kztek_train_1280_05072026_2_s1/weights/best.pt",
     "C:/Users/nguye/Desktop/rfdetr-nano.onnx",
     "D:/Software/Model/kztek_v5_finetune_80ep/weights/best_0107_local.pt",
     "D:/Software/Model/kztek_test_250ep_v4/weights/best.pt",
@@ -5463,9 +5469,9 @@
     "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best2306.pt"
   ],
   "bbox.det_model_path": "C:/Users/nguye/Desktop/rfdetr-nano (1).onnx",
-  "bbox.det_conf": 0.45,
+  "bbox.det_conf": 0.25,
   "bbox.det_replace": true,
-  "train.two_stage": false,
+  "train.two_stage": true,
   "yolo.lpr_timeout": 10,
   "yolo.check_lpr": false,
   "h.yolo.lpr_url": [
@@ -5478,6 +5484,7 @@
   "yolo.lpr_font_size": 28,
   "yolo.lpr_batch": true,
   "h.yolo.wf.s1": [
+    "K:\\Software\\anh_cuc_xau",
     "K:\\Software\\lotte-lpr-false",
     "K:\\Software\\Gelex-Parking-False",
     "C:/Users/nguye/Desktop/New folder-False",
@@ -5541,11 +5548,11 @@
     "64994443997e9b5667eb54fa"
   ],
   "web_img.output_dir": "C:/Users/nguye/Desktop/ImagesByClaude",
-  "web_img.keywords": "license plate of vietnam military",
-  "web_img.engine": "Google",
+  "web_img.keywords": "Giao thông việt nam\nvietnam parking\nbãi xe việt nam\ntraffic viet nam",
+  "web_img.engine": "Pexels",
   "yolo.lpr_fullimg1": true,
-  "train.iou": "0.4",
-  "web_img.max_per_kw": "1000",
+  "train.iou": "0.7",
+  "web_img.max_per_kw": "500",
   "p6.keyword": "A8J16J",
   "h.p6.keyword": [
     "A8J16J",
@@ -5561,7 +5568,7 @@
     "C:/Users/nguye/Desktop/rfdetr-nano.onnx",
     "C:/Users/nguye/Desktop/checkpoint_19.onnx"
   ],
-  "seg.img_dir": "D:/Software/PhanLoaiPhuongTien-TrainDataset/valid/images",
+  "seg.img_dir": "D:/Software/valid/images",
   "yolo.wf_s2": "172.30.22.185_1",
   "h.yolo.wf.s2": [
     "172.30.22.185_1",
@@ -5599,5 +5606,40 @@
   "web_img.size_tag": "Wallpaper",
   "cls.early_stop": true,
   "web_img.min_w": "32",
-  "web_img.min_h": "32"
+  "web_img.min_h": "32",
+  "seg.lbl_dir": "D:/Software/valid/labels",
+  "h.seg.lbl_dir": [
+    "D:/Software/valid/labels",
+    "K:/Software/Label/segment/PhanLoaiPhuongTien/TNG",
+    "K:\\Software\\Label\\segment\\PhanLoaiPhuongTien\\XuanCuong\\bienxanh",
+    "K:/Software/Label/segment",
+    "D:/Software/PhanLoaiPhuongTien-TrainDataset/valid/labels",
+    "C:\\Users\\nguye\\AppData\\Local\\Temp\\tmpx1oskk8j\\labels"
+  ],
+  "h.seg.yoloe_prompt": [
+    "motor",
+    "motorcycle",
+    "motorcycle,person"
+  ],
+  "web_img.pexels_api_key": "F8aj87FcPQl8c1PHbc3Ijos9a1caxdJ8P5wrBWvhMmAFDX3bYZV0be1n",
+  "h.web_img.pexels_api_key": [
+    "F8aj87FcPQl8c1PHbc3Ijos9a1caxdJ8P5wrBWvhMmAFDX3bYZV0be1n"
+  ],
+  "seg.sam3_model_dir": "d:/Tool/models/sam3_onnx",
+  "h.seg.sam3_model_dir": [
+    "d:/Tool/models/sam3_onnx",
+    "D:/Tool/models/sam3_onnx"
+  ],
+  "h.seg.sam3_prompt": [
+    "bicycle",
+    "car,motorcycle,bus,truck,bicycle,license_plate",
+    "motor, person",
+    "motor",
+    "car, licenseplate",
+    "motor, car, bicycle, person, license plate"
+  ],
+  "seg.sam3_conf": 0.6,
+  "train.cls": "0.5",
+  "train.freeze_lr": "0.001",
+  "train.label_smooth": "0.05"
 }

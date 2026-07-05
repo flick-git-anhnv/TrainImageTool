@@ -223,4 +223,34 @@
 
 ---
 
+## [E024] `NameError: free variable 'ex' referenced before assignment` trong callback lỗi async
+- **File:** `tool/features/annotation/tab_segment.py` — 7 chỗ: `_do_load_sam3`, `_run_sam3_thread`,
+  `_do_load_sam`, `_run_auto_refine_sam`, `_run_auto_refine_cv`, `_run_sam_point/box thread`, `_run_cv_box_thread`
+- **Triệu chứng:** `NameError: free variable 'ex' referenced before assignment in enclosing scope`
+  khi 1 thao tác nền (load SAM3, load SAM, auto-refine, CV box…) thất bại — lỗi này che mất lỗi
+  gốc thật (người dùng không thấy thông báo lỗi thật, chỉ thấy NameError).
+- **Nguyên nhân:** Pattern `except Exception as ex: self.root.after(0, lambda: ...{ex}...)` —
+  Python tự động `del ex` ngay sau khi except block kết thúc (PEP 3110, tránh giữ tham chiếu
+  traceback), nhưng `self.root.after(0, callback)` chỉ SCHEDULE callback chạy sau (Tk event loop
+  xử lý sau), không chạy ngay. Khi callback thật sự chạy, `ex` đã bị xóa khỏi scope bao quanh →
+  lambda tham chiếu biến không còn tồn tại. Bọc `str(ex)` NGAY TRONG lambda cũng không tránh được
+  vì `str(ex)` vẫn được eval trễ bên trong lambda.
+- **Cách sửa:** Gán `msg = str(ex)` thành biến thường NGAY TRONG except block (trước khi gọi
+  `.after()`), rồi cho lambda tham chiếu `msg` (biến thường, không bị Python auto-`del`) thay vì `ex`.
+  Áp dụng cho MỌI `except ... as ex` mà callback lỗi bị defer qua `.after()`/thread callback —
+  KHÔNG áp dụng cho chỗ dùng `ex` đồng bộ ngay trong except (an toàn, VD `self._status_var.set(f"...{e}")`
+  không qua `.after()`).
+- **Ngày:** 2026-07-04
+
+---
+
+## [E025] Web Image tab: `req_count = min(need*3, 300)` cap cứng khiến "Max ảnh/từ khóa" cao (VD 500) không bao giờ đạt được
+- **File:** `tool/features/collection/web_image.py` — `WebImageWorker._collect_keyword`
+- **Triệu chứng:** Đặt "Max ảnh/từ khóa" = 500, engine Pexels — chạy xong chỉ tải được ~320 ảnh/từ khóa dù Pexels còn nhiều ảnh khớp hơn. Ban đầu tưởng do Pexels ít ảnh (thư viện stock nhỏ hơn web), nhưng thực ra là do code.
+- **Nguyên nhân:** `req_count = min(need * 3, 300)` — số URL/ảnh tối đa được YÊU CẦU từ nguồn tìm kiếm bị cap cứng ở 300, bất kể `need` (= max_num - existing) lớn hơn bao nhiêu. Với need=500, req_count vẫn chỉ 300 → không đủ ứng viên để lọc ra 500 ảnh dù nguồn tìm kiếm còn dư. Cap 300 này vốn hợp lý cho DDG (tránh spam nhiều trang, dễ bị chặn) nhưng bị dùng chung cho cả Pexels — nơi API chính thức, per_page=80, cho phép truy cập tới ~8000 kết quả/query.
+- **Cách sửa:** Tách cap theo engine — `_DDG_MAX_CAND = 300` (giữ nguyên hành vi cũ), `_PEXELS_MAX_CAND = 8000` (đúng giới hạn thực tế Pexels API). `req_count = min(need * 3, cand_cap)` với `cand_cap` chọn theo `is_pexels`. Thêm log cảnh báo khi Pexels trả về ít hơn `need` để phân biệt rõ 2 nguyên nhân: (1) cap code (đã fix) vs (2) từ khóa thực sự ít ảnh khớp trong thư viện Pexels (curated stock, luôn ít hơn nhiều so với ước tính hiển thị trên web tìm kiếm ảnh chung như Bing/Google).
+- **Ngày:** 2026-07-04
+
+---
+
 *Cập nhật file này mỗi khi gặp lỗi mới. Format: `[Ennn]` tăng dần.*

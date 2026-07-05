@@ -181,3 +181,18 @@ class CanvasZoomMixin:
         self._off_x = off_x
         self._off_y = off_y
         return scale, nw, nh, off_x, off_y
+
+
+def canvas_view_to_image_box(scale, off_x, off_y, canvas_w, canvas_h, img_w, img_h):
+    """Vùng ảnh gốc (pixel) đang hiển thị trong viewport canvas hiện tại — dùng chung
+    cho BBoxEditor (self._scale/_off_x/_off_y) và YoloTab (self._zoom_factor/_img_pos),
+    vì cả 2 đều theo công thức canvas = image*scale + offset. Trả về (x1,y1,x2,y2) đã
+    clamp về biên ảnh — dùng để crop đúng vùng đang zoom rồi detect lại trên crop.
+    """
+    if scale <= 0:
+        return 0.0, 0.0, float(img_w), float(img_h)
+    x1 = max(0.0, (0 - off_x) / scale)
+    y1 = max(0.0, (0 - off_y) / scale)
+    x2 = min(float(img_w), (canvas_w - off_x) / scale)
+    y2 = min(float(img_h), (canvas_h - off_y) / scale)
+    return x1, y1, x2, y2

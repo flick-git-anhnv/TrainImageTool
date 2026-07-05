@@ -17,7 +17,7 @@ from tkinter import filedialog, messagebox, ttk
 from ...core.constants import (BG, CARD, ACCENT, ACCENT2, TEXT, DIM, SUCCESS,
                          F_MAIN, F_BOLD, IMAGE_EXTENSIONS)
 from ...core.settings import _bind_cfg, _cfg_dir, _bind_history, _push_history, _get_history
-from ...core.ui_helpers import _folder_row, _make_logbox, _append_log
+from ...core.ui_helpers import _folder_row, _make_logbox, _append_log, _update_last_log
 
 try:
     import matplotlib
@@ -2187,9 +2187,14 @@ class TrainTab(Frame):
         self._train_stopped_early = False
 
         try:
+            _env = {**os.environ,
+                    "PYTHONUNBUFFERED": "1",
+                    "PYTHONIOENCODING": "utf-8",
+                    "FORCE_COLOR": "1"}
             self._proc = subprocess.Popen(
-                [sys.executable, str(tmp_script)],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                [sys.executable, "-u", str(tmp_script)],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                env=_env)
         except Exception as e:
             messagebox.showerror("Lỗi khởi động", str(e)); return
 
@@ -2209,9 +2214,22 @@ class TrainTab(Frame):
         q    = self._out_queue
 
         def _reader():
-            for raw in iter(proc.stdout.readline, b""):
-                q.put(raw.decode("utf-8", errors="replace"))
-            q.put(None)
+            buf = bytearray()
+            while True:
+                ch = proc.stdout.read(1)
+                if not ch:
+                    if buf:
+                        q.put((False, buf.decode("utf-8", errors="replace")))
+                    q.put(None)
+                    break
+                if ch == b'\n':
+                    q.put((False, buf.decode("utf-8", errors="replace")))
+                    buf = bytearray()
+                elif ch == b'\r':
+                    q.put((True, buf.decode("utf-8", errors="replace")))
+                    buf = bytearray()
+                else:
+                    buf.extend(ch)
 
         threading.Thread(target=_reader, daemon=True).start()
         self._poll_output()
@@ -2273,9 +2291,14 @@ class TrainTab(Frame):
         self._train_epochs_total  = 0
 
         try:
+            _env = {**os.environ,
+                    "PYTHONUNBUFFERED": "1",
+                    "PYTHONIOENCODING": "utf-8",
+                    "FORCE_COLOR": "1"}
             self._proc = subprocess.Popen(
-                [sys.executable, str(tmp_script)],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                [sys.executable, "-u", str(tmp_script)],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                env=_env)
         except Exception as e:
             messagebox.showerror("Lỗi khởi động", str(e)); return
 
@@ -2299,9 +2322,22 @@ class TrainTab(Frame):
         q    = self._out_queue
 
         def _reader():
-            for raw in iter(proc.stdout.readline, b""):
-                q.put(raw.decode("utf-8", errors="replace"))
-            q.put(None)
+            buf = bytearray()
+            while True:
+                ch = proc.stdout.read(1)
+                if not ch:
+                    if buf:
+                        q.put((False, buf.decode("utf-8", errors="replace")))
+                    q.put(None)
+                    break
+                if ch == b'\n':
+                    q.put((False, buf.decode("utf-8", errors="replace")))
+                    buf = bytearray()
+                elif ch == b'\r':
+                    q.put((True, buf.decode("utf-8", errors="replace")))
+                    buf = bytearray()
+                else:
+                    buf.extend(ch)
 
         threading.Thread(target=_reader, daemon=True).start()
         self._poll_output()
@@ -2658,9 +2694,14 @@ class TrainTab(Frame):
         self._train_stopped_early = False
 
         try:
+            _env = {**os.environ,
+                    "PYTHONUNBUFFERED": "1",
+                    "PYTHONIOENCODING": "utf-8",
+                    "FORCE_COLOR": "1"}
             self._proc = subprocess.Popen(
-                [sys.executable, str(tmp_script)],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                [sys.executable, "-u", str(tmp_script)],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                env=_env)
         except Exception as e:
             messagebox.showerror("Lỗi khởi động", str(e)); return
 
@@ -2681,9 +2722,22 @@ class TrainTab(Frame):
         q    = self._out_queue
 
         def _reader():
-            for raw in iter(proc.stdout.readline, b""):
-                q.put(raw.decode("utf-8", errors="replace"))
-            q.put(None)
+            buf = bytearray()
+            while True:
+                ch = proc.stdout.read(1)
+                if not ch:
+                    if buf:
+                        q.put((False, buf.decode("utf-8", errors="replace")))
+                    q.put(None)
+                    break
+                if ch == b'\n':
+                    q.put((False, buf.decode("utf-8", errors="replace")))
+                    buf = bytearray()
+                elif ch == b'\r':
+                    q.put((True, buf.decode("utf-8", errors="replace")))
+                    buf = bytearray()
+                else:
+                    buf.extend(ch)
 
         threading.Thread(target=_reader, daemon=True).start()
         self._poll_output()
@@ -2691,10 +2745,11 @@ class TrainTab(Frame):
     def _poll_output(self):
         try:
             while True:
-                line = self._out_queue.get_nowait()
-                if line is None:
+                item = self._out_queue.get_nowait()
+                if item is None:
                     self._on_done(); return
-                text = line.rstrip()
+                is_cr, text = item
+                text = text.rstrip()
                 if not text:
                     continue
                 if "KZTEK_SAVE_DIR:" in text:
@@ -2711,10 +2766,13 @@ class TrainTab(Frame):
                 text = re.sub(r"\x1b\[[0-9;]*[mKA-Z]", "", text)
                 text = re.sub(r"\[[\d;]*m",             "", text)
                 if text:
-                    _append_log(self._log, text)
+                    if is_cr:
+                        _update_last_log(self._log, text)
+                    else:
+                        _append_log(self._log, text)
         except queue.Empty:
             pass
-        self._poll_id = self.root.after(500, self._poll_output)
+        self._poll_id = self.root.after(200, self._poll_output)
 
     def _on_done(self):
         self._stop_chart_poll()

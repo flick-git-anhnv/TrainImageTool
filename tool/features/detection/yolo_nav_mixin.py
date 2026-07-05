@@ -33,6 +33,8 @@ class YoloNavMixin:
         self._zoom_factor = 0.0
         self._img_pos   = [0, 0]
         self._pan_start = None
+        self._zoomtest_boxes  = []
+        self._zoomtest_active = False
         self._update_filmstrip()
         self._detect_and_display()
         # Lưu ảnh đang xem vào session
@@ -112,11 +114,16 @@ class YoloNavMixin:
             self._mark_review("correct")
 
     def _copy_path(self):
-        """Copy ảnh hiện tại vào clipboard dưới dạng bitmap (Ctrl+C)."""
-        if not self.current_image_path or not _PIL_OK:
+        """Copy ảnh hiện tại vào clipboard (Ctrl+C) — cả 2 định dạng cùng lúc:
+        CF_HDROP (file thật, để Paste ra Explorer/folder khác) + CF_DIB
+        (bitmap, để Paste vào Paint/Word/app chat như ảnh). Trước đây chỉ set
+        CF_DIB nên Paste vào Explorer không copy được file (Windows Explorer
+        cần CF_HDROP)."""
+        path = self.current_image_path
+        if not path:
             return
         try:
-            import io, ctypes
+            import ctypes
 
             kernel32 = ctypes.windll.kernel32
             user32   = ctypes.windll.user32
@@ -138,25 +145,55 @@ class YoloNavMixin:
             user32.CloseClipboard.argtypes = []
             user32.CloseClipboard.restype  = ctypes.c_bool
 
-            img = Image.open(self.current_image_path).convert("RGB")
-            buf = io.BytesIO()
-            img.save(buf, "BMP")
-            data = buf.getvalue()[14:]  # bỏ 14-byte BMP file header, giữ DIB
-            buf.close()
-
-            CF_DIB = 8
             GMEM_MOVEABLE = 0x0002
-            h = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
-            if not h:
+            GMEM_ZEROINIT = 0x0040
+            CF_HDROP = 15
+            CF_DIB   = 8
+
+            # ── CF_HDROP: DROPFILES + tên file (UTF-16, double-null-terminated) ──
+            class _DROPFILES(ctypes.Structure):
+                _fields_ = [
+                    ("pFiles", ctypes.c_uint32),
+                    ("pt_x",   ctypes.c_long),
+                    ("pt_y",   ctypes.c_long),
+                    ("fNC",    ctypes.c_int32),
+                    ("fWide",  ctypes.c_int32),
+                ]
+            hdr_size = ctypes.sizeof(_DROPFILES)
+            names = (path + "\0").encode("utf-16-le") + b"\x00\x00"
+            h_drop = kernel32.GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT,
+                                          hdr_size + len(names))
+            if not h_drop:
                 self.v_status.set("Lỗi copy: không cấp phát được bộ nhớ")
                 return
-            p = kernel32.GlobalLock(h)
-            if not p:
-                kernel32.GlobalFree(h)
+            p_drop = kernel32.GlobalLock(h_drop)
+            if not p_drop:
+                kernel32.GlobalFree(h_drop)
                 self.v_status.set("Lỗi copy: GlobalLock thất bại")
                 return
-            ctypes.memmove(p, data, len(data))
-            kernel32.GlobalUnlock(h)
+            df = _DROPFILES.from_address(p_drop)
+            df.pFiles = hdr_size
+            df.fWide  = 1
+            ctypes.memmove(p_drop + hdr_size, names, len(names))
+            kernel32.GlobalUnlock(h_drop)
+
+            # ── CF_DIB: bitmap ảnh (best-effort — không có PIL vẫn copy file được) ──
+            h_dib = None
+            if _PIL_OK:
+                try:
+                    import io
+                    img = Image.open(path).convert("RGB")
+                    buf = io.BytesIO()
+                    img.save(buf, "BMP")
+                    data = buf.getvalue()[14:]  # bỏ 14-byte BMP file header, giữ DIB
+                    buf.close()
+                    h_dib = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+                    if h_dib:
+                        p_dib = kernel32.GlobalLock(h_dib)
+                        ctypes.memmove(p_dib, data, len(data))
+                        kernel32.GlobalUnlock(h_dib)
+                except Exception:
+                    h_dib = None
 
             # Clipboard có thể tạm bị lock bởi app khác → retry tối đa 5 lần
             opened = False
@@ -166,23 +203,31 @@ class YoloNavMixin:
                     break
                 time.sleep(0.05)
             if not opened:
-                kernel32.GlobalFree(h)
+                kernel32.GlobalFree(h_drop)
+                if h_dib:
+                    kernel32.GlobalFree(h_dib)
                 self.v_status.set("Lỗi copy: clipboard đang bị chiếm (thử lại)")
                 return
 
             user32.EmptyClipboard()
-            # Sau SetClipboardData thành công, Windows sở hữu h — không được GlobalFree
-            result = user32.SetClipboardData(CF_DIB, h)
+            # Sau SetClipboardData thành công, Windows sở hữu handle — không GlobalFree nữa
+            ok_drop = user32.SetClipboardData(CF_HDROP, h_drop)
+            if not ok_drop:
+                kernel32.GlobalFree(h_drop)
+            if h_dib:
+                if not user32.SetClipboardData(CF_DIB, h_dib):
+                    kernel32.GlobalFree(h_dib)
             user32.CloseClipboard()
 
-            if not result:
+            if not ok_drop:
                 self.v_status.set("Lỗi copy: SetClipboardData thất bại")
                 return
 
             self.lbl_result.config(
-                text=f"📋 Đã copy ảnh: {os.path.basename(self.current_image_path)}",
+                text=f"📋 Đã copy file: {os.path.basename(path)}  "
+                     f"(Paste được vào Explorer hoặc app ảnh)",
                 fg=DIM)
-            self.after(2000, self._restore_result_label)
+            self.after(2500, self._restore_result_label)
         except Exception as e:
             self.v_status.set(f"Lỗi copy ảnh: {e}")
 

@@ -61,6 +61,37 @@ class YoloCanvasMixin:
         self.canvas.delete("all")
         self.canvas.create_image(self._img_pos[0], self._img_pos[1],
                                   anchor=NW, image=self._photo_ref, tags="img")
+        self._draw_zoomtest_overlay()
+
+    def _draw_zoomtest_overlay(self):
+        """Vẽ overlay tạm (tím, tag zoomtest_item) cho kết quả '🔎 Test vùng zoom' —
+        tách biệt hoàn toàn khỏi kết quả detect chính (_pil1_full), không lưu label/cache."""
+        if not getattr(self, "_zoomtest_active", False) or not self._zoomtest_boxes:
+            return
+        # _zoom_factor==0.0 (Fit) chỉ là sentinel — scale thật đã áp dụng cho ảnh hiển thị
+        # trong _render_display() phía trên nhưng không lưu lại, nên tính lại ở đây.
+        pil = self._pil1_orig or self._pil1_full
+        if pil is None:
+            return
+        cw = max(self.canvas.winfo_width(), 400)
+        ch = max(self.canvas.winfo_height(), 300)
+        scale = self._zoom_factor if self._zoom_factor > 0 else min(cw / pil.width, ch / pil.height)
+        off_x, off_y = self._img_pos[0], self._img_pos[1]
+        color = "#e040fb"
+        for cid, x1, y1, x2, y2, conf in self._zoomtest_boxes:
+            cx1 = int(x1 * scale) + off_x
+            cy1 = int(y1 * scale) + off_y
+            cx2 = int(x2 * scale) + off_x
+            cy2 = int(y2 * scale) + off_y
+            name  = self._model1_names.get(cid, str(cid))
+            txt   = f" 🔎{cid}:{name} {conf:.2f} "
+            txt_w = max(len(txt) * 7, 30)
+            self.canvas.create_rectangle(cx1, cy1, cx2, cy2,
+                outline=color, width=2, dash=(3, 2), tags="zoomtest_item")
+            self.canvas.create_rectangle(cx1, cy1 - 17, cx1 + txt_w, cy1,
+                fill=color, outline="", tags="zoomtest_item")
+            self.canvas.create_text(cx1 + 3, cy1 - 8, text=txt, fill="white",
+                font=("Segoe UI", 8, "bold"), anchor=W, tags="zoomtest_item")
 
     def _on_canvas_configure(self, _event=None):
         """Auto-refit khi canvas thay đổi kích thước."""
@@ -70,6 +101,7 @@ class YoloCanvasMixin:
     def _on_pan_press(self, event):
         if self._zoom_factor == 0.0:
             return
+        self._clear_zoomtest_overlay()  # raw pan chỉ move ảnh, không re-render → overlay sẽ lệch
         self._pan_start  = (event.x, event.y)
         self._pan_origin = list(self._img_pos)
 
@@ -96,6 +128,7 @@ class YoloCanvasMixin:
             nh = int(pil.height * fit)
             self._img_pos = [(cw - nw) // 2, (ch - nh) // 2]
             self._render_display()
+        self._clear_zoomtest_overlay()  # raw pan chỉ move ảnh, không re-render → overlay sẽ lệch
         self._mmb_pan_start  = (event.x, event.y)
         self._mmb_pan_origin = list(self._img_pos)
         self.canvas.config(cursor="fleur")

@@ -109,6 +109,22 @@ def _append_log(widget, msg):
     widget.configure(state=DISABLED)
 
 
+def _update_last_log(widget, msg):
+    """Overwrite dòng cuối logbox — dùng cho batch progress (\r lines)."""
+    import re as _re
+    _PROG = _re.compile(r'\d+/\d+.*(?:\d+%|it/s|s/it)')
+    widget.configure(state=NORMAL)
+    last_start = widget.index("end-1c linestart")
+    last_text  = widget.get(last_start, "end-1c")
+    if _PROG.search(last_text):           # dòng cuối cũng là progress → overwrite
+        widget.delete(last_start, "end-1c")
+        widget.insert(last_start, msg)
+    else:                                  # dòng cuối là log thường → append
+        widget.insert(END, "\n" + msg)
+    widget.see(END)
+    widget.configure(state=DISABLED)
+
+
 def _folder_row(parent, label_text, var, row, bg=BG, history_key=None):
     """Tạo label + entry/combobox + browse button theo dạng grid.
 
@@ -271,7 +287,20 @@ def _zoom_image_window(root, pil_img, title="Phóng to ảnh",
         _s[0] = max(0.05, min(10.0, _s[0] * (1.1 if e.delta > 0 else 0.9)))
         _render()
 
+    def _on_press(e):
+        cv.scan_mark(e.x, e.y)
+        cv.configure(cursor="fleur")
+
+    def _on_drag(e):
+        cv.scan_dragto(e.x, e.y, gain=1)
+
+    def _on_release(_e):
+        cv.configure(cursor="arrow")
+
     cv.bind("<MouseWheel>", _on_wheel)
+    cv.bind("<ButtonPress-1>", _on_press)
+    cv.bind("<B1-Motion>", _on_drag)
+    cv.bind("<ButtonRelease-1>", _on_release)
     win.bind("<Escape>",    lambda _: win.destroy())
     win.bind("<Control-w>", lambda _: win.destroy())
 
@@ -281,6 +310,54 @@ def _zoom_image_window(root, pil_img, title="Phóng to ảnh",
     win.lift()
     win.focus_set()
     win.after(30, _render)
+
+
+def _attach_treeview_tooltip(tree, text_fn):
+    """Hiện tooltip tên đầy đủ khi hover 1 dòng Treeview — dùng khi panel hẹp
+    làm cột bị cắt bớt chữ (vd. danh sách file trong sidebar hẹp).
+
+    text_fn(item_id) -> str | None — trả về text đầy đủ cho item đó,
+    hoặc None để không hiện tooltip (vd. item rỗng).
+    """
+    state = {"win": None, "item": None}
+
+    def _hide(_=None):
+        if state["win"] is not None:
+            try:
+                state["win"].destroy()
+            except Exception:
+                pass
+            state["win"] = None
+            state["item"] = None
+
+    def _show(event):
+        item = tree.identify_row(event.y)
+        if not item:
+            _hide()
+            return
+        if item == state["item"]:
+            return
+        _hide()
+        text = text_fn(item)
+        if not text:
+            return
+        state["item"] = item
+        win = Toplevel(tree)
+        win.wm_overrideredirect(True)
+        try:
+            win.wm_attributes("-topmost", True)
+        except Exception:
+            pass
+        win.wm_geometry(f"+{event.x_root + 14}+{event.y_root + 10}")
+        Label(win, text=text, bg="#252540", fg=TEXT,
+              font=F_MONO, relief="solid", bd=1,
+              padx=6, pady=2).pack()
+        state["win"] = win
+
+    tree.bind("<Motion>", _show, add="+")
+    tree.bind("<Leave>", _hide, add="+")
+    tree.bind("<ButtonPress>", _hide, add="+")
+    tree.bind("<Destroy>", _hide, add="+")
 
 
 def _pb_row(parent):

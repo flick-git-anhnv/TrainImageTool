@@ -568,3 +568,68 @@ class YoloDetectMixin:
         self._zoom_factor = zoom
         self._img_pos = [cw / 2 - cx_img * zoom, ch / 2 - cy_img * zoom]
         self._render_display()
+
+    # ══════════════════════════════════════════════════ TEST VÙNG ZOOM ══
+
+    def _run_zoomtest_detect(self):
+        """Crop đúng vùng đang hiển thị trên canvas (theo zoom/pan hiện tại) từ ẢNH GỐC
+        (chưa annotate) rồi detect lại trên crop — kiểm tra model có nhận ra vật thể khi
+        được "phóng to" hay không. Chỉ vẽ overlay tạm (tag zoomtest_item), KHÔNG đụng vào
+        _det_cache hay label."""
+        if not self.model or self._pil1_orig is None:
+            self.v_status.set("Chưa load model hoặc chưa có ảnh để test vùng zoom.")
+            return
+
+        from ...shared.canvas_zoom import canvas_view_to_image_box
+        pil = self._pil1_orig
+        iw, ih = pil.size
+        cw = max(self.canvas.winfo_width(), 400)
+        ch = max(self.canvas.winfo_height(), 300)
+        scale = self._zoom_factor if self._zoom_factor > 0 else min(cw / iw, ch / ih)
+        off_x, off_y = self._img_pos[0], self._img_pos[1]
+        x1, y1, x2, y2 = canvas_view_to_image_box(scale, off_x, off_y, cw, ch, iw, ih)
+        if (x2 - x1) < 10 or (y2 - y1) < 10:
+            self.v_status.set("Vùng zoom quá nhỏ để test — zoom to hơn rồi thử lại.")
+            return
+
+        crop_box = (int(x1), int(y1), int(x2), int(y2))
+        crop     = pil.crop(crop_box)
+
+        self.btn_zoomtest.config(state="disabled")
+        self.v_status.set("⏳ Đang test detect vùng zoom…")
+
+        import threading
+        from ...shared.model_infer import run_model_predict
+        model = self.model
+        mtype = self._model1_type
+        conf  = max(self.v_conf_thresh.get(), self.v_conf.get())
+
+        def _do():
+            try:
+                boxes = run_model_predict(model, mtype, crop, conf)
+                self.root.after(0, lambda b=boxes: self._on_zoomtest_done(b, crop_box, None))
+            except Exception as e:
+                self.root.after(0, lambda err=str(e): self._on_zoomtest_done([], crop_box, err))
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _on_zoomtest_done(self, crop_boxes: list, crop_box: tuple, err):
+        self.btn_zoomtest.config(state="normal")
+        if err:
+            self.v_status.set(f"Lỗi test vùng zoom: {err}")
+            return
+
+        # Quy đổi tọa độ crop-local → ảnh gốc (cộng offset góc trên-trái của crop)
+        ox, oy = crop_box[0], crop_box[1]
+        self._zoomtest_boxes = [[cid, x1 + ox, y1 + oy, x2 + ox, y2 + oy, conf]
+                                 for cid, x1, y1, x2, y2, conf in crop_boxes]
+        self._zoomtest_active = True
+        self._draw_zoomtest_overlay()
+
+        n = len(self._zoomtest_boxes)
+        self.v_status.set(f"🔎 Test vùng zoom: {n} object (chỉ xem, chưa lưu)")
+
+    def _clear_zoomtest_overlay(self):
+        self._zoomtest_boxes  = []
+        self._zoomtest_active = False
+        self.canvas.delete("zoomtest_item")

@@ -34,9 +34,37 @@ def simplify(pts: list[tuple], epsilon_pct: float) -> list[tuple]:
 
 
 def _extract(results) -> list[tuple]:
-    if results[0].masks is None:
+    """Lấy polygon từ mask SAM.
+
+    KHÔNG dùng `masks.xy` (ultralytics `strategy="all"`) — khi mask có nhiều mảnh
+    RỜI hoặc có LỖ bên trong (VD: gương xe máy tách biệt do nền tối, hoặc biển số
+    sáng bị coi khác object nên tạo lỗ), nó nối/vòng qua bằng đường thẳng xuyên ảnh
+    để gộp thành 1 polygon duy nhất → hiện vệt kẻ lạ cắt ngang hoặc khoét lởm chởm
+    quanh object. Rasterize lại polygon đã lỗi (fillPoly) KHÔNG sửa được lỗ thật
+    (fillPoly giữ nguyên phần lõm như 1 lỗ, không lấp đặc).
+
+    Thay vào đó: lấy MASK PIXEL GỐC (`masks.data`) rồi dùng chung
+    `cv_segment.mask_array_to_polygon` (findContours RETR_EXTERNAL, contour lớn
+    nhất) — luôn cho 1 polygon liền mạch, tự động bỏ lỗ bên trong VÀ mảnh nhỏ rời
+    rạc, không cần vá lại. Hàm này dùng chung với YOLOE (yoloe_utils)."""
+    masks = results[0].masks
+    if masks is None:
         return []
-    masks_xy = results[0].masks.xy
+    try:
+        from .cv_segment import mask_array_to_polygon
+        data = masks.data
+        if data is None or len(data) == 0:
+            return []
+        m = data[0]
+        m = m.cpu().numpy() if hasattr(m, "cpu") else m
+        oh, ow = masks.orig_shape
+        pts = mask_array_to_polygon(m, oh, ow)
+        if pts:
+            return pts
+    except Exception:
+        pass
+    # Fallback nếu cấu trúc masks khác dự kiến (đổi phiên bản ultralytics...)
+    masks_xy = masks.xy
     if not masks_xy or len(masks_xy[0]) < 3:
         return []
     return [(float(p[0]), float(p[1])) for p in masks_xy[0]]

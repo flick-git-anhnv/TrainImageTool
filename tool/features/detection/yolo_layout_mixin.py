@@ -6,6 +6,7 @@ from ...core.constants import (BG, CARD, ACCENT, ACCENT2, TEXT, DIM, SUCCESS,
                          F_MAIN, F_BOLD, F_MONO, IMAGE_EXTENSIONS)
 from ...core.settings import (_bind_cfg, _cfg_dir, _CFG, _cfg_save,
                         _bind_history, _push_history, _get_history)
+from ...core.ui_helpers import _attach_treeview_tooltip
 try:
     from tkinterdnd2 import DND_FILES
     _DND_OK = True
@@ -94,7 +95,7 @@ class YoloLayoutMixin:
 
         # Row 0a — path input (ảnh hoặc thư mục kiểm tra)
         r0a = Frame(top, bg=CARD)
-        r0a.pack(fill=X, pady=(6, 0))
+        r0a.pack(fill=X, pady=(4, 0))
 
         self.combo_path = ttk.Combobox(r0a, textvariable=self.v_check_folder,
                                        font=F_MAIN)
@@ -165,7 +166,7 @@ class YoloLayoutMixin:
 
         # Row 1 — conf slider (new feature: Ngưỡng confidence with resolution 0.05)
         r1 = Frame(top, bg=CARD)
-        r1.pack(fill=X, pady=(8, 0))
+        r1.pack(fill=X, pady=(5, 0))
 
         Label(r1, text="Ngưỡng confidence:", font=F_BOLD, bg=CARD, fg=TEXT).pack(side=LEFT)
         self.slider_conf_thresh = Scale(
@@ -208,13 +209,16 @@ class YoloLayoutMixin:
 
         Label(r2, text="Lọc class:", font=F_MAIN, bg=CARD, fg=DIM,
               anchor=W).pack(side=LEFT, padx=(0, 4))
-        cls_wrap = Frame(r2, bg=CARD)
+        cls_wrap = Frame(r2, bg=CARD, height=22)
+        cls_wrap.pack_propagate(False)  # Scrollbar mặc định cao hơn Listbox 1 dòng
+        # nếu không ép, hàng này bị kéo giãn theo chiều cao tự nhiên của
+        # Scrollbar (~50px) thay vì theo height=1 của Listbox → khoảng trống thừa.
         cls_wrap.pack(side=LEFT, fill=BOTH, expand=True)
         sb = Scrollbar(cls_wrap, orient=VERTICAL)
         sb.pack(side=RIGHT, fill=Y)
         self.lb_classes = Listbox(cls_wrap, selectmode=MULTIPLE,
                                    yscrollcommand=sb.set,
-                                   height=2, font=F_MONO,
+                                   height=1, font=F_MONO,
                                    bg="#16162a", fg=TEXT,
                                    selectbackground=ACCENT2,
                                    activestyle="none",
@@ -226,7 +230,7 @@ class YoloLayoutMixin:
 
         # Row 3 — zoom, original toggle, auto-play, batch export
         r3 = Frame(top, bg=CARD)
-        r3.pack(fill=X, pady=(6, 0))
+        r3.pack(fill=X, pady=(4, 0))
 
         Label(r3, text="Zoom:", font=F_BOLD, bg=CARD, fg=TEXT).pack(side=LEFT)
         Button(r3, text="−", command=lambda: self._zoom_step(-0.2),
@@ -240,7 +244,18 @@ class YoloLayoutMixin:
                cursor="hand2").pack(side=LEFT, padx=(0, 2))
         Button(r3, text="Fit", command=lambda: self._zoom_step(0.0),
                bg="#333355", fg=TEXT, font=F_MAIN, relief="flat",
-               padx=6, cursor="hand2").pack(side=LEFT, padx=(2, 16))
+               padx=6, cursor="hand2").pack(side=LEFT, padx=(2, 8))
+
+        self.btn_zoomtest = Button(r3, text="🔎 Test vùng zoom",
+               command=self._run_zoomtest_detect,
+               bg="#8e24aa", fg="white", activebackground="#6a1b9a",
+               activeforeground="white", font=F_MAIN, relief="flat",
+               padx=8, cursor="hand2")
+        self.btn_zoomtest.pack(side=LEFT, padx=(0, 2))
+        Button(r3, text="✕", command=self._clear_zoomtest_overlay,
+               bg=CARD, fg=DIM, font=F_MAIN, relief="flat",
+               padx=4, cursor="hand2",
+               activebackground="#333355").pack(side=LEFT, padx=(0, 16))
 
         Checkbutton(r3, text="Xem ảnh gốc", variable=self.v_show_original,
                     command=self._render_display,
@@ -322,17 +337,31 @@ class YoloLayoutMixin:
         fs_spn.pack(side=LEFT, padx=(2, 0))
 
         # Row 4 — LPR server config (kiểm tra biển số sau YOLO detect)
+        # Thu gọn mặc định (bấm nhãn "▶ Cấu hình LPR" để mở) — nhường chiều cao
+        # cho canvas ảnh bên dưới; checkbox bật/tắt + trạng thái kết nối vẫn
+        # luôn hiển thị ở hàng tiêu đề dù đang thu gọn.
+        self._lpr_adv_open = False
+        r4_hdr = Frame(top, bg=CARD)
+        r4_hdr.pack(fill=X, pady=(4, 0))
+        self._lpr_adv_lbl = Label(r4_hdr, text="▶ 🔍 Cấu hình LPR",
+                                  font=F_MAIN, bg=CARD, fg=DIM, cursor="hand2")
+        self._lpr_adv_lbl.pack(side=LEFT)
+        self._lpr_adv_lbl.bind("<Button-1>", lambda _: self._toggle_lpr_panel())
+        Checkbutton(r4_hdr, text="Kiểm tra biển số", variable=self.v_check_lpr,
+                    bg=CARD, fg=TEXT, activebackground=CARD,
+                    activeforeground=TEXT, selectcolor="#16162a",
+                    font=F_MAIN, cursor="hand2",
+                    ).pack(side=LEFT, padx=(10, 0))
+        self._lpr_conn_lbl = Label(r4_hdr, text="", bg=CARD, fg=DIM,
+                                    font=F_MAIN, width=24, anchor=W)
+        self._lpr_conn_lbl.pack(side=LEFT, padx=(10, 0))
+
         r4 = Frame(top, bg=CARD)
-        r4.pack(fill=X, pady=(6, 0))
+        self._lpr_panel_frm = r4   # không pack() — thu gọn mặc định
 
         # Sub-row 4a: checkboxes + params + test btn
         r4a = Frame(r4, bg=CARD)
         r4a.pack(fill=X)
-        Checkbutton(r4a, text="🔍 Kiểm tra biển số", variable=self.v_check_lpr,
-                    bg=CARD, fg=TEXT, activebackground=CARD,
-                    activeforeground=TEXT, selectcolor="#16162a",
-                    font=F_MAIN, cursor="hand2",
-                    ).pack(side=LEFT, padx=(0, 6))
         Checkbutton(r4a, text="📦 Gọi khi batch", variable=self.v_lpr_batch,
                     bg=CARD, fg=DIM, activebackground=CARD,
                     activeforeground=TEXT, selectcolor="#16162a",
@@ -355,9 +384,6 @@ class YoloLayoutMixin:
                padx=8, cursor="hand2",
                activebackground=ACCENT, activeforeground="white",
                ).pack(side=LEFT, padx=(0, 6))
-        self._lpr_conn_lbl = Label(r4a, text="", bg=CARD, fg=DIM,
-                                    font=F_MAIN, width=24, anchor=W)
-        self._lpr_conn_lbl.pack(side=LEFT)
 
         # Sub-row 4b: 3 URL comboboxes + checkbox ảnh gốc
         r4b = Frame(r4, bg=CARD)
@@ -374,6 +400,16 @@ class YoloLayoutMixin:
             Checkbutton(r4b, text="Ảnh gốc", variable=self._lpr_fullimg_vars[i],
                         bg=CARD, fg=DIM, selectcolor=CARD,
                         font=F_MAIN).pack(side=LEFT, padx=(3, 0))
+
+    def _toggle_lpr_panel(self):
+        """Ẩn/hiện panel cấu hình LPR (URL, timeout, cỡ chữ) — cùng pattern _toggle_adv."""
+        if self._lpr_adv_open:
+            self._lpr_panel_frm.pack_forget()
+            self._lpr_adv_lbl.config(text=self._lpr_adv_lbl.cget("text").replace("▼", "▶"))
+        else:
+            self._lpr_panel_frm.pack(fill=X, pady=(2, 0))
+            self._lpr_adv_lbl.config(text=self._lpr_adv_lbl.cget("text").replace("▶", "▼"))
+        self._lpr_adv_open = not self._lpr_adv_open
 
     def _build_content(self):
         content = Frame(self, bg=BG)
@@ -608,6 +644,11 @@ class YoloLayoutMixin:
         self.tree_images.tag_configure("incorrect",  foreground=ACCENT)
         self.tree_images.tag_configure("unreviewed", foreground=TEXT)
         self.tree_images.tag_configure("folder",     foreground=DIM)
+        # Sidebar hẹp hay cắt bớt tên file dài — hover để xem tên đầy đủ
+        _attach_treeview_tooltip(
+            self.tree_images,
+            lambda iid: self._tree_iid_map.get(iid)
+                        or self.tree_images.item(iid, "text"))
 
         # Right — result panels area
         right = Frame(content, bg=BG)
