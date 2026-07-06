@@ -5369,8 +5369,8 @@
     "H:\\Software\\2.AI-Tranining\\2.Videos\\XM2.mp4"
   ],
   "yolo.export_draw": false,
-  "yolo.grid_cols": 5,
-  "yolo.grid_rows": 5,
+  "yolo.grid_cols": 1,
+  "yolo.grid_rows": 1,
   "yolo.wrong_folder": "K:/Software/1.PhanLoaiPhuongTienChuan/Dataset-PhanLoaiPhuongTien/2.Lối vào-ra ngoài trời/motor/Đuôi-Xe/4.Mưa",
   "h.yolo.wrong_folder": [
     "K:/Software/1.PhanLoaiPhuongTienChuan/Dataset-PhanLoaiPhuongTien/2.Lối vào-ra ngoài trời/motor/Đuôi-Xe/4.Mưa",
@@ -5396,7 +5396,7 @@
   ],
   "bbox.last_image": "C:\\Users\\nguye\\Desktop\\GiaoThongVietNam\\7.jpg",
   "yolo.session.folder": "K:/Software/Train/Ảnh Parking/Lotte/0307_0407",
-  "yolo.session.image": "K:/Software/Train/Ảnh Parking/Lotte/0307_0407\\bad\\CONG 5-VAO-XM-2\\none\\2026-07-03\\496790c8-bfa0-4641-bd89-c8238407693a\\in\\203529.jpg",
+  "yolo.session.image": "K:/Software/Train/Ảnh Parking/Lotte/0307_0407\\o_to\\anh_xe\\2026-07-03\\toi\\RAMP5-VAO\\204719_29E37197.jpg",
   "bbox.show_label": false,
   "bbox.show_size": true,
   "lotte.keyword": "41703A27",
@@ -5434,6 +5434,7 @@
   "ip.target_per_slot": 100,
   "ip.phase_mode": "auto",
   "h.yolo.search": [
+    "anh_xe",
     "bad",
     "thong",
     "xm",
@@ -5443,7 +5444,6 @@
     "02682",
     "20*",
     "xe_da",
-    "anh_xe",
     "30a41329",
     "ot",
     "oto",
