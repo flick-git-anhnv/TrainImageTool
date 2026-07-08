@@ -386,3 +386,478 @@ sequenceDiagram
 | Ngày | Cập nhật | Người |
 |---|---|---|
 | 2026-07-08 | Bản đầu, chốt quyết định (a)-(i) | Tech Lead |
+| 2026-07-08 20:55 | Bổ sung mục 8. Amendment (Phase 4): model picker trong khung, 2 nguồn nhãn (model/thư mục), chế độ ghi (append/replace), refactor `_batch_get_new_boxes_for_image` + `_batch_write_new_lines` (text-level write). | Tech Lead |
+
+---
+
+## 8. Amendment (Phase 4) — Model picker + Import từ thư mục label + Chế độ Thay thế/Chỉ thêm
+
+> Bản gốc (mục 1-7) đã QA PASS ở Phase 3 (commit e6b1f73/fe7a1ec). Amendment này BỔ SUNG — không thay đổi hành vi mặc định (Model detect + Append). Mọi thay đổi được thiết kế để 100% tương thích ngược: user không đổi gì thì flow chạy y hệt bản gốc.
+
+### 8.1 Bối cảnh & yêu cầu chốt
+
+3 yêu cầu chốt qua AskUserQuestion (xem Phase 4 trong plan):
+
+1. **Model picker tiện dụng** — thêm 1 dòng trong khung Batch: filename model + nút "📂 Đổi model" gọi `_browse_det_model` hiện có. KHÔNG tạo biến model mới — vẫn dùng chung `self._det_model`.
+2. **Nguồn nhãn — thêm 1 chế độ MỚI song song với "Model detect":**
+   - `🤖 Model detect` (mặc định, y hệt bản gốc).
+   - `📁 Thư mục label có sẵn` (MỚI) — user chọn 1 thư mục label khác + nhập 1 hoặc nhiều `class_id` nguồn (VD `"0"` hoặc `"0,2,5"`). Với mỗi ảnh trong `img_dir_var`, tìm file `.txt` cùng stem trong thư mục nguồn, đọc dòng có `class_id ∈ src_ids`, đổi `class_id` sang `dst_cid`, ghi vào file đích. **KHÔNG cần mở ảnh trong chế độ Auto** (cả nguồn và đích đều normalized 0-1). Ảnh không có file nguồn → bỏ qua im lặng.
+3. **Chế độ ghi — thêm radio mới:**
+   - `Chỉ thêm (append)` — mặc định, y hệt bản gốc.
+   - `Thay thế nhãn cùng class đích` — TRƯỚC khi append, xoá khỏi file đích TẤT CẢ dòng có `class_id == dst_cid` (chỉ xoá đúng class đích, giữ nguyên nhãn khác cả 5-token lẫn 9-token OBB).
+
+### 8.2 Quyết định thiết kế Amendment
+
+#### (a) Vị trí model picker trong `_build_batch_add_class_ui`
+
+Thêm **1 row mới ở ĐẦU** LabelFrame (trước Row 1 hiện tại), dùng `pack` với `fill=X`:
+
+```
+Row A (Model picker — MỚI):
+  Label "🤖 Model:"
+  Label self._batch_model_lbl (text=basename model_path hoặc "(chưa load)")
+  Button "📂 Đổi model" → self._browse_det_model
+```
+
+- `self._batch_model_lbl` là 1 widget MỚI trong khung Batch. Cập nhật đồng thời với `self._det_model_lbl` (khung Detect phía trên) trong `_on_det_model_loaded` — thêm 1 lệnh `self._batch_refresh_model_display(path)` vào cuối hàm này (đã có sẵn `_refresh_batch_class_combo()`, chỉ thêm 1 dòng nữa).
+- Widget dùng chung `self._det_model` — KHÔNG tạo biến model batch riêng.
+- Nút "📂 Đổi model" gọi trực tiếp `self._browse_det_model` (đã có, không sửa).
+- Khi widget vừa build xong (cuối `_build_batch_add_class_ui`), gọi `self._batch_refresh_model_display()` để hiển thị model đã load từ session (nếu có).
+
+#### (b) UI cho 2 nguồn nhãn — Radiobutton + Frame group ẩn/hiện
+
+Dùng pattern `pack_forget()`/`pack()` đã áp dụng cho Row 3 review buttons (line 3807, 4171, 4179). Không dùng toggle button — Radiobutton chuẩn Tkinter dễ đọc và tự exclusive.
+
+**Layout mới (sau Row A model picker):**
+
+```
+Row B (Source selector — MỚI):
+  Label "Nguồn nhãn:"
+  Radiobutton "🤖 Model detect"  variable=self._batch_src_mode_var value="model"
+                                 command=self._on_batch_src_mode_change
+  Radiobutton "📁 Thư mục label" variable=self._batch_src_mode_var value="folder"
+                                 command=self._on_batch_src_mode_change
+
+Row C1 (Model source group — hiện khi mode="model"):  Frame self._batch_src_model_frame
+  Label "Class nguồn:"
+  Combobox self._batch_src_class_combo (readonly, values từ model.names)  ← có sẵn
+
+Row C2 (Folder source group — hiện khi mode="folder"): Frame self._batch_src_folder_frame
+  Label "Thư mục label nguồn:"
+  Entry  textvariable=self._batch_src_label_dir_var
+  Button "📁"  command=self._batch_browse_src_label_dir
+  Label "Class id nguồn:"
+  Entry  textvariable=self._batch_src_class_ids_var  width=14  (VD: "0" hoặc "0,2,5")
+
+Row D (Nhãn đích + Chế độ ghi):
+  Label "→ Nhãn đích:"    Entry textvariable=self._batch_dst_label_var  ← có sẵn, giữ nguyên
+  Label "   Chế độ:"
+  Radiobutton "Chỉ thêm"    variable=self._batch_write_mode_var value="append"
+  Radiobutton "Thay thế"    variable=self._batch_write_mode_var value="replace"
+
+Row E (Buttons):
+  Button "🔍 Quét toàn bộ"  self._btn_batch_auto     ← có sẵn, giữ nguyên
+  Button "🔍 Quét lần lượt" self._btn_batch_review   ← có sẵn, giữ nguyên
+  Button "⏹ Dừng"          self._btn_batch_stop     ← có sẵn, giữ nguyên (ẩn ban đầu)
+
+Row F (Progress + status):        ← Row 2 hiện tại, giữ nguyên
+Row G (Review Áp dụng/Bỏ qua):    ← Row 3 hiện tại, giữ nguyên
+```
+
+**Callback `_on_batch_src_mode_change`:**
+
+```python
+def _on_batch_src_mode_change(self, _event=None):
+    mode = self._batch_src_mode_var.get()
+    if mode == "model":
+        self._batch_src_folder_frame.pack_forget()
+        self._batch_src_model_frame.pack(fill=X, pady=(0, 2))
+    else:  # "folder"
+        self._batch_src_model_frame.pack_forget()
+        self._batch_src_folder_frame.pack(fill=X, pady=(0, 2))
+```
+
+Mặc định `self._batch_src_mode_var = StringVar(value="model")` → Row C1 packed sẵn khi build.
+
+#### (c) Refactor luồng lấy box mới thành 1 hàm trừu tượng
+
+Cả 2 chế độ dùng chung phần threading + progress + review UI của bản gốc. CHỈ khác ở bước "lấy danh sách box mới cho 1 ảnh". Rút gọn thành 1 hàm:
+
+**Signature:**
+
+```python
+def _batch_get_new_boxes_for_image(
+    self,
+    fp: Path,
+    src_ids: set,             # 1 phần tử (model) hoặc nhiều phần tử (folder)
+    dst_cid: int,
+    source_mode: str,         # "model" | "folder"
+    src_label_dir: Path | None,   # None khi source_mode="model"
+    need_preview_px: bool,    # True ở chế độ review, False ở chế độ auto
+) -> tuple[list, list, int, int] | None:
+    """
+    Trả về (new_lines_norm, new_boxes_px, iw, ih) hoặc None nếu không có box mới.
+
+    - new_lines_norm : list[str]
+        Các dòng YOLO 5-token đã format sẵn, class_id = dst_cid, tọa độ normalized 0-1.
+        VD: ["1 0.523456 0.612345 0.104321 0.208765", ...]
+        Sẽ được append/replace vào file đích ở bước ghi (text-level).
+    - new_boxes_px   : list[(dst_cid, x1, y1, x2, y2)]
+        Toạ độ pixel cho preview overlay ở chế độ Review.
+        Trả về [] nếu source_mode="folder" và need_preview_px=False (không mở ảnh).
+    - iw, ih         : int
+        Kích thước ảnh (pixel). Trả về 0/0 nếu source_mode="folder" và need_preview_px=False.
+    """
+```
+
+**Pseudocode:**
+
+```python
+def _batch_get_new_boxes_for_image(self, fp, src_ids, dst_cid,
+                                    source_mode, src_label_dir, need_preview_px):
+    if source_mode == "model":
+        # Path CŨ — giống bản gốc, mở PIL + inference.
+        try:
+            pil = self._PIL_Image.open(fp).convert("RGB")
+            iw, ih = pil.size
+            boxes = run_model_predict(
+                self._det_model, self._det_model_type, pil,
+                self._det_conf_var.get())
+        except Exception:
+            return None
+        # Lọc theo src_ids (set — chỉ có 1 phần tử với model source)
+        matched = [(x1, y1, x2, y2) for cid, x1, y1, x2, y2, _sc in boxes if cid in src_ids]
+        if not matched:
+            return None
+        new_lines_norm = []
+        new_boxes_px   = []
+        for x1, y1, x2, y2 in matched:
+            xc = max(0.0, min(1.0, ((x1 + x2) / 2) / iw))
+            yc = max(0.0, min(1.0, ((y1 + y2) / 2) / ih))
+            bw = max(1e-4, min(1.0, (x2 - x1) / iw))
+            bh = max(1e-4, min(1.0, (y2 - y1) / ih))
+            new_lines_norm.append(f"{int(dst_cid)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
+            new_boxes_px.append((dst_cid, x1, y1, x2, y2))
+        return (new_lines_norm, new_boxes_px, iw, ih)
+
+    else:  # source_mode == "folder"
+        src_lbl_path = src_label_dir / (fp.stem + ".txt")
+        if not src_lbl_path.exists():
+            return None  # ảnh không có file nguồn — bỏ qua im lặng
+        # Đọc raw lines, lọc theo src_ids, đổi class_id → dst_cid.
+        new_lines_norm = []
+        try:
+            with open(src_lbl_path, encoding="utf-8") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) < 5:      # bỏ qua dòng lạ / trống / thiếu token
+                        continue
+                    try:
+                        cid_src = int(parts[0])
+                    except ValueError:
+                        continue
+                    if cid_src not in src_ids:
+                        continue
+                    # CHỈ nhận 5-token bbox. 9-token OBB nguồn — bỏ qua ở bản này
+                    # (out of scope: batch không hỗ trợ import OBB từ folder — nếu cần, mở ticket).
+                    if len(parts) != 5:
+                        continue
+                    # Đổi cid → dst_cid, giữ nguyên 4 số normalized còn lại
+                    new_lines_norm.append(
+                        f"{int(dst_cid)} {parts[1]} {parts[2]} {parts[3]} {parts[4]}")
+        except Exception:
+            return None
+        if not new_lines_norm:
+            return None
+        # Với preview mode (review), cần convert normalized → pixel
+        if need_preview_px:
+            try:
+                with self._PIL_Image.open(fp) as _im:
+                    iw, ih = _im.size
+            except Exception:
+                iw, ih = 0, 0
+            new_boxes_px = []
+            for ln in new_lines_norm:
+                p = ln.strip().split()
+                if len(p) != 5: continue
+                _, xc, yc, w, h = p
+                xc, yc, w, h = map(float, (xc, yc, w, h))
+                x1 = (xc - w/2) * iw; y1 = (yc - h/2) * ih
+                x2 = (xc + w/2) * iw; y2 = (yc + h/2) * ih
+                new_boxes_px.append((dst_cid, x1, y1, x2, y2))
+            return (new_lines_norm, new_boxes_px, iw, ih)
+        else:
+            # Auto mode + folder: KHÔNG mở ảnh, không tính pixel preview.
+            return (new_lines_norm, [], 0, 0)
+```
+
+#### (d) Vị trí đặt logic "Thay thế" — Hàm `_batch_write_new_lines` (text-level)
+
+**Quyết định:** Không sửa `_write_yolo_ext` hiện có (giữ nguyên, dùng cho backward compat — sẽ không được `_batch_worker` gọi nữa sau amendment, nhưng để lại phòng khi cần rollback). Thay thế bước ghi trong worker bằng hàm MỚI **text-level**:
+
+```python
+def _batch_write_new_lines(
+    self,
+    lbl_path: Path,
+    new_lines_norm: list,
+    dst_cid: int,
+    replace_mode: bool,
+) -> None:
+    """Ghi file .txt đích theo chế độ append/replace, thao tác text-level.
+
+    - Đọc raw text lines hiện có (giữ nguyên format 5-token/9-token OBB).
+    - Nếu replace_mode=True: xoá TẤT CẢ dòng có class_id == dst_cid (số nguyên khớp),
+      giữ mọi dòng khác (kể cả 9-token OBB có cid ≠ dst_cid).
+    - Append new_lines_norm vào cuối.
+    - Ghi lại file (mkdir parents nếu cần).
+
+    KHÔNG cần iw/ih. KHÔNG convert normalized ↔ pixel — an toàn tuyệt đối với OBB 9-token.
+    """
+    existing_lines = []
+    if lbl_path.exists():
+        try:
+            with open(lbl_path, encoding="utf-8") as f:
+                existing_lines = [ln.rstrip("\n") for ln in f if ln.strip()]
+        except Exception:
+            existing_lines = []
+
+    if replace_mode:
+        keep = []
+        for ln in existing_lines:
+            parts = ln.strip().split()
+            if not parts:
+                continue
+            try:
+                cid = int(parts[0])
+            except ValueError:
+                keep.append(ln)     # giữ nguyên dòng lạ (không có cid số)
+                continue
+            if cid == dst_cid:
+                continue            # XOÁ dòng có class_id == dst_cid
+            keep.append(ln)
+        existing_lines = keep
+
+    all_lines = existing_lines + list(new_lines_norm)
+    lbl_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lbl_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(all_lines))
+```
+
+**Lý do đặt logic Thay thế ở đây (thay vì trong `_write_yolo_ext`):**
+
+1. Text-level cực an toàn — không đụng đến 9-token OBB (dòng có `cid ≠ dst_cid` được giữ nguyên byte-by-byte, không parse-rồi-write-lại → không có rủi ro làm tròn float sai hoặc mất precision).
+2. Tách biệt trách nhiệm — `_write_yolo_ext` (đọc/ghi pixel ↔ normalized) vẫn giữ nguyên, không cần thêm tham số làm rối signature.
+3. Đơn điểm quyết định — mọi luồng ghi (model/folder × append/replace) đều đi qua hàm này → dễ test, dễ log, dễ debug.
+4. Loại bỏ hoàn toàn conversion pixel↔normalized trong worker cho folder source — đúng theo yêu cầu user "KHÔNG cần mở ảnh".
+
+**Update `_batch_worker` step (5a) và (5b) trong pseudocode gốc:**
+
+Thay:
+```python
+# Cũ:
+existing = self._read_yolo_ext(lbl_path, iw, ih)
+merged = existing + [list(b) for b in new_boxes]
+self._write_yolo_ext(lbl_path, merged, iw, ih)
+```
+
+Bằng:
+```python
+# Mới:
+self._batch_write_new_lines(lbl_path, new_lines_norm, dst_cid, replace_mode)
+```
+
+Không cần `existing` ở worker nữa — logic append/replace đã trọn gói trong helper.
+
+#### (e) Parse nhiều class_id nguồn (folder source)
+
+```python
+def _batch_parse_src_ids(self) -> tuple[set, str]:
+    """Parse ô class_id nguồn (chỉ dùng khi source_mode='folder').
+    Chấp nhận '0' / '0,2,5' / '0, 2 , 5' / '0;2;5' (tolerance).
+    Trả về (ids: set[int], err_msg: str). Nếu err_msg khác rỗng → invalid.
+    """
+    raw = self._batch_src_class_ids_var.get().strip()
+    if not raw:
+        return set(), "Vui lòng nhập ít nhất 1 class id nguồn (VD: 0 hoặc 0,2,5)."
+    ids = set()
+    for tok in raw.replace(";", ",").split(","):
+        t = tok.strip()
+        if not t: continue
+        try:
+            ids.add(int(t))
+        except ValueError:
+            return set(), f"Class id không hợp lệ: '{t}' (phải là số nguyên)."
+    if not ids:
+        return set(), "Không parse được class id nào."
+    return ids, ""
+```
+
+Trong `_batch_start`, khi source_mode == "folder":
+```python
+src_ids, err = self._batch_parse_src_ids()
+if err:
+    messagebox.showwarning("Class id nguồn không hợp lệ", err, parent=self.root)
+    return
+src_label_dir = Path(self._batch_src_label_dir_var.get().strip() or "")
+if not src_label_dir or not src_label_dir.is_dir():
+    messagebox.showwarning("Chưa chọn thư mục nguồn",
+                           "Vui lòng chọn thư mục label nguồn hợp lệ.",
+                           parent=self.root)
+    return
+```
+
+Khi source_mode == "model":
+```python
+sel = self._batch_src_class_var.get()
+if not sel or sel.startswith("("):
+    messagebox.showwarning(...); return
+src_ids = {int(sel.split(":")[0])}
+src_label_dir = None
+```
+
+**Note:** validation `_det_model` loaded và `_det_model_names` không rỗng CHỈ áp dụng khi `source_mode == "model"`. Folder source KHÔNG cần model.
+
+#### (f) Method / biến mới CHỐT tên (Senior Dev phải theo)
+
+**Biến state mới (thêm vào `__init__` sau khối "Batch Add Class" hiện có, line ~184):**
+
+| Biến | Kiểu | Giá trị đầu | Ý nghĩa |
+|---|---|---|---|
+| `self._batch_src_mode_var` | `StringVar` | `"model"` | Nguồn nhãn: `"model"` \| `"folder"` |
+| `self._batch_write_mode_var` | `StringVar` | `"append"` | Chế độ ghi: `"append"` \| `"replace"` |
+| `self._batch_src_label_dir_var` | `StringVar` | `""` | Đường dẫn thư mục label nguồn (folder mode) |
+| `self._batch_src_class_ids_var` | `StringVar` | `""` | Class id nguồn (VD `"0,2,5"`), folder mode |
+| `self._batch_src_model_frame` | Frame (widget) | tạo ở `_build_batch_add_class_ui` | Group Row C1 |
+| `self._batch_src_folder_frame` | Frame (widget) | tạo ở `_build_batch_add_class_ui` | Group Row C2 |
+| `self._batch_model_lbl` | Label (widget) | tạo ở `_build_batch_add_class_ui` | Hiển thị filename model đang dùng trong khung Batch |
+
+Có thể `_bind_cfg` cho `_batch_src_mode_var`, `_batch_write_mode_var`, `_batch_src_label_dir_var`, `_batch_src_class_ids_var` để persist qua session (khuyến khích — key: `bbox.batch.src_mode`, `bbox.batch.write_mode`, `bbox.batch.src_label_dir`, `bbox.batch.src_class_ids`).
+
+**Method mới:**
+
+| Method | Signature | Nơi gọi | Mô tả |
+|---|---|---|---|
+| `_batch_refresh_model_display` | `(self) -> None` | Cuối `_build_batch_add_class_ui` + cuối `_on_det_model_loaded` | Cập nhật `self._batch_model_lbl` từ `self._det_model_path.get()` (basename hoặc "(chưa load)"). |
+| `_on_batch_src_mode_change` | `(self, _event=None) -> None` | Radiobutton Row B command | Ẩn/hiện `_batch_src_model_frame` / `_batch_src_folder_frame`. |
+| `_batch_browse_src_label_dir` | `(self) -> None` | Button "📁" cạnh Entry Row C2 | `filedialog.askdirectory` set `self._batch_src_label_dir_var`. |
+| `_batch_parse_src_ids` | `(self) -> tuple[set, str]` | Trong `_batch_start` (folder mode) | Parse ô class_id nguồn. |
+| `_batch_get_new_boxes_for_image` | `(self, fp, src_ids, dst_cid, source_mode, src_label_dir, need_preview_px) -> tuple\|None` | Trong `_batch_worker` | Abstract source layer — pseudocode ở (c). |
+| `_batch_write_new_lines` | `(self, lbl_path, new_lines_norm, dst_cid, replace_mode) -> None` | Trong `_batch_worker` | Ghi text-level append/replace — pseudocode ở (d). |
+
+**Method sửa (KHÔNG tạo mới):**
+
+| Method | Sửa gì |
+|---|---|
+| `_build_batch_add_class_ui` (line 3748) | Thêm Row A (model picker), Row B (source selector), tách Row C thành C1 (model) + C2 (folder) — 2 Frame group; Row D thêm radio chế độ ghi. |
+| `_batch_start` (line 3976) | Đọc source_mode + write_mode; validate theo source_mode (folder không cần model); dispatch args mới cho worker. |
+| `_batch_worker` (line 4067) | Signature MỚI: `_batch_worker(self, mode, src_ids, dst_cid, source_mode, src_label_dir, replace_mode)`. Vòng lặp: gọi `_batch_get_new_boxes_for_image(...)` thay cho block `PIL.open + run_model_predict + filter`; gọi `_batch_write_new_lines(...)` thay cho `_read_yolo_ext + _write_yolo_ext`. |
+| `_batch_show_review` (line 4142) | Signature MỚI: `(fp, new_boxes_px)` — bỏ tham số `existing` vì không còn dùng (text-level write không cần). Vẫn set `self._batch_preview_boxes = list(new_boxes_px)`. |
+| `_on_det_model_loaded` (line 3304) | Thêm 1 dòng `self._batch_refresh_model_display()` sau `_refresh_batch_class_combo()`. |
+
+**Method KHÔNG đụng (giữ nguyên):**
+
+- `_batch_stop`, `_batch_review_apply`, `_batch_review_skip`, `_batch_update_progress`, `_batch_maybe_reload_current`, `_batch_finish`, `_batch_hide_review_ui`, `_draw_batch_preview_overlay`.
+- `_refresh_batch_class_combo` — giữ nguyên (chỉ dùng khi source_mode="model"). Enable/disable 2 nút quét theo `_det_model_names` VẪN đúng cho model source. Với folder source, 2 nút cần enable độc lập với `_det_model_names` — sửa trong `_batch_set_ui_state` (xem dưới).
+- `_refresh_label_widgets`, `_resolve_lbl_path`, `_read_yolo_ext`, `_write_yolo_ext` — giữ nguyên.
+
+**Sửa nhỏ `_batch_set_ui_state`:**
+
+```python
+def _batch_set_ui_state(self, state: str):
+    self._batch_state = state
+    if state == "idle":
+        # Enable 2 nút quét theo source_mode:
+        #  - model  : chỉ khi _det_model_names có
+        #  - folder : luôn enable (không cần model)
+        src_mode = self._batch_src_mode_var.get()
+        can_run = (src_mode == "folder") or bool(self._det_model_names)
+        n_st = "normal" if can_run else "disabled"
+        self._btn_batch_auto.config(state=n_st)
+        self._btn_batch_review.config(state=n_st)
+        self._btn_batch_stop.pack_forget()
+    else:
+        self._btn_batch_auto.config(state="disabled")
+        self._btn_batch_review.config(state="disabled")
+        self._btn_batch_stop.pack(side=LEFT)
+```
+
+Đồng thời trong `_refresh_batch_class_combo` sửa nhánh "no names": chỉ disable 2 nút khi state=idle **và** source_mode="model" (không disable oan khi user đang ở folder mode). Đơn giản: gọi `self._batch_set_ui_state(self._batch_state)` cuối `_refresh_batch_class_combo` thay vì hard-coded disable. Và gọi `self._batch_set_ui_state("idle")` cuối `_on_batch_src_mode_change` để cập nhật nút.
+
+#### (g) Rủi ro & giữ hành vi mặc định
+
+| Rủi ro | Giảm thiểu |
+|---|---|
+| Amendment làm vỡ default path (Model detect + Append) đã QA PASS | Default value của 2 radio là `"model"` + `"append"` → nếu user không đổi gì, code path đi qua `_batch_get_new_boxes_for_image(source_mode="model", ...)` + `_batch_write_new_lines(replace_mode=False)` → hành vi ngang bằng bản gốc về mặt ngữ nghĩa. **Test regression bắt buộc (Phase 4.4).** |
+| `_batch_write_new_lines` (text-level) khác `_write_yolo_ext` (pixel↔norm roundtrip) — có thể sai lệch cực nhỏ do làm tròn 6 chữ số? | Không: text-level ĐỌC dòng cũ giữ nguyên byte, KHÔNG parse-lại-ghi-lại. Dòng cũ được preserve 100%. Dòng MỚI được format `f"{cid} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}"` giống hệt logic `_write_yolo_ext` (line 3946). → Kết quả IDENTICAL bit-by-bit cho path Model detect + Append. |
+| Thay thế xoá nhầm nhãn khác | So sánh `cid == dst_cid` (integer equal, không phải chuỗi/regex). Dòng trống + dòng có `cid` không parse được → giữ nguyên (không xoá). |
+| Thay thế đụng dòng 9-token OBB có `cid == dst_cid` | Xoá đúng theo yêu cầu user (dòng thuộc class đích, dù 5 hay 9 token, đều bị xoá). Ghi rõ warning trong tooltip radio "Thay thế": *"Xoá tất cả box class đích (cả 5-token và 9-token OBB) trước khi ghi mới."* |
+| Folder source có dòng OBB 9-token (nguồn) | Bỏ qua im lặng ở bản này — chỉ nhận 5-token từ folder source. Nếu user cần → mở ticket. |
+| Folder source path Windows/POSIX | Dùng `pathlib.Path` xuyên suốt, khớp pattern hiện có (`lbl_dir_var` cũng dùng `Path`). |
+| User đổi source_mode giữa lúc batch đang chạy | Không thể xảy ra: 2 nút Quét bị disable trong lúc chạy. Radiobutton vẫn có thể click nhưng `_batch_worker` đọc snapshot args tại thời điểm start → không ảnh hưởng job hiện tại. Sau khi finish, state=idle, radio đổi thì lần chạy sau dùng giá trị mới. |
+| Preview box cam ở review mode + folder source: dùng iw/ih từ header PIL — chỉ header đủ không? | `Image.open(fp).size` chỉ đọc header IHDR/SOF marker — không decode pixel data. Nhanh (~1ms). Chấp nhận cho review path. |
+| Trace state cũ (line 4180: `self._batch_state = "review-scanning"` sau `_batch_hide_review_ui`) khi Folder+Review | Giữ nguyên logic — không phụ thuộc source_mode. Đã test ở Phase 3, tương thích. |
+| Bug P3 (`_load_image` không reset `_batch_preview_*`) đã biết | KHÔNG fix trong amendment này (out of scope Phase 4). Tiện tay có thể fix bằng 2 dòng thêm vào `_load_image` sau line 1064 — Senior Dev quyết định (khuyến khích fix vì <5 phút): `self._batch_preview_boxes = []; self._batch_preview_active = False`. Không bắt buộc — không phá regression. |
+
+### 8.3 Sequence diagram (Amendment)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as UI Thread (Tk)
+    participant W as Worker Thread
+    participant FS as Filesystem (.txt)
+    Note over UI: User chọn source_mode + write_mode<br/>bấm "Quét toàn bộ"/"Quét lần lượt"
+    UI->>UI: _batch_start(mode)<br/>validate theo source_mode<br/>parse src_ids, resolve src_label_dir
+    UI->>W: Thread(_batch_worker,<br/>mode, src_ids, dst_cid,<br/>source_mode, src_label_dir, replace_mode).start()
+    loop foreach image
+        W->>W: check cancel_evt
+        W->>UI: after(0, update_progress)
+        W->>W: result = _batch_get_new_boxes_for_image(<br/>  fp, src_ids, dst_cid,<br/>  source_mode, src_label_dir,<br/>  need_preview_px=(mode=='review'))
+        alt result is None
+            W->>W: continue (bỏ qua im lặng)
+        else có new_lines_norm
+            alt mode == "auto"
+                W->>FS: _batch_write_new_lines(<br/>  lbl_path, new_lines_norm,<br/>  dst_cid, replace_mode)
+                W->>UI: after(0, _batch_maybe_reload_current)
+            else mode == "review"
+                W->>UI: after(0, _batch_show_review,<br/>  fp, new_boxes_px)
+                W->>W: review_evt.wait()
+                alt decision == apply
+                    W->>FS: _batch_write_new_lines(...)
+                    W->>UI: after(0, _batch_maybe_reload_current)
+                else decision == skip
+                    W->>W: skipped += 1
+                else decision == stop
+                    W->>W: break
+                end
+            end
+        end
+    end
+    W->>UI: after(0, _batch_finish, applied, skipped, detected, total)
+```
+
+### 8.4 Task breakdown Amendment (cho Senior Dev — Phase 4.2)
+
+| ID | Tên | Ước tính | Phụ thuộc |
+|---|---|---|---|
+| 4.2a | Thêm 5 biến state mới trong `__init__` (dưới khối Batch Add Class hiện có, line ~184) + `_bind_cfg` | 10 phút | - |
+| 4.2b | Refactor `_build_batch_add_class_ui` (line 3748): thêm Row A (model picker), Row B (source selector radio), tách Row C thành 2 Frame group, Row D thêm radio Chế độ ghi. Bind `_on_batch_src_mode_change` cho Radiobutton. | 40 phút | 4.2a |
+| 4.2c | Viết `_batch_refresh_model_display` + thêm 1 dòng gọi trong `_on_det_model_loaded` (line 3318) | 10 phút | 4.2b |
+| 4.2d | Viết `_on_batch_src_mode_change` + `_batch_browse_src_label_dir` + `_batch_parse_src_ids` | 20 phút | 4.2b |
+| 4.2e | Sửa `_batch_set_ui_state` (line 3953) — enable 2 nút quét khi folder mode dù không có `_det_model_names`. Cập nhật `_refresh_batch_class_combo` (line 3831) dùng `_batch_set_ui_state(self._batch_state)` thay vì hard-code disable. | 15 phút | 4.2a |
+| 4.2f | Viết `_batch_get_new_boxes_for_image` (thay block PIL.open + run_model_predict + filter trong worker) | 30 phút | 4.2a |
+| 4.2g | Viết `_batch_write_new_lines` (thay `_read_yolo_ext + _write_yolo_ext` trong worker) | 20 phút | 4.2a |
+| 4.2h | Sửa `_batch_worker` (line 4067) — signature + gọi 2 helper mới. `_batch_show_review` (line 4142) — bỏ tham số `existing`, chỉ nhận `new_boxes_px`. | 30 phút | 4.2f, 4.2g |
+| 4.2i | Sửa `_batch_start` (line 3976) — validate theo source_mode, dispatch args mới cho worker | 30 phút | 4.2d, 4.2h |
+| 4.2j | (Tuỳ chọn <5 phút) Fix bug P3: `_load_image` line 1064 reset `_batch_preview_boxes`/`_batch_preview_active` | 5 phút | - |
+| 4.2k | Test smoke tay 6 kịch bản (xem QA task 4.4) — verify default path (model + append) không regression | 30 phút | 4.2a-j |
+| **Tổng** | | **~4h** | |
+
+### 8.5 Checklist tài liệu đồng bộ (Phase 4)
+
+- [x] PRD — Không có (feature nhỏ, đã chốt qua AskUserQuestion)
+- [x] User Story — Không có (PLAN Phase 4 chứa scope)
+- [x] TDD — File này (mục 8)
+- [ ] DESIGN — Không cần (UI thêm 1 row model picker + 1 row radio + 1 folder picker — mô tả đủ ở 8.2b)
+- [ ] ADR — Không cần
+- [ ] Test case — QA sẽ cập nhật ở bước 4.4
