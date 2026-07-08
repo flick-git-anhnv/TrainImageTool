@@ -1,8 +1,8 @@
 ---
 task: bbox-batch-add-class
 created: 2026-07-08
-updated: 2026-07-08 21:41
-status: completed
+updated: 2026-07-08 22:40
+status: in-progress
 workflow: WF-FEATURE (rút gọn — PM/BA/UX đã hoàn thành qua AskUserQuestion)
 priority: P2
 ---
@@ -78,6 +78,79 @@ Có 2 chế độ quét (chốt qua AskUserQuestion lần 2):
 | 4.2 | Code amendment vào `tab_bbox.py` theo TDD cập nhật. | senior-developer | ✅ | `tool/features/annotation/tab_bbox.py` (commit 970e598) | 2026-07-08 21:25 | KHÔNG phá hành vi mặc định (Append + Model detect) đã QA pass ở Phase 3 |
 | 4.3 | Review code amendment — đặc biệt: logic xoá-trước-khi-ghi (Thay thế) không xoá nhầm nhãn khác, đọc nhiều class_id nguồn đúng, chế độ Thư mục label không cần load ảnh vẫn hoạt động đúng cho preview (review mode vẫn cần mở ảnh để vẽ canvas, nhưng KHÔNG cần model). | tech-lead | ✅ | **APPROVED** — commit 970e598 sẵn sàng QA. Không phát hiện bug thêm ngoài bug signature `_batch_show_review` mà Senior Dev đã sửa. AST + Import OK. | 2026-07-08 21:30 | Không cần vòng lại Senior Dev |
 | 4.4 | Smoke test lại: (a) chế độ Model detect + Append vẫn hoạt động như Phase 3 (regression), (b) chế độ Model detect + Thay thế xoá đúng nhãn cũ, (c) chế độ Thư mục label + Append, (d) chế độ Thư mục label + Thay thế, (e) nhập nhiều class_id nguồn (vd "0,2"), (f) model-picker mới trong khung Batch hoạt động đúng, đồng bộ với ô Model phía trên. | qa-engineer | ✅ | `docs/test-cases/TC-bbox-batch-add-class.md` (cập nhật +mục Amendment, .docx ✅, .pdf ✅). Commit 0c57bed | 2026-07-08 21:41 | 24 PASS / 0 FAIL / 0 SKIP. Tk kha dung. QA PASS. |
+
+### Phase 5: Fast-track fix — Stale status label khi đổi nguồn nhãn + hint UI class id nhiều giá trị
+
+> User phản hồi kèm screenshot thực tế sau khi tự chạy GUI (2026-07-08, sau khi Phase 4 QA PASS): chọn "📁 Thư mục label" nhưng status label vẫn hiện "Model ONNX / chưa load — batch chưa sẵn sàng" (do model đang load là `rfdetr-nano.onnx`), khiến user tưởng tính năng chưa sẵn sàng dùng được dù nút Quét thực ra đã enable đúng. User cũng hỏi lại việc "Class id nguồn" có nhập được nhiều giá trị không (ĐÃ hỗ trợ qua `_batch_parse_src_ids`, chỉ thiếu hint UI).
+
+**Root cause xác nhận qua đọc code (không cần đoán):** `_on_batch_src_mode_change` (dòng ~4040-4050) gọi `_batch_set_ui_state` để enable/disable đúng nút, nhưng KHÔNG cập nhật lại `self._batch_status_lbl` — dòng text "Model ONNX / chưa load..." do `_refresh_batch_class_combo` set lúc trước đó (khi source_mode còn là "model") bị stale, không tự xoá khi user đổi sang "folder". Đây là lỗi P3 (chỉ hiển thị sai, không chặn chức năng — nút Quét đã enable đúng ở dòng 4222 `can_run = (src_mode=="folder") or bool(self._det_model_names)`), nhưng gây hiểu lầm nghiêm trọng về UX (đúng như user phản ánh).
+
+**Fix cần làm (WF-FASTTRACK — P3, ≤5 dòng, không đụng logic nghiệp vụ):**
+1. `_on_batch_src_mode_change`: khi `mode == "folder"` → xoá status label (`self._batch_status_lbl.config(text="", fg=DIM)`); khi `mode == "model"` → gọi lại `self._refresh_batch_class_combo()` để tính lại đúng status/enable theo `_det_model_names` hiện tại (KHÔNG chỉ gọi `_batch_set_ui_state` như hiện tại).
+2. Thêm hint vào label "Class id nguồn:" → đổi thành "Class id nguồn (vd: 0 hoặc 0,2,5):" (dòng ~3823) để rõ hỗ trợ nhập nhiều giá trị phân tách dấu phẩy.
+
+**Agent chain (fast-track):** `senior-developer` (fix + test) → `tech-lead` (review nhanh ≤15 phút).
+
+| # | Bước | Agent | Status | Artifact | Hoàn thành lúc | Ghi chú |
+|---|------|-------|--------|----------|-----------------|---------|
+| 5.1 | Fix 2 điểm trên trong `tab_bbox.py`, verify bằng cách trace lại luồng (model load ONNX → status hiện đúng → đổi sang folder → status bị xoá → đổi lại model → status tính lại đúng theo `_det_model_names` hiện tại). | senior-developer | ✅ | `tool/features/annotation/tab_bbox.py` (commit aefc75d) | 2026-07-08 22:12 | AST OK, Import OK. 3/3 kịch bản trace PASS. |
+| 5.2 | Review nhanh (≤15 phút) — xác nhận fix đúng, không phá logic `_batch_set_ui_state`/`_refresh_batch_class_combo` khác. | tech-lead | ✅ | **APPROVED** commit aefc75d — diff sạch 3 điểm (label text, nhánh folder xoá status, nhánh model gọi `_refresh_batch_class_combo`). Verify `_refresh_batch_class_combo` dòng 3933 gọi `_batch_set_ui_state` không điều kiện — không edge case. AST + Import OK. | 2026-07-08 22:16 | Không sửa thêm code. Sẵn sàng merge/push. |
+
+### Phase 6: Fast-track — Khung Batch thu gọn được (collapsible) + Nhãn đích chuyển thành combobox chọn
+
+> User phản hồi 2 yêu cầu liên tiếp (2026-07-08, sau Phase 5):
+> 1. "sửa thành drop down để có thể đóng lại khi không cần dùng, tránh tốn giao diện" — khung "➕ Bổ sung class hàng loạt" chiếm diện tích cố định, cần cho thu gọn/mở ra được.
+> 2. "phần nhãn đích sửa thành chọn" — field "→ Nhãn đích" hiện là `Entry` gõ tự do, cần đổi thành chọn từ danh sách nhãn có sẵn (vẫn phải gõ được tên MỚI vì đây là cách chính để tạo nhãn mới, KHÔNG được đổi thành readonly).
+
+**Yêu cầu 1 — Collapsible panel:**
+- `_build_batch_add_class_ui` (dòng ~3758-3900) hiện tạo `LabelFrame(parent, text="➕ Bổ sung class hàng loạt", ...)` chứa thẳng Row A-G. Đổi sang: `LabelFrame` dùng `labelwidget=` là 1 `Button` bấm được (Tkinter classic `LabelFrame` hỗ trợ tham số `labelwidget`) thay `text=` tĩnh — Button hiển thị `"▼ ➕ Bổ sung class hàng loạt"` (mở) / `"▶ ➕ Bổ sung class hàng loạt"` (đóng), bấm gọi `_batch_toggle_collapse`.
+- Toàn bộ Row A-G hiện có chuyển vào 1 `Frame` con MỚI `self._batch_body = Frame(lf, bg=CARD)` — pack/pack_forget frame này khi toggle, KHÔNG đổi nội dung/logic Row A-G.
+- `_batch_toggle_collapse()`: đảo `self._batch_collapsed` (bool), đổi text button, `self._batch_body.pack()`/`pack_forget()`.
+- Persist qua `_bind_cfg` (pattern có sẵn, vd `_bind_cfg("bbox.batch.collapsed", ...)`), tương tự cách `_batch_src_mode_var` đã persist ở Phase 4.
+- **Mặc định: THU GỌN (collapsed)** khi chưa có config lưu trước đó.
+
+**Yêu cầu 2 — Nhãn đích → Combobox (editable):**
+- Đổi `Entry(row_d, textvariable=self._batch_dst_label_var, ...)` (dòng ~3834) thành `ttk.Combobox(row_d, textvariable=self._batch_dst_label_var, values=self.label_list, ...)` — **KHÔNG đặt `state="readonly"`** (phải giữ editable để user gõ tên nhãn HOÀN TOÀN MỚI, đây là luồng chính hiện có ở `_batch_start` dòng ~4318-4325: nếu `dst_label` chưa có trong `self.label_list` thì tự append).
+- Thêm cập nhật `values` của combobox này vào hàm `_refresh_label_widgets()` (dòng ~3937-3966, nơi đang refresh 7 widget khác tham chiếu `label_list`) — dùng PLAIN NAME list (`self.label_list`, KHÔNG phải format `"idx: name"` như `_cls_combo`/`_rl_from_combo`, vì `dst_label` được so khớp trực tiếp bằng string qua `self.label_list.index(dst_label)` ở dòng 4320) — đặt tên biến widget `self._batch_dst_combo` (đổi từ Entry sang Combobox nhưng giữ nguyên `textvariable`, không đổi cách các nơi khác đọc giá trị qua `self._batch_dst_label_var.get()`).
+- Gọi refresh giá trị combobox này ngay sau khi tạo (trong `_build_batch_add_class_ui`, set `values=self.label_list` lúc khởi tạo) để hiển thị đúng danh sách nhãn hiện có ngay từ đầu, không cần đợi `_refresh_label_widgets` chạy lần đầu.
+
+**KHÔNG đổi bất kỳ logic nghiệp vụ nào khác** (model detect, folder import, append/replace, threading) — chỉ 2 thay đổi UI trên.
+
+| # | Bước | Agent | Status | Artifact | Hoàn thành lúc | Ghi chú |
+|---|------|-------|--------|----------|-----------------|---------|
+| 6.1 | Code cả 2 yêu cầu (collapsible + combobox nhãn đích) theo đúng thiết kế trên. Verify bằng Tk thật (đã xác nhận khả dụng): toggle qua lại nhiều lần không lỗi; combobox hiển thị đúng label_list, vẫn gõ được tên mới và tự append đúng như trước; mở lại app giữ đúng trạng thái collapsed đã lưu. | senior-developer | ✅ | `tool/features/annotation/tab_bbox.py` (commit 8a4dd7b) | 2026-07-08 22:23 | KHÔNG đổi logic Row A-G bên trong |
+| 6.2 | Review nhanh (≤15 phút) — xác nhận không phá layout/logic cũ, combobox không bị đặt nhầm `readonly`. | tech-lead | ✅ | **APPROVED** commit 8a4dd7b — 4 điểm soi kỹ đều PASS (labelwidget pattern đúng thứ tự, `_batch_review_frame` pack/pack_forget vẫn OK dù đổi parent, combobox không có `state=readonly`, `_refresh_label_widgets` có guard `hasattr`). Toggle button đủ nổi bật (F_BOLD + arrow ▶/▼ + hand2 cursor). AST + Import OK. | 2026-07-08 22:28 | Không sửa thêm code. Sẵn sàng chuyển Phase 7 (hotfix NaN) |
+
+### Phase 7: HOTFIX — Crash `ValueError: cannot convert float NaN to integer` tại `_draw_all_bboxes`
+
+> User báo lỗi thật kèm traceback (2026-07-08, trong lúc dùng tính năng, khả năng cao liên quan tới nguồn "📁 Thư mục label" mà user đang test — thư mục ngoài `esktop/Test/yolo_labels` có thể chứa dữ liệu lỗi/NaN):
+> ```
+> File "D:\Tool\tool\features\annotation\tab_bbox.py", line 1425, in _draw_all_bboxes
+>     _parts.append(f" {int(x2-x1)}×{int(y2-y1)}")
+> ValueError: cannot convert float NaN to integer
+> ```
+> Yêu cầu: "fix lọc bỏ các box lỗi" — filter/loại bỏ box có toạ độ không hợp lệ (NaN/Inf) thay vì để crash.
+
+**Root cause nghi ngờ cao nhất (cần Senior Dev xác nhận bằng cách đọc code, không chỉ tin giả thuyết):**
+- `_read_yolo` (dòng ~1103-1126) parse `xc, yc, w, h = map(float, p[1:5])` — Python `float("nan")`/`float("inf")` KHÔNG raise exception, trả về NaN/Inf hợp lệ về mặt cú pháp → nếu file `.txt` có token dạng "nan"/"inf" (do lỗi từ tool khác, hoặc do chính tính năng mới của mình lỡ ghi vào), box này lọt qua `_read_yolo` mà không bị lọc, được thêm vào `self._bboxes`, rồi crash khi vẽ.
+- **Nghi ngờ cụ thể liên quan tính năng vừa thêm (Phase 4):** `_batch_get_new_boxes_for_image` nhánh `source_mode == "folder"` (khoảng dòng 4121-4145) hiện COPY THẲNG `parts[1], parts[2], parts[3], parts[4]` dạng STRING vào dòng ghi mới (`f"{int(dst_cid)} {parts[1]} {parts[2]} {parts[3]} {parts[4]}"`) — **KHÔNG hề gọi `float()` hay validate** các token này trước khi ghi. Nếu thư mục label nguồn (do tool khác xuất ra, hoặc bị lỗi) chứa dòng có token "nan"/"inf"/giá trị bất thường → bị copy nguyên văn vào file label đích của project, sau đó `_read_yolo` đọc lại và tạo ra box NaN → crash khi vẽ. Đây có khả năng cao là nguồn gốc thực sự vì user vừa test tính năng "Thư mục label" với 1 thư mục label ngoài không rõ chất lượng dữ liệu.
+
+**Fix cần làm (WF-HOTFIX — P2, crash bug, scope hẹp/rõ ràng, không đổi thiết kế nghiệp vụ):**
+1. **`_draw_all_bboxes` (dòng ~1341-1425+, chỗ crash) — fix NGAY lập tức, ưu tiên cao nhất:** trước khi dùng `x1,y1,x2,y2` (hoặc 8 điểm poly4) để tính toán/vẽ, validate bằng `math.isfinite()` cho TẤT CẢ giá trị toạ độ liên quan; nếu có bất kỳ giá trị nào không finite (NaN/Inf) → `continue` bỏ qua box đó (KHÔNG vẽ, KHÔNG crash). Cân nhắc log ra console 1 dòng cảnh báo (VD `print(f"[WARN] Bỏ qua box lỗi (NaN/Inf) tại index {i}")`) để dễ debug sau này, không cần thiết phải hiện messagebox (tránh làm phiền user liên tục nếu file có nhiều box lỗi).
+2. **`_read_yolo` (dòng ~1103-1126):** sau khi `xc, yc, w, h = map(float, p[1:5])` (và tương tự cho nhánh 9-token `pts = list(map(float, p[1:9]))`), validate `all(math.isfinite(v) for v in (xc,yc,w,h))` (hoặc `pts`) — nếu KHÔNG hợp lệ → `continue` bỏ qua dòng đó, KHÔNG append vào `bboxes`. Đây là fix gốc rễ cho MỌI đường đọc file `.txt` cũ (không chỉ liên quan tính năng batch).
+3. **`_read_yolo_ext` (dòng ~3977+, dùng bởi batch worker cũ `_read_yolo_ext`/`_write_yolo_ext` — dù hiện không còn được gọi từ `_batch_worker` mới theo Phase 4, nhưng vẫn tồn tại trong file, có thể được dùng lại sau) — áp dụng validate tương tự để nhất quán, phòng rollback.**
+4. **`_batch_get_new_boxes_for_image` nhánh `source_mode == "folder"` (dòng ~4121-4145) — ĐÂY LÀ ĐIỂM QUAN TRỌNG NHẤT liên quan tính năng mới:** thay vì copy thẳng string `parts[1..4]`, PHẢI parse bằng `float()` rồi validate `math.isfinite()` cho cả 4 giá trị (và validate hợp lý: `0.0 <= xc <= 1.0`, `0.0 <= yc <= 1.0`, `w > 0`, `h > 0` — dùng ngưỡng khoan dung nhẹ nếu cần, VD cho phép sai số nhỏ ngoài [0,1] do làm tròn, nhưng loại bỏ rõ ràng NaN/Inf/âm/quá lớn bất thường); nếu không hợp lệ → `continue` bỏ qua dòng đó (không đưa vào `new_lines_norm`). Sau khi validate, format lại dòng bằng chính giá trị float đã parse (`f"{int(dst_cid)} {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}"`) thay vì copy string thô — vừa an toàn vừa chuẩn hoá định dạng.
+5. **`_batch_get_new_boxes_for_image` nhánh `source_mode == "model"` (dòng ~4094-4119):** thêm guard `iw > 0 and ih > 0` trước khi chia (tránh chia cho 0 nếu ảnh lỗi), và validate `math.isfinite()` cho `xc,yc,bw,bh` sau khi tính — nếu không hợp lệ thì bỏ qua box đó (không thêm vào `new_lines_norm`/`new_boxes_px`).
+
+**KHÔNG đổi UI, KHÔNG đổi luồng threading/review — chỉ thêm validation dữ liệu tại các điểm đọc/parse/tính toán số học.**
+
+**Agent chain (hotfix, P2):** `senior-developer` (fix khẩn, không quá 2h) → `tech-lead` (review nhanh) → `qa-engineer` (smoke test tối thiểu: verify file có box NaN cũ không crash khi mở, verify tính năng import folder không còn tạo box NaN mới từ nguồn lỗi).
+
+| # | Bước | Agent | Status | Artifact | Hoàn thành lúc | Ghi chú |
+|---|------|-------|--------|----------|-----------------|---------|
+| 7.1 | Fix 5 điểm trên trong `tab_bbox.py`. Test thủ công: tạo 1 file `.txt` có dòng "0 nan nan nan nan" → mở ảnh đó trong app → verify KHÔNG crash, box lỗi bị bỏ qua (không vẽ). Test `_batch_get_new_boxes_for_image` folder-mode với 1 file nguồn có dòng "9 nan 0.5 0.2 0.2" → verify dòng đó bị lọc bỏ, không lọt vào `new_lines_norm`. | senior-developer | ✅ | `tool/features/annotation/tab_bbox.py` (commit 3417d52) | 2026-07-08 22:36 | 12/12 test PASS. AST OK, Import OK. Ưu tiên P2 — crash bug đang chặn user dùng thật |
+| 7.2 | Review nhanh — xác nhận validate đúng vị trí, không bỏ sót box hợp lệ (false positive lọc nhầm box đúng), không phá logic OBB. | tech-lead | ✅ | **APPROVED (có sửa nhẹ)** commit 3417d52 + follow-up. Guard `isfinite` đúng vị trí (trước min/max poly4, trước append cả `_read_yolo`/`_read_yolo_ext`). Nới tolerance range check folder branch từ `[0.0, 1.0]` sang `[-0.001, 1.001]` (chống false positive từ rounding). AST + Import OK, 12/12 test edge case PASS. | 2026-07-08 22:40 | Sửa 1 điểm minor (tolerance) — commit riêng |
+| 7.3 | Smoke test tối thiểu: mở lại file label có box NaN (nếu user cung cấp được, hoặc tự tạo file test) → verify không crash; verify path chính (model detect + folder import bình thường, dữ liệu sạch) không bị ảnh hưởng bởi validation mới (không lọc nhầm box hợp lệ). | qa-engineer | ⬜ | Ghi log kết quả trong `docs/test-cases/TC-bbox-batch-add-class.md` (mục Hotfix) | - | Chạy thật, không mock |
 
 ## Handoff Log (BẮT BUỘC — xem CLAUDE.md §16.5 Bước 4)
 
@@ -270,6 +343,100 @@ Có 2 chế độ quét (chốt qua AskUserQuestion lần 2):
   - `.docx` + `.pdf` đều xuất thành công (lần này PDF OK, khác Phase 3 lỗi RPC).
 - **Bước sau cần biết:** KHÔNG CÓ — plan hoàn thành. QA sign-off PASS. Commit 970e598 sẵn sàng merge.
 
+### Bước 5.2 — Tech Lead review commit aefc75d (fast-track)
+
+- **Đã làm:** Review nhanh commit aefc75d (8+ / 3-). `git show` xem toàn bộ diff (11 dòng). Verify tại chỗ 3 điểm: (1) label "Class id nguồn (vd: 0 hoặc 0,2,5):" dòng 3823 ✅; (2) nhánh `mode=="folder"` dòng 4053 có `self._batch_status_lbl.config(text="", fg=DIM)` ✅; (3) nhánh `mode=="model"` dòng 4048 gọi `self._refresh_batch_class_combo()` ✅. Đọc thân `_refresh_batch_class_combo` dòng 3908-3933 — confirm dòng 3933 gọi `self._batch_set_ui_state(self._batch_state)` **KHÔNG có điều kiện** (nằm ngoài cả 2 nhánh if/else) → không edge case nút không được enable/disable đúng. AST parse OK, `import tool.features.annotation.tab_bbox` OK.
+- **File/module đã đọc hoặc đổi:**
+  - Đọc: `git show aefc75d`, `tool/features/annotation/tab_bbox.py` dòng 3900-3944 (`_refresh_batch_class_combo` + `_on_batch_src_class_change`), dòng 4035-4059 (`_on_batch_src_mode_change` sau fix).
+  - KHÔNG sửa code — không có vấn đề cần fix.
+- **Quyết định quan trọng:** APPROVED — không blocker, không request changes. Fix tối thiểu, đúng root cause, không đụng logic threading/file I/O.
+- **Bước sau cần biết:** Không có bước sau — Phase 5 hoàn thành. Commit aefc75d sẵn sàng merge/push. Phase 6 (collapsible + combobox) đã queue riêng — vẫn ⬜ chờ user trigger.
+
+### Bước 5.1 — Senior Developer fix stale status label + hint UI
+
+- **Đã làm:** Sửa 2 điểm nhỏ trong `tab_bbox.py`. (1) `_on_batch_src_mode_change` dòng 4040: nhánh `mode=="folder"` thêm `self._batch_status_lbl.config(text="", fg=DIM)` để xoá status cũ stale, nhánh `mode=="model"` thay `self._batch_set_ui_state(self._batch_state)` bằng `self._refresh_batch_class_combo()` (hàm này tự tính lại đúng cả status text lẫn enable/disable theo `_det_model_names` hiện tại, và gọi `_batch_set_ui_state` ở cuối). (2) Label "Class id nguồn:" dòng 3823 đổi thành "Class id nguồn (vd: 0 hoặc 0,2,5):" để rõ hỗ trợ nhiều giá trị. Verify bằng trace code + AST + import. Commit aefc75d.
+- **File/module đã đọc hoặc đổi:**
+  - Sửa: `tool/features/annotation/tab_bbox.py` dòng 3823 (label text), dòng 4040-4055 (`_on_batch_src_mode_change`).
+  - Đọc: dòng 3908-3933 (`_refresh_batch_class_combo` — confirm: set status text + call `_batch_set_ui_state` cuối, có guard `_batch_src_mode_var.get() == "model"` khi cập nhật status warning).
+- **Quyết định quan trọng:** Không gọi `_batch_set_ui_state` riêng cho nhánh "model" vì `_refresh_batch_class_combo` đã gọi nó ở cuối (dòng 3933). Nếu gọi thêm sẽ dư thừa nhưng không sai.
+- **Bước sau (Tech Lead review — bước 5.2) cần biết:**
+  - **Fix rất nhỏ** — chỉ 2 điểm: (1) thêm `_batch_status_lbl.config(text="", fg=DIM)` vào nhánh folder, (2) đổi gọi `_batch_set_ui_state` thành `_refresh_batch_class_combo` ở nhánh model, (3) đổi label text hint. Không đụng logic nghiệp vụ.
+  - **Verify 3 kịch bản trace đã PASS:** (a) ONNX→folder: status bị xoá + nút enable; (b) folder→model/ONNX: `_refresh_batch_class_combo` tính lại đúng cảnh báo + disable; (c) folder→model/YOLO-loaded: status trống + enable.
+  - **Không cần QA riêng** — fix chỉ ảnh hưởng display label (không đụng file I/O, threading, logic detect). Smoke test nhúng trong bước này là đủ.
+
+### Bước 6.1 — Collapsible panel + Combobox nhãn đích
+
+- **Đã làm:** (1) Thêm `self._batch_collapsed_var = IntVar(value=1)` + `_bind_cfg("bbox.batch.collapsed", ...)` vào `__init__` sau dòng 193. (2) Rewrite `_build_batch_add_class_ui`: LabelFrame không dùng `text=` tĩnh nữa, thêm `self._batch_toggle_btn = Button(lf, ...)` làm `labelwidget`, tạo `self._batch_body = Frame(lf, bg=CARD)`, toàn bộ 8 Frame con (row_a, row_b, _batch_src_model_frame, _batch_src_folder_frame, row_d, row_e, row_f, _batch_review_frame) đổi master từ `lf` → `self._batch_body`, cuối hàm gọi `_batch_apply_collapse_state()`. (3) Đổi `Entry(row_d)` → `self._batch_dst_combo = ttk.Combobox(row_d, ..., values=list(self.label_list))` (KHÔNG readonly). (4) Thêm 2 method mới: `_batch_toggle_collapse` + `_batch_apply_collapse_state`. (5) `_refresh_label_widgets`: thêm 2 dòng cập nhật `_batch_dst_combo["values"] = list(self.label_list)` với guard `hasattr`.
+- **File/module đã đọc hoặc đổi:**
+  - Sửa: `tool/features/annotation/tab_bbox.py` (50 dòng net +36/-14, 5 vị trí edit riêng biệt)
+  - Đọc: `tool/core/settings.py` dòng 31-45 (hiểu `_bind_cfg`: đọc từ `_CFG` lúc init + `trace_add("write", ...)` tự save khi var thay đổi — chỉ hỗ trợ Tk Var có `.get()`/`.set()`). `.claude/plans/PLAN-bbox-batch-add-class-2026-07-08.md` Phase 6 design.
+- **Quyết định quan trọng:**
+  - `_bind_cfg` chỉ hỗ trợ Tk Var có `.get()`/`.set()` → dùng `IntVar(value=1)` (1=thu gọn, 0=mở rộng) thay vì bool thuần — nhất quán với pattern `_det_replace_var` hiện có. `_bind_cfg` tự lưu qua trace mỗi khi `_batch_collapsed_var.set(...)` → `_batch_toggle_collapse` không cần gọi save thủ công.
+  - `_batch_review_frame` (Row G) là con của `self._batch_body`, KHÔNG phải `lf` → khi `_batch_set_ui_state` gọi `_batch_review_frame.pack(fill=X, ...)` / `pack_forget()`, frame này vẫn nằm bên trong `_batch_body` — bình thường, không ảnh hưởng logic. Khi collapsed (`_batch_body.pack_forget()`), toàn bộ review frame cũng ẩn theo.
+  - `self._batch_dst_combo` KHÔNG đặt `state="readonly"` — đây là yêu cầu cứng để user gõ được tên nhãn hoàn toàn mới. Logic `_batch_start` (dòng ~4260+) đọc `.get()` từ `self._batch_dst_label_var` (textvariable dùng chung với combo) → hoạt động y hệt Entry cũ.
+  - `_refresh_label_widgets` dùng `list(self.label_list)` (plain name) cho `_batch_dst_combo`, KHÔNG format `"idx: name"` — vì `_batch_start` so khớp `dst_label in self.label_list` (plain string).
+- **Bước sau (Tech Lead review — bước 6.2) cần biết:**
+  - **Diff tổng:** 50 dòng thêm mới, 14 dòng xóa — tập trung vào `_build_batch_add_class_ui` (8 chỗ đổi `Frame(lf)` → `Frame(self._batch_body)`) + 2 method mới + `_refresh_label_widgets` + `__init__`.
+  - **Điểm soi kỹ:** (1) `labelwidget` pattern: Button tạo AFTER `lf` tồn tại rồi `lf.configure(labelwidget=btn)` — an toàn, đã test Tkinter thật. (2) `_batch_review_frame` vẫn được `_batch_set_ui_state` pack/pack_forget đúng — parent đổi sang `_batch_body` không phá logic, verify grep `_batch_review_frame.pack`. (3) Combobox KHÔNG có `state="readonly"` — xác nhận không bị thêm nhầm. (4) `_refresh_label_widgets` guard `hasattr(self, "_batch_dst_combo")` — cần vì hàm có thể được gọi trước khi UI build xong (pattern giống `hasattr(self, "_rl_from_combo")`).
+  - **KHÔNG cần đọc lại logic batch** (threading, file I/O, model detect) — bước này CHỈ đổi 2 điểm UI, không đụng logic nghiệp vụ.
+  - **Commit hash bước 6.1:** `8a4dd7b`.
+
+### Bước 6.2 — Tech Lead review commit 8a4dd7b (Collapsible panel + Combobox)
+
+- **Đã làm:** Review nhanh commit 8a4dd7b (net +50/-14) theo 4 điểm Senior Dev đề nghị soi kỹ. Đọc `_build_batch_add_class_ui` dòng 3761-3915 sau khi sửa, grep `_batch_review_frame` (5 hit), grep `_batch_dst_combo` (4 hit), đọc `_refresh_label_widgets` dòng 3968-4004, đọc `_batch_set_ui_state` dòng 4255-4271. Verify AST parse + Import (`python -c "import tool.features.annotation.tab_bbox"`) đều OK.
+- **File/module đã đọc hoặc đổi:** Đọc: `git show 8a4dd7b`, `tool/features/annotation/tab_bbox.py` (3761-3930 build UI, 3968-4004 refresh label, 4255-4271 set UI state, 4485-4500 review frame pack/hide, 4355-4362 label append flow), `tool/core/constants.py` (F_BOLD, ACCENT2, CARD). KHÔNG SỬA code.
+- **Quyết định quan trọng:**
+  - **APPROVED** — commit 8a4dd7b sẵn sàng merge/push. Không có blocker, không request changes.
+  - (1) **labelwidget pattern OK:** thứ tự `LabelFrame(lf)` → `Button(lf, ...)` → `lf.configure(labelwidget=btn)` → `lf.pack(...)` — Tkinter cho phép reassign labelwidget sau khi frame tồn tại, không circular. Button dùng `master=lf` nên belong hierarchy đúng.
+  - (2) **`_batch_review_frame` OK dù đổi parent:** Frame nay là con của `_batch_body`. `pack(fill=X, pady=(2, 2))` tại dòng 4489 và `pack_forget()` tại 4497 đều dùng default parent (`_batch_body`) — pack manager không đổi. Khi panel collapsed, `_batch_body.pack_forget()` ẩn cả review UI đồng thời — behavior hợp lý vì các nút Quét (trigger review) cũng ẩn cùng lúc.
+  - (3) **Combobox editable — confirmed:** 4 reference `_batch_dst_combo` không nơi nào set `state=readonly/disabled`. Ttk Combobox mặc định `state="normal"` → gõ được. Textvariable `_batch_dst_label_var` dùng chung với logic cũ → `_batch_start` đọc `.get()` như Entry.
+  - (4) **`_refresh_label_widgets` guard OK:** dòng 4003 `if hasattr(self, "_batch_dst_combo")` — cùng pattern với `_rl_from_combo` (dòng 3983). Cần vì `__init__` có thể race condition với callback trace. Guard defensive, an toàn.
+  - **Toggle button visibility OK:** `font=F_BOLD` (Segoe UI Semibold 11pt), `fg=ACCENT2` (#4A3F8C) trên `bg=CARD` (#2a2a3e) — cùng visual weight với LabelFrame text cũ. Arrow ▶/▼ + `cursor="hand2"` là affordance rõ ràng cho user biết click được.
+- **Bước sau (Phase 7 — hotfix NaN) cần biết:**
+  - **Phase 6 hoàn thành, KHÔNG blocker.** Có thể tiếp tục Phase 7 (fix crash NaN tại `_draw_all_bboxes`) trên codebase hiện tại.
+  - **Không đụng gì tới logic threading/detect/file I/O** trong Phase 6 → Phase 7 code fix (validate NaN/Inf trong `_read_yolo`, `_batch_get_new_boxes_for_image`, `_draw_all_bboxes`) không có xung đột với UI thay đổi ở Phase 6.
+  - **Edge case UX (không phải bug):** khi collapsed=True và user start batch review qua button (nhưng không thể vì button ẩn cùng `_batch_body`) — cross-checked, không xảy ra được. Nếu tương lai muốn cho phép start batch từ ngoài (VD hotkey), phải auto-expand panel trước — không cần lo trong task này.
+  - **Commit hash bước 6.2:** không có (không sửa code — chỉ review + cập nhật plan).
+
+### Bước 7.1 — Senior Developer hotfix crash NaN
+
+- **Đã làm:** Fix 5 điểm validate NaN/Inf trong `tab_bbox.py`. Thêm `import math` đầu file. Sửa `_draw_all_bboxes` (guard isfinite sau unpack, continue + print WARN), `_read_yolo` (continue nếu NaN/Inf sau map float), `_read_yolo_ext` (tương tự), `_batch_get_new_boxes_for_image` folder branch (parse float + validate thay vì copy string), model branch (guard iw>0/ih>0 + validate xc/yc/bw/bh sau tính). 12/12 test scratchpad PASS. AST OK, Import OK. Commit 3417d52.
+- **File/module đã đọc hoặc đổi:**
+  - Sửa: `tool/features/annotation/tab_bbox.py` (6 vị trí: dòng 1-2 import, ~1116-1128 _read_yolo, ~1395-1406 _draw_all_bboxes, ~4023-4035 _read_yolo_ext, ~4140-4164 _batch_get_new_boxes_for_image model branch, ~4179-4192 folder branch)
+  - Đọc: dòng 1-10 (imports), 1106-1130 (_read_yolo), 1344-1465 (_draw_all_bboxes), 4013-4037 (_read_yolo_ext), 4121-4210 (_batch_get_new_boxes_for_image)
+- **Quyết định quan trọng:**
+  - Validate `math.isfinite()` là đủ — không cần range check ở `_read_yolo`/`_read_yolo_ext` (tọa độ pixel, có thể > 1.0 hợp lệ khi ảnh chưa normalize). Range check chỉ thêm vào folder source (normalized 0-1, sai ngoài range nghĩa là dữ liệu lỗi từ tool khác).
+  - Folder source: validate `0 <= cx <= 1.0`, `0 <= cy <= 1.0`, `bw > 0`, `bh > 0` — đây là format YOLO normalized hợp lệ; box hợp lệ thực tế sẽ KHÔNG bao giờ ra ngoài [0,1] từ exporter đúng chuẩn.
+  - Không thêm range check vào _draw_all_bboxes (tọa độ đã pixel — có thể nằm ngoài canvas khi ảnh zoom, là behavior hợp lệ).
+  - `_batch_get_new_boxes_for_image` model branch: thêm `if not new_lines_norm: return None` sau vòng lặp vì validate có thể filter hết mọi box.
+- **Bước sau (Tech Lead review — bước 7.2) cần biết:**
+  - **Điểm soi kỹ nhất:** (1) Validate range [0,1] trong folder branch — có lọc nhầm box HỢP LỆ không? Box YOLO chuẩn sẽ luôn có cx/cy/bw/bh ∈ (0,1], nhưng tool xuất kém cẩn thận có thể tạo cx=1.0001 do floating point rounding — với ngưỡng `<= 1.0` strict sẽ lọc nhầm. **Cân nhắc nới lỏng thành `<= 1.001`** nếu Tech Lead thấy nguy cơ false positive. (2) Nhánh `_draw_all_bboxes` — validate đúng vị trí: TRƯỚC `min(xs)`, tránh undefined behavior của min([nan,...]). (3) `_read_yolo`/`_read_yolo_ext` validate sau `map(float, ...)` trước `append` — logic sạch, không vòng ra ngoài try/except chung.
+  - **Không đổi OBB path:** poly4 (9-token) cũng có guard isfinite cho 8 pts — đúng.
+  - **Không đổi threading, không đổi UI, không đổi logic nghiệp vụ** — chỉ add 6 guard validation.
+  - **Commit 3417d52**: 34 insertions (+34/-3 = thêm 1 dòng import, thêm ~33 dòng validate, xóa 3 dòng cũ của model branch khi thêm early return).
+
+### Bước 7.2 — Tech Lead review hotfix NaN (commit 3417d52 + follow-up)
+
+- **Đã làm:** Review commit 3417d52 (34 insertions) theo 4 điểm Senior Dev đề nghị soi kỹ (range check tolerance, guard position poly4, validate position `_read_yolo`, test box sát biên hợp lệ). Đọc code thực tế tại các dòng đã sửa (`import math` dòng 1-2, `_read_yolo` 1108-1134, `_draw_all_bboxes` 1380-1406, `_read_yolo_ext` diff line 4032, folder branch diff 4199-4214, model branch diff 4152-4178). Chạy 12 test case validation edge cases → 12/12 PASS. Sửa 1 điểm minor: nới tolerance range check folder branch từ strict `[0.0, 1.0]` sang `[-0.001, 1.001]` để chống false positive từ exporter có floating-point rounding (VD `cx=1.0000001`). AST + Import OK sau khi sửa.
+- **File/module đã đọc hoặc đổi:**
+  - Đọc: `git show 3417d52` (toàn bộ diff), `tool/features/annotation/tab_bbox.py` (line 1108-1134 `_read_yolo`, line 1380-1406 `_draw_all_bboxes` poly4/5-token branch, line 4195-4224 folder branch).
+  - Sửa: `tool/features/annotation/tab_bbox.py` (1 chỗ: dòng 4208-4212 nới tolerance range check + comment giải thích).
+- **Quyết định quan trọng:**
+  - **APPROVED** commit 3417d52 sau sửa nhẹ tolerance. Không blocker.
+  - **Tolerance quyết định:** Cost of false positive (drop box hợp lệ do rounding, im lặng) > cost of false negative (accept box lệch 0.001, render lệch ~1px vô hại). Standard practice trong YOLO tools cũng dùng tolerance nhỏ.
+  - **NaN/Inf vẫn bị chặn** bởi `math.isfinite` — tolerance chỉ áp dụng cho range check.
+  - **Không đụng logic khác** — không đổi guard `isfinite` (đã đúng), không đổi model branch (đã có clamp `max/min` sẵn).
+- **Bước sau (QA Engineer — bước 7.3) cần biết:**
+  - **Fix hoàn tất Phase 7** — 2 điểm validation (guard isfinite + range tolerance). Sẵn sàng smoke test.
+  - **Test tối thiểu bắt buộc:**
+    1. **Reproduce crash cũ:** Tạo 1 file `.txt` bên cạnh 1 ảnh test, nội dung: `0 nan nan nan nan\n0 0.5 0.5 0.2 0.2\n` → mở app thật (`python app.py`), load thư mục chứa ảnh đó → mở ảnh → verify **KHÔNG crash** `ValueError: cannot convert float NaN to integer`, box hợp lệ thứ 2 vẫn được vẽ. Console có `[WARN] Bỏ qua box lỗi (NaN/Inf) tại index 0` (nếu file có box NaN được nạp vào `_bboxes`) hoặc không (nếu `_read_yolo` đã lọc trước).
+    2. **Box sát biên hợp lệ không bị lọc nhầm:** Tạo thư mục label nguồn có file chứa `0 0.999 0.001 0.002 0.002` → chọn nguồn "📁 Thư mục label", nhập class_id=0, Nhãn đích=<label mới>, Quét toàn bộ → verify box này ĐƯỢC append vào file đích của ảnh tương ứng (không bị lọc nhầm dù giá trị sát biên).
+    3. **Box lệch nhỏ do rounding không bị lọc:** File nguồn có `0 1.0000001 0.5 0.1 0.1` → verify vẫn được xử lý (nới tolerance đã fix).
+    4. **Box thực sự sai (out-of-range) BỊ lọc:** File nguồn có `0 1.5 0.5 0.1 0.1` → verify bị lọc bỏ (không xuất hiện trong file đích).
+    5. **Regression Phase 3-6:** Path chính (model detect + append) và các chế độ khác vẫn hoạt động bình thường với dữ liệu sạch — 1 kịch bản smoke đủ.
+  - **KHÔNG cần đọc lại code** — mọi điểm đã review kỹ. QA chỉ cần chạy 5 kịch bản trên qua GUI thật.
+  - **Commit hash bước 7.2 (Tech Lead fix nhẹ):** cập nhật khi commit — 1 dòng thay đổi.
+
 ### Bước 3.2 — QA Engineer smoke test code-level
 
 - **Đã làm:** Code-level smoke test (môi trường agent không có GUI Tkinter). Viết script Python import trực tiếp logic `_read_yolo_ext`, `_write_yolo_ext`, batch worker logic từ source. Chạy real YOLO detect với `yolo11n.pt` trên ảnh thật (`train_batch0.jpg`, có zebra class 22). Tổng 21 TC: 20 PASS, 1 SKIP (edge case GUI), 0 FAIL.
@@ -316,6 +483,12 @@ Không có
 | 2026-07-08 21:25 | Bước 4.2 hoàn thành — Audit + sửa bug `_batch_show_review` signature mismatch (existing param thừa), 20 test thủ công PASS, AST+Import OK. Commit 970e598 (chưa push). Sẵn sàng Tech Lead review bước 4.3. | senior-developer |
 | 2026-07-08 21:30 | Bước 4.3 hoàn thành — Tech Lead review commit 970e598 APPROVED. Verify lại bug đã sửa (`_batch_show_review(fp, new_boxes)` khớp caller `root.after(0, ..., fp, new_boxes_px)`). Grep 6 method mới + 4 biến state mới: mọi call site khớp definition. `_read_yolo_ext`/`_write_yolo_ext` cũ KHÔNG còn được gọi bởi worker. Default path (model+append) IDENTICAL Phase 3. Text-level `_batch_write_new_lines` an toàn OBB 9-token. `_batch_start` validate đầy đủ theo `source_mode`. Layout Row A/B/C/D/E/F/G không phá cũ. Không sửa gì thêm. Sẵn sàng QA bước 4.4. | tech-lead |
 | 2026-07-08 21:41 | Bước 4.4 hoàn thành — QA smoke test amendment (24 TC). Tk kha dung. 24 PASS / 0 FAIL / 0 SKIP. 0 bug moi. QA PASS — commit 970e598 du dieu kien merge. Commit 0c57bed. Plan status: completed. | qa-engineer |
+| 2026-07-08 22:12 | Bước 5.1 hoàn thành — Fix stale status label khi đổi nguồn nhãn + hint UI class id nhiều giá trị. AST OK, Import OK. 3/3 kịch bản trace PASS. Commit aefc75d (chưa push). Sẵn sàng Tech Lead review bước 5.2. | senior-developer |
+| 2026-07-08 22:16 | Bước 5.2 hoàn thành — Tech Lead review APPROVED commit aefc75d. Diff sạch (11 dòng, +8/-3): label hint + 2 nhánh mode change đúng theo TDD fix. Verify `_refresh_batch_class_combo` dòng 3933 gọi `_batch_set_ui_state` không điều kiện → không có edge case. AST + Import OK. Không sửa thêm code. Phase 5 hoàn thành, sẵn sàng merge/push. | tech-lead |
+| 2026-07-08 22:23 | Bước 6.1 hoàn thành — Collapsible panel + Combobox nhan dich. LabelFrame dung labelwidget=Button (toggle), toan bo Row A-G chuyen vao self._batch_body. IntVar+_bind_cfg persist. Entry doi thanh ttk.Combobox editable. _refresh_label_widgets cap nhat values. AST OK, Import OK, 7/7 Tk test PASS. Commit 8a4dd7b. San sang Tech Lead review buoc 6.2. | senior-developer |
+| 2026-07-08 22:36 | Bước 7.1 hoàn thành — Hotfix crash NaN/Inf. Fix 5 diem: import math, _draw_all_bboxes guard, _read_yolo validate, _read_yolo_ext validate, _batch_get_new_boxes_for_image (folder parse+validate, model guard iw/ih+validate). 12/12 test PASS. AST OK. Commit 3417d52. San sang Tech Lead review buoc 7.2. | senior-developer |
+| 2026-07-08 22:28 | Bước 6.2 hoàn thành — Tech Lead review APPROVED commit 8a4dd7b. Verify 4 điểm: (1) labelwidget pattern đúng thứ tự (lf tạo trước → Button master=lf → lf.configure(labelwidget=btn) → lf.pack), (2) `_batch_review_frame` đổi parent sang `_batch_body` — grep 2 nơi pack/pack_forget đều dùng default parent nên vẫn đúng, hành vi khi collapsed=ẩn cả review UI là expected (buttons quét cũng ẩn theo), (3) `_batch_dst_combo` chỉ có 4 reference, không nơi nào set `state=readonly/disabled`, mặc định editable, (4) `_refresh_label_widgets` có guard `hasattr` giống pattern `_rl_from_combo`. Toggle button hiển thị đủ affordance (F_BOLD, arrow ▶/▼, hand2). AST + Import OK. Không sửa thêm code. Phase 6 sẵn sàng, chuyển Phase 7 (hotfix NaN). | tech-lead |
+| 2026-07-08 22:40 | Bước 7.2 hoàn thành — Tech Lead review APPROVED commit 3417d52 + 1 follow-up sửa nhẹ. Verify: (1) `_draw_all_bboxes` guard isfinite đúng vị trí trước `min(xs)/max(ys)` (poly4) và trước tính toán width/height (5-token) — an toàn khỏi silent bug của `min([nan,...])`; (2) `_read_yolo`/`_read_yolo_ext` validate sau `map(float,...)` trước `append` — dòng lỗi được `continue` sạch, không rác vào bboxes; (3) folder branch nới tolerance range `[0.0,1.0]` → `[-0.001,1.001]` để chống false positive từ exporter có floating-point rounding — NaN/Inf vẫn bị chặn bởi isfinite. 12/12 test edge case PASS (bao gồm test box sát biên `cx=0.999,cy=0.001,w=0.002,h=0.002` không bị lọc). AST + Import OK. Sẵn sàng QA bước 7.3. | tech-lead |
 
 ---
 **Status icons:** ⬜ Todo | 🔄 In Progress | ✅ Done | 🛑 Blocked | ⏭️ Skipped

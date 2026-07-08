@@ -4205,11 +4205,15 @@ class BBoxEditorTab(Frame):
                             bw = float(parts[3]); bh = float(parts[4])
                         except ValueError:
                             continue
+                        # Range check với tolerance 0.001 — tránh false positive
+                        # từ exporter có floating-point rounding (VD cx=1.0000001).
+                        # NaN/Inf vẫn bị chặn bởi isfinite; box lệch <=0.001 vô hại
+                        # (render lệch ~1px, downstream tự clamp nếu cần).
                         if not (math.isfinite(cx) and math.isfinite(cy) and
                                 math.isfinite(bw) and math.isfinite(bh) and
-                                0.0 <= cx <= 1.0 and 0.0 <= cy <= 1.0 and
+                                -0.001 <= cx <= 1.001 and -0.001 <= cy <= 1.001 and
                                 bw > 0 and bh > 0):
-                            continue  # loại bỏ NaN/Inf/âm/ngoài dải hợp lệ
+                            continue  # loại bỏ NaN/Inf/âm rõ ràng/ngoài dải bất thường
                         new_lines_norm.append(
                             f"{int(dst_cid)} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
             except Exception:
