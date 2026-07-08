@@ -149,7 +149,7 @@ Có 2 chế độ quét (chốt qua AskUserQuestion lần 2):
 | # | Bước | Agent | Status | Artifact | Hoàn thành lúc | Ghi chú |
 |---|------|-------|--------|----------|-----------------|---------|
 | 7.1 | Fix 5 điểm trên trong `tab_bbox.py`. Test thủ công: tạo 1 file `.txt` có dòng "0 nan nan nan nan" → mở ảnh đó trong app → verify KHÔNG crash, box lỗi bị bỏ qua (không vẽ). Test `_batch_get_new_boxes_for_image` folder-mode với 1 file nguồn có dòng "9 nan 0.5 0.2 0.2" → verify dòng đó bị lọc bỏ, không lọt vào `new_lines_norm`. | senior-developer | ✅ | `tool/features/annotation/tab_bbox.py` (commit 3417d52) | 2026-07-08 22:36 | 12/12 test PASS. AST OK, Import OK. Ưu tiên P2 — crash bug đang chặn user dùng thật |
-| 7.2 | Review nhanh — xác nhận validate đúng vị trí, không bỏ sót box hợp lệ (false positive lọc nhầm box đúng), không phá logic OBB. | tech-lead | ✅ | **APPROVED (có sửa nhẹ)** commit 3417d52 + follow-up. Guard `isfinite` đúng vị trí (trước min/max poly4, trước append cả `_read_yolo`/`_read_yolo_ext`). Nới tolerance range check folder branch từ `[0.0, 1.0]` sang `[-0.001, 1.001]` (chống false positive từ rounding). AST + Import OK, 12/12 test edge case PASS. | 2026-07-08 22:40 | Sửa 1 điểm minor (tolerance) — commit riêng |
+| 7.2 | Review nhanh — xác nhận validate đúng vị trí, không bỏ sót box hợp lệ (false positive lọc nhầm box đúng), không phá logic OBB. | tech-lead | ✅ | **APPROVED (có sửa nhẹ)** commit 3417d52 + follow-up commit aa74f48. Guard `isfinite` đúng vị trí (trước min/max poly4, trước append cả `_read_yolo`/`_read_yolo_ext`). Nới tolerance range check folder branch từ `[0.0, 1.0]` sang `[-0.001, 1.001]` (chống false positive từ rounding). AST + Import OK, 12/12 test edge case PASS. | 2026-07-08 22:40 | Sửa 1 điểm minor (tolerance) — commit riêng aa74f48 |
 | 7.3 | Smoke test tối thiểu: mở lại file label có box NaN (nếu user cung cấp được, hoặc tự tạo file test) → verify không crash; verify path chính (model detect + folder import bình thường, dữ liệu sạch) không bị ảnh hưởng bởi validation mới (không lọc nhầm box hợp lệ). | qa-engineer | ⬜ | Ghi log kết quả trong `docs/test-cases/TC-bbox-batch-add-class.md` (mục Hotfix) | - | Chạy thật, không mock |
 
 ## Handoff Log (BẮT BUỘC — xem CLAUDE.md §16.5 Bước 4)
@@ -435,7 +435,7 @@ Có 2 chế độ quét (chốt qua AskUserQuestion lần 2):
     4. **Box thực sự sai (out-of-range) BỊ lọc:** File nguồn có `0 1.5 0.5 0.1 0.1` → verify bị lọc bỏ (không xuất hiện trong file đích).
     5. **Regression Phase 3-6:** Path chính (model detect + append) và các chế độ khác vẫn hoạt động bình thường với dữ liệu sạch — 1 kịch bản smoke đủ.
   - **KHÔNG cần đọc lại code** — mọi điểm đã review kỹ. QA chỉ cần chạy 5 kịch bản trên qua GUI thật.
-  - **Commit hash bước 7.2 (Tech Lead fix nhẹ):** cập nhật khi commit — 1 dòng thay đổi.
+  - **Commit hash bước 7.2 (Tech Lead fix nhẹ):** `aa74f48` — 4 dòng thay đổi (comment + tolerance).
 
 ### Bước 3.2 — QA Engineer smoke test code-level
 
