@@ -3820,7 +3820,7 @@ class BBoxEditorTab(Frame):
                activebackground=ACCENT, activeforeground="white",
                font=F_MAIN, relief="flat", padx=6, cursor="hand2").pack(side=LEFT,
                                                                          padx=(0, 8))
-        Label(self._batch_src_folder_frame, text="Class id nguồn:",
+        Label(self._batch_src_folder_frame, text="Class id nguồn (vd: 0 hoặc 0,2,5):",
               bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
         Entry(self._batch_src_folder_frame,
               textvariable=self._batch_src_class_ids_var,
@@ -4043,11 +4043,16 @@ class BBoxEditorTab(Frame):
         if mode == "model":
             self._batch_src_folder_frame.pack_forget()
             self._batch_src_model_frame.pack(fill=X, pady=(0, 2))
+            # Tính lại status text (có thể cần hiện cảnh báo ONNX/chưa load)
+            # _refresh_batch_class_combo đã gọi _batch_set_ui_state ở cuối
+            self._refresh_batch_class_combo()
         else:  # "folder"
             self._batch_src_model_frame.pack_forget()
             self._batch_src_folder_frame.pack(fill=X, pady=(0, 2))
-        # Cập nhật trạng thái nút quét (folder mode luôn enable)
-        self._batch_set_ui_state(self._batch_state)
+            # Xoá status cũ còn sót từ khi source_mode là "model"
+            self._batch_status_lbl.config(text="", fg=DIM)
+            # Cập nhật trạng thái nút quét (folder mode luôn enable)
+            self._batch_set_ui_state(self._batch_state)
 
     def _batch_browse_src_label_dir(self):
         """Mở dialog chọn thư mục label nguồn (folder source mode)."""
