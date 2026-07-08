@@ -312,4 +312,242 @@ Fix đề xuất: Trong `_load_image`, thêm:
 - Bug P3 duy nhất (preview coords) đã được Tech Lead acknowledge và chấp nhận cho v1.
 - Core logic (IO, filter, append, guard) đều verified bằng code thật với YOLO model thật.
 
+---
+
+## Amendment (Phase 4) — commit 970e598
+
+### Môi trường test Amendment
+
+- **Build:** commit 970e598 (reviewed + approved bước 4.3)
+- **Ngày test:** 2026-07-08
+- **Tk khả dụng:** Có — `tkinter.Tk()` thành công (Windows 11 headless draw mode)
+- **Phương án test:** Code-level hybrid — method trực tiếp (không cần full instance) + Tk StringVar/Label thật + real YOLO detect (yolo11n.pt)
+- **Test data tạm:** Scratchpad (img_a/b/c.jpg 640x480, lbl_dst/, lbl_src/) — đã xóa sau sign-off
+
+---
+
+### Group AME-A: Model detect + Append (Regression)
+
+#### TC-AME-A1: Real YOLO detect + Append — OBB 9-token preserved
+
+| | |
+|---|---|
+| **Given** | `train_batch0.jpg` (1280x1280), existing labels: 5-token cid=3 + OBB 9-token cid=2. Model `yolo11n.pt`, filter class 22 (zebra), dst_cid=0 |
+| **When** | `run_model_predict` → format new_lines_norm → `_batch_write_new_lines(..., replace_mode=False)` → read back |
+| **Then** | total=8 lines (2 old + 6 new zebra); box[0] len=5 cid=3 (5-tok old intact); box[1] len=9 cid=2 (OBB old intact); box[2..7] cid=0 (new appended) |
+| **Result** | **PASS** |
+| **Note** | 6 zebra detected. Default path (model+append) IDENTICAL Phase 3 — regression confirmed. |
+
+---
+
+### Group AME-B: _batch_write_new_lines (Replace mode)
+
+#### TC-AME-B1: Append to non-existent file creates new file
+
+| | |
+|---|---|
+| **Given** | `lbl_path` không tồn tại |
+| **When** | `_batch_write_new_lines(lbl_path, new_lines, dst_cid=5, replace_mode=False)` |
+| **Then** | File được tạo mới với 2 dòng cid=5 |
+| **Result** | **PASS** |
+
+#### TC-AME-B2: Replace mode — xóa dst_cid, giữ OBB + cid khác, append mới
+
+| | |
+|---|---|
+| **Given** | File có: 5-token cid=3, OBB 9-token cid=1, 5-token cid=5. `dst_cid=3`, `replace_mode=True` |
+| **When** | `_batch_write_new_lines` với new_lines=["3 0.55 0.55 0.15 0.15"] |
+| **Then** | cids=[1, 5, 3]. Dòng cid=3 cũ bị xóa, OBB 9-token cid=1 giữ nguyên (9 token), cid=5 giữ, cid=3 mới được append |
+| **Result** | **PASS** |
+| **Note** | `obb_tokens=9` — OBB không bị convert. Key test case cho replace mode. |
+
+#### TC-AME-B3: Replace mode khi dst_cid không có trong existing → chỉ append
+
+| | |
+|---|---|
+| **Given** | File có OBB cid=1 + cid=5. `dst_cid=3` (vắng mặt), `replace_mode=True` |
+| **When** | `_batch_write_new_lines` với new_lines=["3 0.5 0.5 0.1 0.1"] |
+| **Then** | cids=[1, 5, 3] — không có dòng nào bị xóa, cid=3 mới được append |
+| **Result** | **PASS** |
+
+#### TC-AME-B4: Append mode OBB 9-token preserved (regression)
+
+| | |
+|---|---|
+| **Given** | File có 5-token cid=3 + OBB 9-token cid=1. `replace_mode=False` |
+| **When** | Append new_lines=["5 0.6 0.6 0.1 0.1"] |
+| **Then** | cids=[3, 1, 5], `obb_tokens=9` — OBB không bị phá |
+| **Result** | **PASS** |
+
+#### TC-AME-B5: Non-existent path với sub-directory → mkdir parents
+
+| | |
+|---|---|
+| **Given** | `lbl_path = scratchpad/nonexistent_subdir/test_new.txt` (thư mục chưa tồn tại) |
+| **When** | `_batch_write_new_lines(lbl_path, ...)` |
+| **Then** | Thư mục tự động tạo, file được ghi thành công |
+| **Result** | **PASS** |
+
+---
+
+### Group AME-C: _batch_get_new_boxes_for_image (Folder source mode)
+
+#### TC-AME-C1: folder+auto img_a — filter cid={0,2} → dst_cid=9
+
+| | |
+|---|---|
+| **Given** | Source file `img_a.txt` có: cid=0 (0.5 0.5 0.2 0.2), cid=2 (0.3 0.3 0.15 0.15), cid=7 (should be filtered). `src_ids={0,2}`, `dst_cid=9`, `need_preview_px=False` |
+| **When** | `_batch_get_new_boxes_for_image(IMG_A, src_ids={0,2}, dst_cid=9, source_mode="folder", ...)` |
+| **Then** | `(new_lines_norm=2, new_boxes_px=[], iw=0, ih=0)`. new_lines = ['9 0.5 0.5 0.2 0.2', '9 0.3 0.3 0.15 0.15']. cid=7 bị lọc. |
+| **Result** | **PASS** |
+| **Note** | Không mở PIL, không cần model khi auto+folder |
+
+#### TC-AME-C2: img_c không có file nguồn → return None (skip im lặng)
+
+| | |
+|---|---|
+| **Given** | `SRC_LABEL_DIR/img_c.txt` không tồn tại |
+| **When** | `_batch_get_new_boxes_for_image(IMG_C, ..., source_mode="folder")` |
+| **Then** | `return None` — không raise exception |
+| **Result** | **PASS** |
+
+#### TC-AME-C3: folder+auto img_b — filter cid={0} → dst_cid=5
+
+| | |
+|---|---|
+| **Given** | Source `img_b.txt` có cid=0 only |
+| **When** | `src_ids={0}, dst_cid=5, need_preview_px=False` |
+| **Then** | `new_lines=['5 0.2 0.8 0.1 0.1']` (1 dòng) |
+| **Result** | **PASS** |
+
+#### TC-AME-C4: folder+review need_preview_px=True → mở PIL lấy size, tính pixel coords
+
+| | |
+|---|---|
+| **Given** | `IMG_A` (640x480 PIL). Source `img_a.txt` có 2 dòng cid={0,2}. `need_preview_px=True` |
+| **When** | `_batch_get_new_boxes_for_image(IMG_A, ..., need_preview_px=True)` |
+| **Then** | `new_lines=2, new_boxes_px=2, iw=640, ih=480`. Coords được convert normalized→pixel. |
+| **Result** | **PASS** |
+| **Note** | Review mode mở PIL chỉ để lấy size. Không cần model. |
+
+---
+
+### Group AME-D: Folder source + Replace mode (end-to-end)
+
+#### TC-AME-D1: folder source + replace mode combined
+
+| | |
+|---|---|
+| **Given** | Dest file có: cid=9 (sẽ bị xóa), OBB cid=1 (giữ), cid=3 (giữ). Source `img_a.txt` cid={0} → dst_cid=9 |
+| **When** | `_batch_get_new_boxes_for_image` folder+auto → `_batch_write_new_lines(..., replace_mode=True)` |
+| **Then** | cids=[1, 3, 9] — old cid=9 xóa, OBB cid=1 + cid=3 giữ, new cid=9 append |
+| **Result** | **PASS** |
+
+---
+
+### Group AME-E: _batch_parse_src_ids (nhiều class_id nguồn)
+
+| Input | Expected | Result | Note |
+|---|---|---|---|
+| `"0"` | `{0}`, err='' | **PASS** | Single id |
+| `"0,2,5"` | `{0,2,5}`, err='' | **PASS** | Comma-separated |
+| `"0; 2; 5"` | `{0,2,5}`, err='' | **PASS** | Semicolon+space |
+| `"0 2 5"` | set(), err≠'' | **PASS** | Space-only không được hỗ trợ → treat as 1 token "0 2 5" → int() fail → error msg |
+| `"abc"` | set(), err≠'' | **PASS** | Non-numeric → error |
+| `""` | set(), err≠'' | **PASS** | Empty → error msg |
+| `"0,,2"` | `{0,2}`, err='' | **PASS** | Double-comma → skip empty token → OK |
+
+**Hành vi `"0 2 5"` (documented):** Token duy nhất "0 2 5" → `int("0 2 5")` fail → error message `"Class id không hợp lệ: '0 2 5' (phải là số nguyên)."` — chỉ dấu phẩy/chấm phẩy được hỗ trợ.
+
+---
+
+### Group AME-F: _batch_refresh_model_display (Model picker mới)
+
+#### TC-AME-F1: Hàm được định nghĩa đúng
+
+| | |
+|---|---|
+| **Given** | `tab_bbox.py` commit 970e598 |
+| **When** | `ast.parse` + check FunctionDef names |
+| **Then** | `_batch_refresh_model_display` tồn tại tại line 4029 |
+| **Result** | **PASS** |
+
+#### TC-AME-F2: Được gọi trong `_on_det_model_loaded`
+
+| | |
+|---|---|
+| **When** | grep body của `_on_det_model_loaded` |
+| **Then** | `self._batch_refresh_model_display()` có mặt tại line 3328 |
+| **Result** | **PASS** |
+
+#### TC-AME-F3: Được gọi trong `_build_batch_add_class_ui`
+
+| | |
+|---|---|
+| **When** | grep body của `_build_batch_add_class_ui` |
+| **Then** | `self._batch_refresh_model_display()` có mặt tại line 3899 |
+| **Result** | **PASS** |
+
+#### TC-AME-F4: Hiển thị đúng basename của model path
+
+| | |
+|---|---|
+| **Given** | `_det_model_path.get()` = `"d:/Tool/yolo11n.pt"`. Tk Label thật. |
+| **When** | `_batch_refresh_model_display(fsd)` |
+| **Then** | Label text = `"yolo11n.pt"` (basename) |
+| **Result** | **PASS** |
+
+#### TC-AME-F4b: Path rỗng → hiển thị "(chưa load)"
+
+| | |
+|---|---|
+| **Given** | `_det_model_path.get()` = `""` |
+| **When** | `_batch_refresh_model_display(fsd)` |
+| **Then** | Label text = `"(chưa load)"` |
+| **Result** | **PASS** |
+
+---
+
+### Group AME-EDGE: Edge cases Amendment
+
+#### TC-AME-EDGE1: _batch_set_ui_state idle — folder mode enables run buttons (code review)
+
+| | |
+|---|---|
+| **Given** | `source_mode = "folder"`, model chưa load (`_det_model_names = {}`) |
+| **When** | grep logic nhánh idle trong `_batch_set_ui_state` |
+| **Then** | `can_run = (src_mode == "folder") or bool(self._det_model_names)` — folder mode luôn enable |
+| **Result** | **PASS** |
+
+---
+
+## Kết luận QA Amendment
+
+| Hạng mục | Kết quả |
+|---|---|
+| Tổng test case (Amendment Phase 4) | 24 |
+| PASS | 24 |
+| SKIP | 0 |
+| FAIL | 0 |
+| Bug mới tìm thấy | 0 |
+| **Sign-off Amendment** | **QA PASS — commit 970e598 đủ điều kiện merge** |
+
+### Phạm vi test được (Amendment):
+
+- `_batch_write_new_lines`: append + replace mode, OBB 9-token preserved, non-existent file creation: PASS
+- `_batch_get_new_boxes_for_image`: folder+auto (không mở ảnh), folder+review (mở PIL lấy size), no-source-file skip: PASS
+- `_batch_parse_src_ids`: 7 edge cases (single, comma, semicolon, space-only, alpha, empty, double-comma): PASS
+- `_batch_refresh_model_display`: defined + called at 2 correct locations + Tk Label behavior: PASS
+- `_batch_set_ui_state` idle folder logic: PASS (code review)
+- Model detect + append regression: 6 zebra boxes detected, old labels preserved: PASS
+
+### Phạm vi KHÔNG test được (cần GUI thật):
+
+- Radio nguồn nhãn toggle UI (ẩn/hiện 2 frame) — code verified nhưng chưa render thật
+- Chế độ Review ("Quét lần lượt") với folder source + preview overlay cam
+- Nút "📂 Đổi model" trong khung Batch — gọi `_browse_det_model` dialog thật
+- Persistence 4 biến mới qua `_bind_cfg`
+
+> Các mục này cần verify thủ công bởi developer hoặc QA có GUI access trước khi release production.
+
 **QA Engineer sign-off: APPROVED cho merge vào main.**
