@@ -1,8 +1,8 @@
 ---
 task: bbox-batch-add-class
 created: 2026-07-08
-updated: 2026-07-08 21:30
-status: in-progress
+updated: 2026-07-08 21:41
+status: completed
 workflow: WF-FEATURE (rút gọn — PM/BA/UX đã hoàn thành qua AskUserQuestion)
 priority: P2
 ---
@@ -77,7 +77,7 @@ Có 2 chế độ quét (chốt qua AskUserQuestion lần 2):
 | 4.1 | Cập nhật TDD: thiết kế UI model-picker-trong-khung, radio nguồn nhãn (model/thư mục), ô nhập nhiều class_id, radio chế độ ghi (append/thay thế), refactor luồng lấy-box-mới thành 1 hàm trừu tượng dùng chung cho worker (model source vs folder source), vị trí đặt logic xoá-trước-khi-ghi. | tech-lead | ✅ | `docs/tech-design/TDD-batch-add-class.md` (mục 8 Amendment, +.docx ✓, .pdf ⚠️ RPC) | 2026-07-08 20:57 | Commit 3fa7f93. Chốt (a)-(g) + tên 7 biến + 6 method mới + 5 method sửa. Text-level write bảo toàn OBB 9-token |
 | 4.2 | Code amendment vào `tab_bbox.py` theo TDD cập nhật. | senior-developer | ✅ | `tool/features/annotation/tab_bbox.py` (commit 970e598) | 2026-07-08 21:25 | KHÔNG phá hành vi mặc định (Append + Model detect) đã QA pass ở Phase 3 |
 | 4.3 | Review code amendment — đặc biệt: logic xoá-trước-khi-ghi (Thay thế) không xoá nhầm nhãn khác, đọc nhiều class_id nguồn đúng, chế độ Thư mục label không cần load ảnh vẫn hoạt động đúng cho preview (review mode vẫn cần mở ảnh để vẽ canvas, nhưng KHÔNG cần model). | tech-lead | ✅ | **APPROVED** — commit 970e598 sẵn sàng QA. Không phát hiện bug thêm ngoài bug signature `_batch_show_review` mà Senior Dev đã sửa. AST + Import OK. | 2026-07-08 21:30 | Không cần vòng lại Senior Dev |
-| 4.4 | Smoke test lại: (a) chế độ Model detect + Append vẫn hoạt động như Phase 3 (regression), (b) chế độ Model detect + Thay thế xoá đúng nhãn cũ, (c) chế độ Thư mục label + Append, (d) chế độ Thư mục label + Thay thế, (e) nhập nhiều class_id nguồn (vd "0,2"), (f) model-picker mới trong khung Batch hoạt động đúng, đồng bộ với ô Model phía trên. | qa-engineer | ⬜ | `docs/test-cases/TC-bbox-batch-add-class.md` (cập nhật, thêm mục Amendment) | - | Chạy thật — KHÔNG mock |
+| 4.4 | Smoke test lại: (a) chế độ Model detect + Append vẫn hoạt động như Phase 3 (regression), (b) chế độ Model detect + Thay thế xoá đúng nhãn cũ, (c) chế độ Thư mục label + Append, (d) chế độ Thư mục label + Thay thế, (e) nhập nhiều class_id nguồn (vd "0,2"), (f) model-picker mới trong khung Batch hoạt động đúng, đồng bộ với ô Model phía trên. | qa-engineer | ✅ | `docs/test-cases/TC-bbox-batch-add-class.md` (cập nhật +mục Amendment, .docx ✅, .pdf ✅). Commit 0c57bed | 2026-07-08 21:41 | 24 PASS / 0 FAIL / 0 SKIP. Tk kha dung. QA PASS. |
 
 ## Handoff Log (BẮT BUỘC — xem CLAUDE.md §16.5 Bước 4)
 
@@ -256,6 +256,20 @@ Có 2 chế độ quét (chốt qua AskUserQuestion lần 2):
   - **Artifact bắt buộc bước 4.4:** cập nhật `docs/test-cases/TC-bbox-batch-add-class.md` (thêm mục Amendment, 6 kịch bản mới), gộp DOCX/PDF.
   - **Commit hash bước 4.3:** cập nhật riêng — Tech Lead approve KHÔNG sửa code.
 
+### Bước 4.4 — QA smoke test amendment
+
+- **Đã làm:** Chạy smoke test amendment (Bước 4.4). Tk khả dụng (Windows headless draw). Import `BBoxEditorTab` thành công. 24 test case — 24 PASS, 0 FAIL, 0 SKIP. Thêm mục "## Amendment (Phase 4)" vào cuối `TC-bbox-batch-add-class.md`. Xuất `.docx` (✅) + `.pdf` (✅). Commit `0c57bed`. Scratchpad dọn sạch.
+- **File/module đã đọc hoặc đổi:**
+  - Đọc: `tool/features/annotation/tab_bbox.py` (line 4029-4231 — 6 method amendment mới + `_batch_set_ui_state`), `docs/test-cases/TC-bbox-batch-add-class.md` (Phase 3 content)
+  - Sửa: `docs/test-cases/TC-bbox-batch-add-class.md` (thêm mục Amendment)
+  - Tạo: `docs/test-cases/TC-bbox-batch-add-class.pdf` (mới)
+  - Tạo tạm (đã xóa): `scratchpad/qa_amend/` (test data + smoke script)
+- **Quyết định quan trọng:**
+  - Tất cả 6 kịch bản + edge cases PASS. Không có bug mới ngoài P3 đã biết từ Phase 3 (preview coords — non-blocker).
+  - `"0 2 5"` (space-only) trả error message đúng — documented behavior, không phải bug.
+  - `.docx` + `.pdf` đều xuất thành công (lần này PDF OK, khác Phase 3 lỗi RPC).
+- **Bước sau cần biết:** KHÔNG CÓ — plan hoàn thành. QA sign-off PASS. Commit 970e598 sẵn sàng merge.
+
 ### Bước 3.2 — QA Engineer smoke test code-level
 
 - **Đã làm:** Code-level smoke test (môi trường agent không có GUI Tkinter). Viết script Python import trực tiếp logic `_read_yolo_ext`, `_write_yolo_ext`, batch worker logic từ source. Chạy real YOLO detect với `yolo11n.pt` trên ảnh thật (`train_batch0.jpg`, có zebra class 22). Tổng 21 TC: 20 PASS, 1 SKIP (edge case GUI), 0 FAIL.
@@ -301,6 +315,7 @@ Không có
 | 2026-07-08 20:57 | Bước 4.1 hoàn thành — TDD Amendment (mục 8, +475 dòng) chốt 7 quyết định (a)-(g) + tên 7 biến/6 method mới + task breakdown 4.2 (~4h). Text-level write bảo toàn OBB 9-token 100%. Default path (model+append) IDENTICAL bit-by-bit với bản gốc. Commit 3fa7f93 (chưa push). DOCX ✓, PDF ⚠️ RPC (non-blocker). Sẵn sàng chuyển Senior Dev bước 4.2. | tech-lead |
 | 2026-07-08 21:25 | Bước 4.2 hoàn thành — Audit + sửa bug `_batch_show_review` signature mismatch (existing param thừa), 20 test thủ công PASS, AST+Import OK. Commit 970e598 (chưa push). Sẵn sàng Tech Lead review bước 4.3. | senior-developer |
 | 2026-07-08 21:30 | Bước 4.3 hoàn thành — Tech Lead review commit 970e598 APPROVED. Verify lại bug đã sửa (`_batch_show_review(fp, new_boxes)` khớp caller `root.after(0, ..., fp, new_boxes_px)`). Grep 6 method mới + 4 biến state mới: mọi call site khớp definition. `_read_yolo_ext`/`_write_yolo_ext` cũ KHÔNG còn được gọi bởi worker. Default path (model+append) IDENTICAL Phase 3. Text-level `_batch_write_new_lines` an toàn OBB 9-token. `_batch_start` validate đầy đủ theo `source_mode`. Layout Row A/B/C/D/E/F/G không phá cũ. Không sửa gì thêm. Sẵn sàng QA bước 4.4. | tech-lead |
+| 2026-07-08 21:41 | Bước 4.4 hoàn thành — QA smoke test amendment (24 TC). Tk kha dung. 24 PASS / 0 FAIL / 0 SKIP. 0 bug moi. QA PASS — commit 970e598 du dieu kien merge. Commit 0c57bed. Plan status: completed. | qa-engineer |
 
 ---
 **Status icons:** ⬜ Todo | 🔄 In Progress | ✅ Done | 🛑 Blocked | ⏭️ Skipped
