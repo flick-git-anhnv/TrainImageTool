@@ -1,4 +1,5 @@
-﻿import os
+﻿import math
+import os
 from pathlib import Path
 from tkinter import *
 from tkinter import messagebox, ttk
@@ -1113,12 +1114,16 @@ class BBoxEditorTab(Frame):
                     if len(p) == 5:
                         cid = int(p[0])
                         xc, yc, w, h = map(float, p[1:5])
+                        if not all(math.isfinite(v) for v in (xc, yc, w, h)):
+                            continue  # bỏ qua dòng có NaN/Inf
                         bboxes.append([cid,
                                        (xc - w / 2) * iw, (yc - h / 2) * ih,
                                        (xc + w / 2) * iw, (yc + h / 2) * ih])
                     elif len(p) == 9:
                         cid = int(p[0])
                         pts = list(map(float, p[1:9]))
+                        if not all(math.isfinite(v) for v in pts):
+                            continue  # bỏ qua dòng có NaN/Inf
                         bboxes.append([cid,
                                        pts[0]*iw, pts[1]*ih,
                                        pts[2]*iw, pts[3]*ih,
@@ -1389,10 +1394,16 @@ class BBoxEditorTab(Frame):
             # Tính bounding rect để check filter kích thước
             if is_poly4:
                 _, px1, py1, px2, py2, px3, py3, px4, py4 = ann
+                if not all(math.isfinite(v) for v in (px1, py1, px2, py2, px3, py3, px4, py4)):
+                    print(f"[WARN] Bỏ qua box lỗi (NaN/Inf) tại index {i}")
+                    continue
                 xs = [px1, px2, px3, px4]; ys = [py1, py2, py3, py4]
                 x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
             else:
                 _, x1, y1, x2, y2 = ann
+                if not all(math.isfinite(v) for v in (x1, y1, x2, y2)):
+                    print(f"[WARN] Bỏ qua box lỗi (NaN/Inf) tại index {i}")
+                    continue
 
             if _dim_on:
                 bw_px = x2 - x1; bh_px = y2 - y1
@@ -4021,12 +4032,16 @@ class BBoxEditorTab(Frame):
                     if len(p) == 5:
                         cid = int(p[0])
                         xc, yc, w, h = map(float, p[1:5])
+                        if not all(math.isfinite(v) for v in (xc, yc, w, h)):
+                            continue  # bỏ qua dòng có NaN/Inf
                         bboxes.append([cid,
                                        (xc - w / 2) * iw, (yc - h / 2) * ih,
                                        (xc + w / 2) * iw, (yc + h / 2) * ih])
                     elif len(p) == 9:
                         cid = int(p[0])
                         pts = list(map(float, p[1:9]))
+                        if not all(math.isfinite(v) for v in pts):
+                            continue  # bỏ qua dòng có NaN/Inf
                         bboxes.append([cid,
                                        pts[0] * iw, pts[1] * ih,
                                        pts[2] * iw, pts[3] * ih,
@@ -4137,6 +4152,8 @@ class BBoxEditorTab(Frame):
             try:
                 pil = self._PIL_Image.open(fp).convert("RGB")
                 iw, ih = pil.size
+                if iw <= 0 or ih <= 0:
+                    return None  # ảnh lỗi, không xử lý
                 boxes = run_model_predict(
                     self._det_model, self._det_model_type, pil,
                     self._det_conf_var.get())
@@ -4154,9 +4171,13 @@ class BBoxEditorTab(Frame):
                 yc = max(0.0, min(1.0, ((y1 + y2) / 2) / ih))
                 bw = max(1e-4, min(1.0, (x2 - x1) / iw))
                 bh = max(1e-4, min(1.0, (y2 - y1) / ih))
+                if not all(math.isfinite(v) for v in (xc, yc, bw, bh)):
+                    continue  # bỏ qua box có toạ độ NaN/Inf sau khi tính
                 new_lines_norm.append(
                     f"{int(dst_cid)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
                 new_boxes_px.append((dst_cid, x1, y1, x2, y2))
+            if not new_lines_norm:
+                return None
             return (new_lines_norm, new_boxes_px, iw, ih)
 
         else:  # source_mode == "folder"
@@ -4178,9 +4199,19 @@ class BBoxEditorTab(Frame):
                             continue
                         if len(parts) != 5:
                             continue  # OBB 9-token từ nguồn — bỏ qua (out of scope)
-                        # Đổi cid → dst_cid, giữ nguyên 4 số normalized
+                        # Parse float + validate — KHÔNG copy string thô (tránh ghi NaN/Inf)
+                        try:
+                            cx = float(parts[1]); cy = float(parts[2])
+                            bw = float(parts[3]); bh = float(parts[4])
+                        except ValueError:
+                            continue
+                        if not (math.isfinite(cx) and math.isfinite(cy) and
+                                math.isfinite(bw) and math.isfinite(bh) and
+                                0.0 <= cx <= 1.0 and 0.0 <= cy <= 1.0 and
+                                bw > 0 and bh > 0):
+                            continue  # loại bỏ NaN/Inf/âm/ngoài dải hợp lệ
                         new_lines_norm.append(
-                            f"{int(dst_cid)} {parts[1]} {parts[2]} {parts[3]} {parts[4]}")
+                            f"{int(dst_cid)} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
             except Exception:
                 return None
             if not new_lines_norm:
