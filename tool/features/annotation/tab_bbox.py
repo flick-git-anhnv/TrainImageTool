@@ -182,6 +182,15 @@ class BBoxEditorTab(Frame):
         self._batch_preview_active  = False
         self._batch_src_class_var   = StringVar()  # combobox class nguồn
         self._batch_dst_label_var   = StringVar()  # entry tên label đích
+        # Amendment Phase 4 — biến state mới
+        self._batch_src_mode_var      = StringVar(value="model")  # "model" | "folder"
+        self._batch_write_mode_var    = StringVar(value="append") # "append" | "replace"
+        self._batch_src_label_dir_var = StringVar(value="")
+        self._batch_src_class_ids_var = StringVar(value="")
+        _bind_cfg("bbox.batch.src_mode",       self._batch_src_mode_var)
+        _bind_cfg("bbox.batch.write_mode",     self._batch_write_mode_var)
+        _bind_cfg("bbox.batch.src_label_dir",  self._batch_src_label_dir_var)
+        _bind_cfg("bbox.batch.src_class_ids",  self._batch_src_class_ids_var)
 
         self._build()
         self.after(200, self._restore_session)
@@ -3316,6 +3325,7 @@ class BBoxEditorTab(Frame):
         cls_info = f" [{n_cls}cls]" if n_cls else ""
         self._det_model_lbl.config(text=f"✓ {name}{tag}{cls_info}", fg="#4caf50")
         self._refresh_batch_class_combo()
+        self._batch_refresh_model_display()
 
     def _run_detect(self):
         path = self._det_model_path.get().strip()
@@ -3746,64 +3756,130 @@ class BBoxEditorTab(Frame):
     # ══════════════════════════════════════════════ BATCH ADD CLASS ══════════
 
     def _build_batch_add_class_ui(self, parent):
-        """Tạo LabelFrame '➕ Bổ sung class hàng loạt' và các widget con."""
+        """Tạo LabelFrame '➕ Bổ sung class hàng loạt' và các widget con.
+        Amendment Phase 4: thêm Row A (model picker), Row B (source radio),
+        Row C1/C2 (model / folder group), Row D (nhãn đích + chế độ ghi)."""
         lf = LabelFrame(parent, text="➕ Bổ sung class hàng loạt",
                         bg=CARD, fg=ACCENT2, font=F_BOLD,
                         labelanchor=NW, relief="groove", padx=8, pady=4)
         lf.pack(fill=X, pady=(2, 0))
 
-        # Row 1: class nguồn + label đích + nút bấm
-        row1 = Frame(lf, bg=CARD)
-        row1.pack(fill=X, pady=(2, 2))
+        # Row A: Model picker (MỚI — đầu LabelFrame)
+        row_a = Frame(lf, bg=CARD)
+        row_a.pack(fill=X, pady=(2, 2))
+        Label(row_a, text="🤖 Model:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        self._batch_model_lbl = Label(row_a, text="(chưa load)", bg=CARD, fg=DIM,
+                                      font=F_MAIN, width=30, anchor=W)
+        self._batch_model_lbl.pack(side=LEFT, padx=(4, 8))
+        Button(row_a, text="📂 Đổi model",
+               command=self._browse_det_model,
+               bg=ACCENT2, fg="white",
+               activebackground=ACCENT, activeforeground="white",
+               font=F_MAIN, relief="flat", padx=6, cursor="hand2").pack(side=LEFT)
 
-        Label(row1, text="Class nguồn:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
-        self._batch_src_class_combo = ttk.Combobox(row1, state="readonly",
-                                                    textvariable=self._batch_src_class_var,
-                                                    font=F_MAIN, width=22)
+        # Row B: Source selector radio (MỚI)
+        row_b = Frame(lf, bg=CARD)
+        row_b.pack(fill=X, pady=(0, 2))
+        Label(row_b, text="Nguồn nhãn:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Radiobutton(row_b, text="🤖 Model detect",
+                    variable=self._batch_src_mode_var, value="model",
+                    command=self._on_batch_src_mode_change,
+                    bg=CARD, fg=TEXT, selectcolor=CARD,
+                    activebackground=CARD, font=F_MAIN).pack(side=LEFT, padx=(4, 8))
+        Radiobutton(row_b, text="📁 Thư mục label",
+                    variable=self._batch_src_mode_var, value="folder",
+                    command=self._on_batch_src_mode_change,
+                    bg=CARD, fg=TEXT, selectcolor=CARD,
+                    activebackground=CARD, font=F_MAIN).pack(side=LEFT)
+
+        # Row C1: Model source group (hiện mặc định khi mode="model")
+        self._batch_src_model_frame = Frame(lf, bg=CARD)
+        self._batch_src_model_frame.pack(fill=X, pady=(0, 2))
+        Label(self._batch_src_model_frame, text="Class nguồn:",
+              bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        self._batch_src_class_combo = ttk.Combobox(
+            self._batch_src_model_frame, state="readonly",
+            textvariable=self._batch_src_class_var,
+            font=F_MAIN, width=22)
         self._batch_src_class_combo.pack(side=LEFT, padx=(4, 8))
         self._batch_src_class_combo.bind("<<ComboboxSelected>>",
                                          self._on_batch_src_class_change)
 
-        Label(row1, text="→ Nhãn đích:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
-        Entry(row1, textvariable=self._batch_dst_label_var,
+        # Row C2: Folder source group (ẩn ban đầu, hiện khi mode="folder")
+        self._batch_src_folder_frame = Frame(lf, bg=CARD)
+        # KHÔNG pack ngay — hiện theo _on_batch_src_mode_change
+        Label(self._batch_src_folder_frame, text="Thư mục label nguồn:",
+              bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Entry(self._batch_src_folder_frame,
+              textvariable=self._batch_src_label_dir_var,
               bg="#16162a", fg=TEXT, insertbackground=TEXT,
-              relief="flat", font=F_MAIN, bd=2, width=16).pack(side=LEFT, padx=(4, 8))
+              relief="flat", font=F_MAIN, bd=2, width=20).pack(side=LEFT, padx=(4, 2))
+        Button(self._batch_src_folder_frame, text="📁",
+               command=self._batch_browse_src_label_dir,
+               bg=ACCENT2, fg="white",
+               activebackground=ACCENT, activeforeground="white",
+               font=F_MAIN, relief="flat", padx=6, cursor="hand2").pack(side=LEFT,
+                                                                         padx=(0, 8))
+        Label(self._batch_src_folder_frame, text="Class id nguồn:",
+              bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Entry(self._batch_src_folder_frame,
+              textvariable=self._batch_src_class_ids_var,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MAIN, bd=2, width=14).pack(side=LEFT, padx=(4, 0))
 
-        self._btn_batch_auto = Button(row1, text="🔍 Quét toàn bộ",
-                                       command=self._batch_start_auto,
-                                       bg=ACCENT2, fg="white",
-                                       activebackground=ACCENT, activeforeground="white",
-                                       font=F_BOLD, relief="flat", padx=10, cursor="hand2")
+        # Row D: Nhãn đích + chế độ ghi (MỚI — gộp Nhãn đích từ Row 1 cũ + thêm radio)
+        row_d = Frame(lf, bg=CARD)
+        row_d.pack(fill=X, pady=(0, 2))
+        Label(row_d, text="→ Nhãn đích:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Entry(row_d, textvariable=self._batch_dst_label_var,
+              bg="#16162a", fg=TEXT, insertbackground=TEXT,
+              relief="flat", font=F_MAIN, bd=2, width=16).pack(side=LEFT, padx=(4, 12))
+        Label(row_d, text="Chế độ:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
+        Radiobutton(row_d, text="Chỉ thêm",
+                    variable=self._batch_write_mode_var, value="append",
+                    bg=CARD, fg=TEXT, selectcolor=CARD,
+                    activebackground=CARD, font=F_MAIN).pack(side=LEFT, padx=(4, 4))
+        Radiobutton(row_d, text="Thay thế",
+                    variable=self._batch_write_mode_var, value="replace",
+                    bg=CARD, fg=TEXT, selectcolor=CARD,
+                    activebackground=CARD, font=F_MAIN).pack(side=LEFT)
+
+        # Row E: nút bấm quét
+        row_e = Frame(lf, bg=CARD)
+        row_e.pack(fill=X, pady=(2, 2))
+        self._btn_batch_auto = Button(row_e, text="🔍 Quét toàn bộ",
+                                      command=self._batch_start_auto,
+                                      bg=ACCENT2, fg="white",
+                                      activebackground=ACCENT, activeforeground="white",
+                                      font=F_BOLD, relief="flat", padx=10, cursor="hand2")
         self._btn_batch_auto.pack(side=LEFT, padx=(0, 4))
 
-        self._btn_batch_review = Button(row1, text="🔍 Quét lần lượt",
-                                         command=self._batch_start_review,
-                                         bg=ACCENT2, fg="white",
-                                         activebackground=ACCENT, activeforeground="white",
-                                         font=F_BOLD, relief="flat", padx=10, cursor="hand2")
+        self._btn_batch_review = Button(row_e, text="🔍 Quét lần lượt",
+                                        command=self._batch_start_review,
+                                        bg=ACCENT2, fg="white",
+                                        activebackground=ACCENT, activeforeground="white",
+                                        font=F_BOLD, relief="flat", padx=10, cursor="hand2")
         self._btn_batch_review.pack(side=LEFT, padx=(0, 4))
 
-        self._btn_batch_stop = Button(row1, text="⏹ Dừng",
-                                       command=self._batch_stop,
-                                       bg="#555577", fg="white",
-                                       activebackground="#333355", activeforeground="white",
-                                       font=F_BOLD, relief="flat", padx=8, cursor="hand2")
-        # Không pack ngay — ẩn ban đầu, chỉ hiện khi batch đang chạy (pack/pack_forget)
+        self._btn_batch_stop = Button(row_e, text="⏹ Dừng",
+                                      command=self._batch_stop,
+                                      bg="#555577", fg="white",
+                                      activebackground="#333355", activeforeground="white",
+                                      font=F_BOLD, relief="flat", padx=8, cursor="hand2")
+        # Không pack ngay — ẩn ban đầu, hiện khi batch đang chạy
 
-        # Row 2: progressbar + status
-        row2 = Frame(lf, bg=CARD)
-        row2.pack(fill=X, pady=(0, 2))
-
-        self._batch_pb = ttk.Progressbar(row2, style="K.Horizontal.TProgressbar",
-                                          orient=HORIZONTAL, mode="determinate",
-                                          maximum=100)
+        # Row F: progressbar + status
+        row_f = Frame(lf, bg=CARD)
+        row_f.pack(fill=X, pady=(0, 2))
+        self._batch_pb = ttk.Progressbar(row_f, style="K.Horizontal.TProgressbar",
+                                         orient=HORIZONTAL, mode="determinate",
+                                         maximum=100)
         self._batch_pb.pack(side=LEFT, fill=X, expand=True, padx=(0, 8))
-
-        self._batch_status_lbl = Label(row2, text="", bg=CARD, fg=DIM, font=F_MAIN,
-                                        anchor=W)
+        self._batch_status_lbl = Label(row_f, text="", bg=CARD, fg=DIM, font=F_MAIN,
+                                       anchor=W)
         self._batch_status_lbl.pack(side=LEFT, fill=X, expand=False)
 
-        # Row 3: review buttons — ẩn ban đầu, chỉ pack khi review-waiting
+        # Row G: review buttons — ẩn ban đầu, chỉ pack khi review-waiting
         self._batch_review_frame = Frame(lf, bg=CARD)
         # KHÔNG pack ngay
 
@@ -3818,8 +3894,9 @@ class BBoxEditorTab(Frame):
                activeforeground="white", font=F_BOLD, relief="flat", padx=10,
                cursor="hand2").pack(side=LEFT)
 
-        # Khởi tạo combo sau khi widget đã tạo
+        # Khởi tạo combo + model display sau khi widget đã tạo
         self._refresh_batch_class_combo()
+        self._batch_refresh_model_display()
 
     def _on_batch_src_class_change(self, _event=None):
         """Cập nhật nhãn đích khi user đổi class nguồn (chỉ khi đích đang rỗng)."""
@@ -3836,25 +3913,24 @@ class BBoxEditorTab(Frame):
             self._batch_src_class_combo["values"] = [
                 "(Model chưa load hoặc không có .names — dùng YOLO .pt)"]
             self._batch_src_class_combo.current(0)
-            self._btn_batch_auto.config(state="disabled")
-            self._btn_batch_review.config(state="disabled")
-            self._batch_status_lbl.config(
-                text="Model ONNX / chưa load — batch chưa sẵn sàng", fg=DIM)
+            # Chỉ cập nhật status khi model mode và idle (folder mode không cần model)
+            if (self._batch_state == "idle"
+                    and self._batch_src_mode_var.get() == "model"):
+                self._batch_status_lbl.config(
+                    text="Model ONNX / chưa load — batch chưa sẵn sàng", fg=DIM)
         else:
             vals = [f"{cid}: {name}"
                     for cid, name in sorted(self._det_model_names.items())]
             self._batch_src_class_combo["values"] = vals
             if vals:
                 self._batch_src_class_combo.current(0)
-                # Gợi ý tên nhãn đích = tên class đầu tiên
+                # Gợi ý tên nhãn đích = tên class đầu tiên (chỉ khi đích chưa điền)
                 if not self._batch_dst_label_var.get().strip():
                     first_name = sorted(self._det_model_names.items())[0][1]
                     self._batch_dst_label_var.set(first_name)
-            # Enable nút quét chỉ khi idle
-            if self._batch_state == "idle":
-                self._btn_batch_auto.config(state="normal")
-                self._btn_batch_review.config(state="normal")
             self._batch_status_lbl.config(text="", fg=DIM)
+        # Delegate enable/disable nút quét cho _batch_set_ui_state (check source_mode)
+        self._batch_set_ui_state(self._batch_state)
 
     # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -3948,15 +4024,203 @@ class BBoxEditorTab(Frame):
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
 
+    # ── Amendment Phase 4 — helper methods mới ───────────────────────────────
+
+    def _batch_refresh_model_display(self):
+        """Cập nhật label model trong khung Batch từ _det_model_path."""
+        if not hasattr(self, "_batch_model_lbl"):
+            return
+        path = self._det_model_path.get().strip() if hasattr(self, "_det_model_path") else ""
+        if path:
+            import os
+            self._batch_model_lbl.config(text=os.path.basename(path), fg=TEXT)
+        else:
+            self._batch_model_lbl.config(text="(chưa load)", fg=DIM)
+
+    def _on_batch_src_mode_change(self, _event=None):
+        """Ẩn/hiện group C1 (model) hoặc C2 (folder) theo radio Nguồn nhãn."""
+        mode = self._batch_src_mode_var.get()
+        if mode == "model":
+            self._batch_src_folder_frame.pack_forget()
+            self._batch_src_model_frame.pack(fill=X, pady=(0, 2))
+        else:  # "folder"
+            self._batch_src_model_frame.pack_forget()
+            self._batch_src_folder_frame.pack(fill=X, pady=(0, 2))
+        # Cập nhật trạng thái nút quét (folder mode luôn enable)
+        self._batch_set_ui_state(self._batch_state)
+
+    def _batch_browse_src_label_dir(self):
+        """Mở dialog chọn thư mục label nguồn (folder source mode)."""
+        from tkinter import filedialog
+        d = filedialog.askdirectory(title="Chọn thư mục label nguồn",
+                                    parent=self.root)
+        if d:
+            self._batch_src_label_dir_var.set(d)
+
+    def _batch_parse_src_ids(self) -> tuple:
+        """Parse ô class_id nguồn (dùng khi source_mode='folder').
+        Chấp nhận '0' / '0,2,5' / '0; 2; 5' / '0 2 5' (tolerance dấu phẩy/chấm phẩy).
+        Trả về (ids: set[int], err_msg: str). Nếu err_msg != '' → invalid."""
+        raw = self._batch_src_class_ids_var.get().strip()
+        if not raw:
+            return set(), "Vui lòng nhập ít nhất 1 class id nguồn (VD: 0 hoặc 0,2,5)."
+        ids = set()
+        for tok in raw.replace(";", ",").split(","):
+            t = tok.strip()
+            if not t:
+                continue
+            try:
+                ids.add(int(t))
+            except ValueError:
+                return set(), f"Class id không hợp lệ: '{t}' (phải là số nguyên)."
+        if not ids:
+            return set(), "Không parse được class id nào."
+        return ids, ""
+
+    def _batch_get_new_boxes_for_image(self, fp: Path, src_ids: set, dst_cid: int,
+                                        source_mode: str, src_label_dir,
+                                        need_preview_px: bool):
+        """Lấy danh sách box mới cho 1 ảnh theo source_mode.
+
+        Trả về (new_lines_norm: list[str], new_boxes_px: list[tuple], iw: int, ih: int)
+        hoặc None nếu không có box nào.
+
+        - new_lines_norm : dòng YOLO đã format, cid = dst_cid, normalized 0-1.
+        - new_boxes_px   : tọa độ pixel cho preview overlay (chế độ review).
+        - iw, ih         : kích thước ảnh. Trả về 0/0 nếu folder+auto (không mở ảnh).
+        """
+        from ...shared.model_infer import run_model_predict
+
+        if source_mode == "model":
+            # Mở PIL + inference (giữ nguyên logic bản gốc)
+            try:
+                pil = self._PIL_Image.open(fp).convert("RGB")
+                iw, ih = pil.size
+                boxes = run_model_predict(
+                    self._det_model, self._det_model_type, pil,
+                    self._det_conf_var.get())
+            except Exception:
+                return None
+            matched = [(x1, y1, x2, y2)
+                       for cid, x1, y1, x2, y2, _sc in boxes
+                       if cid in src_ids]
+            if not matched:
+                return None
+            new_lines_norm = []
+            new_boxes_px   = []
+            for x1, y1, x2, y2 in matched:
+                xc = max(0.0, min(1.0, ((x1 + x2) / 2) / iw))
+                yc = max(0.0, min(1.0, ((y1 + y2) / 2) / ih))
+                bw = max(1e-4, min(1.0, (x2 - x1) / iw))
+                bh = max(1e-4, min(1.0, (y2 - y1) / ih))
+                new_lines_norm.append(
+                    f"{int(dst_cid)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
+                new_boxes_px.append((dst_cid, x1, y1, x2, y2))
+            return (new_lines_norm, new_boxes_px, iw, ih)
+
+        else:  # source_mode == "folder"
+            src_lbl_path = Path(src_label_dir) / (fp.stem + ".txt")
+            if not src_lbl_path.exists():
+                return None  # ảnh không có file nguồn — bỏ qua im lặng
+            new_lines_norm = []
+            try:
+                with open(src_lbl_path, encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) < 5:
+                            continue  # dòng trống / thiếu token
+                        try:
+                            cid_src = int(parts[0])
+                        except ValueError:
+                            continue
+                        if cid_src not in src_ids:
+                            continue
+                        if len(parts) != 5:
+                            continue  # OBB 9-token từ nguồn — bỏ qua (out of scope)
+                        # Đổi cid → dst_cid, giữ nguyên 4 số normalized
+                        new_lines_norm.append(
+                            f"{int(dst_cid)} {parts[1]} {parts[2]} {parts[3]} {parts[4]}")
+            except Exception:
+                return None
+            if not new_lines_norm:
+                return None
+            if need_preview_px:
+                # Review mode: mở PIL chỉ lấy size để convert normalized→pixel
+                try:
+                    with self._PIL_Image.open(fp) as _im:
+                        iw, ih = _im.size
+                except Exception:
+                    iw, ih = 0, 0
+                new_boxes_px = []
+                for ln in new_lines_norm:
+                    p = ln.strip().split()
+                    if len(p) != 5:
+                        continue
+                    _, xc_s, yc_s, w_s, h_s = p
+                    xc, yc, w, h = float(xc_s), float(yc_s), float(w_s), float(h_s)
+                    x1 = (xc - w / 2) * iw
+                    y1 = (yc - h / 2) * ih
+                    x2 = (xc + w / 2) * iw
+                    y2 = (yc + h / 2) * ih
+                    new_boxes_px.append((dst_cid, x1, y1, x2, y2))
+                return (new_lines_norm, new_boxes_px, iw, ih)
+            else:
+                # Auto mode + folder: KHÔNG mở ảnh, không cần pixel coords
+                return (new_lines_norm, [], 0, 0)
+
+    def _batch_write_new_lines(self, lbl_path: Path, new_lines_norm: list,
+                                dst_cid: int, replace_mode: bool) -> None:
+        """Ghi file .txt đích theo chế độ append/replace, thao tác text-level.
+
+        - Đọc raw text lines hiện có (giữ nguyên format 5-token / 9-token OBB).
+        - replace_mode=True: xoá TẤT CẢ dòng có class_id == dst_cid,
+          giữ mọi dòng khác (kể cả 9-token OBB có cid ≠ dst_cid).
+        - Append new_lines_norm vào cuối.
+        - Ghi lại file (mkdir parents nếu cần).
+
+        KHÔNG cần iw/ih. Text-level → an toàn 100% với OBB 9-token (không parse lại).
+        """
+        existing_lines: list = []
+        if lbl_path.exists():
+            try:
+                with open(lbl_path, encoding="utf-8") as f:
+                    existing_lines = [ln.rstrip("\n") for ln in f if ln.strip()]
+            except Exception:
+                existing_lines = []
+
+        if replace_mode:
+            keep = []
+            for ln in existing_lines:
+                parts = ln.strip().split()
+                if not parts:
+                    continue
+                try:
+                    cid = int(parts[0])
+                except ValueError:
+                    keep.append(ln)  # giữ dòng lạ (không có cid số)
+                    continue
+                if cid == dst_cid:
+                    continue         # XOÁ dòng có class_id == dst_cid
+                keep.append(ln)
+            existing_lines = keep
+
+        all_lines = existing_lines + list(new_lines_norm)
+        lbl_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lbl_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(all_lines))
+
     # ── State management ─────────────────────────────────────────────────────
 
     def _batch_set_ui_state(self, state: str):
         """Cập nhật trạng thái nút batch theo state.
-        Idle: ẩn nút Dừng (pack_forget). Running: hiện nút Dừng (pack)."""
+        Idle: ẩn nút Dừng (pack_forget). Running: hiện nút Dừng (pack).
+        Amendment: folder mode luôn có thể chạy dù model chưa load."""
         self._batch_state = state
         if state == "idle":
-            has_names = bool(self._det_model_names)
-            n_st = "normal" if has_names else "disabled"
+            # Enable nút quét: folder mode không cần model
+            src_mode = self._batch_src_mode_var.get()
+            can_run  = (src_mode == "folder") or bool(self._det_model_names)
+            n_st = "normal" if can_run else "disabled"
             self._btn_batch_auto.config(state=n_st)
             self._btn_batch_review.config(state=n_st)
             self._btn_batch_stop.pack_forget()   # ẩn khi idle
@@ -3974,7 +4238,8 @@ class BBoxEditorTab(Frame):
         self._batch_start("review")
 
     def _batch_start(self, mode: str):
-        """Validate input rồi spawn worker thread cho mode='auto'|'review'."""
+        """Validate input rồi spawn worker thread cho mode='auto'|'review'.
+        Amendment Phase 4: validate theo source_mode, dispatch args mới cho worker."""
         import threading
 
         if self._batch_state != "idle":
@@ -3987,33 +4252,57 @@ class BBoxEditorTab(Frame):
                                    "Vui lòng tải thư mục ảnh trước.",
                                    parent=self.root)
             return
-        if self._det_model is None:
-            messagebox.showwarning("Chưa load model",
-                                   "Vui lòng load model detect trước.",
-                                   parent=self.root)
-            return
-        if not self._det_model_names:
-            messagebox.showwarning("Model không hỗ trợ",
-                                   "Model hiện tại không có .names — "
-                                   "không dùng được tính năng batch.\n"
-                                   "Vui lòng load model YOLO .pt.",
-                                   parent=self.root)
-            return
 
-        # Lấy class nguồn đã chọn
-        sel = self._batch_src_class_var.get()
-        if not sel or sel.startswith("("):
-            messagebox.showwarning("Chưa chọn class",
-                                   "Vui lòng chọn class nguồn từ dropdown.",
-                                   parent=self.root)
-            return
-        try:
-            src_cid = int(sel.split(":")[0])
-        except (ValueError, IndexError):
-            messagebox.showerror("Lỗi", "Class nguồn không hợp lệ.", parent=self.root)
-            return
+        source_mode = self._batch_src_mode_var.get()    # "model" | "folder"
+        replace_mode = (self._batch_write_mode_var.get() == "replace")
 
-        # Lấy và validate label đích
+        # Validate theo source_mode
+        if source_mode == "model":
+            if self._det_model is None:
+                messagebox.showwarning("Chưa load model",
+                                       "Vui lòng load model detect trước.",
+                                       parent=self.root)
+                return
+            if not self._det_model_names:
+                messagebox.showwarning("Model không hỗ trợ",
+                                       "Model hiện tại không có .names — "
+                                       "không dùng được với nguồn Model.\n"
+                                       "Vui lòng load model YOLO .pt.",
+                                       parent=self.root)
+                return
+            sel = self._batch_src_class_var.get()
+            if not sel or sel.startswith("("):
+                messagebox.showwarning("Chưa chọn class",
+                                       "Vui lòng chọn class nguồn từ dropdown.",
+                                       parent=self.root)
+                return
+            try:
+                src_cid = int(sel.split(":")[0])
+            except (ValueError, IndexError):
+                messagebox.showerror("Lỗi", "Class nguồn không hợp lệ.", parent=self.root)
+                return
+            src_ids = {src_cid}
+            src_label_dir = None
+        else:  # source_mode == "folder"
+            src_ids, err = self._batch_parse_src_ids()
+            if err:
+                messagebox.showwarning("Class id nguồn không hợp lệ", err,
+                                       parent=self.root)
+                return
+            src_label_dir_str = self._batch_src_label_dir_var.get().strip()
+            if not src_label_dir_str:
+                messagebox.showwarning("Chưa chọn thư mục nguồn",
+                                       "Vui lòng chọn thư mục label nguồn hợp lệ.",
+                                       parent=self.root)
+                return
+            src_label_dir = Path(src_label_dir_str)
+            if not src_label_dir.is_dir():
+                messagebox.showwarning("Thư mục không tồn tại",
+                                       f"Thư mục label nguồn không tồn tại:\n{src_label_dir_str}",
+                                       parent=self.root)
+                return
+
+        # Lấy và validate label đích (chung cho cả 2 nguồn)
         dst_label = self._batch_dst_label_var.get().strip()
         if not dst_label:
             messagebox.showwarning("Thiếu nhãn đích",
@@ -4046,10 +4335,10 @@ class BBoxEditorTab(Frame):
         self._batch_status_lbl.config(
             text=f"⏳ Chuẩn bị quét {len(self.image_files)} ảnh…", fg=DIM)
 
-        # Spawn worker daemon thread
+        # Spawn worker daemon thread với signature mới
         threading.Thread(
             target=self._batch_worker,
-            args=(mode, src_cid, dst_label),
+            args=(mode, src_ids, dst_cid, source_mode, src_label_dir, replace_mode),
             daemon=True
         ).start()
 
@@ -4064,63 +4353,51 @@ class BBoxEditorTab(Frame):
 
     # ── Worker thread ────────────────────────────────────────────────────────
 
-    def _batch_worker(self, mode: str, src_cid: int, dst_label: str):
+    def _batch_worker(self, mode: str, src_ids: set, dst_cid: int,
+                      source_mode: str, src_label_dir, replace_mode: bool):
         """Chạy trong daemon thread. mode ∈ {'auto', 'review'}.
+        Amendment Phase 4: signature mới, gọi _batch_get_new_boxes_for_image +
+        _batch_write_new_lines thay cho PIL+inference+_write_yolo_ext inline.
         Mọi update UI qua self.root.after(0, ...) — tuyệt đối không động canvas trực tiếp."""
-        from ...shared.model_infer import run_model_predict
-
         total    = len(self.image_files)
         applied  = 0
         skipped  = 0
         detected = 0
-        dst_cid  = self._batch_dst_cid
 
         for i, fp in enumerate(self.image_files):
             if self._batch_cancel_evt.is_set():
                 break
             self.root.after(0, self._batch_update_progress, i, total, fp.name)
 
-            # Detect ảnh này (PIL.Image thread-safe cho open/convert)
-            try:
-                pil  = self._PIL_Image.open(fp).convert("RGB")
-                iw, ih = pil.size
-                boxes = run_model_predict(
-                    self._det_model, self._det_model_type, pil,
-                    self._det_conf_var.get())
-            except Exception:
-                continue  # bỏ qua ảnh lỗi
-
-            # Lọc đúng class nguồn, gán dst_cid
-            new_boxes = [(dst_cid, x1, y1, x2, y2)
-                         for cid, x1, y1, x2, y2, _sc in boxes
-                         if cid == src_cid]
+            # Lấy box mới theo source_mode (model inference / đọc file folder)
+            need_preview = (mode == "review")
+            result = self._batch_get_new_boxes_for_image(
+                fp, src_ids, dst_cid, source_mode, src_label_dir, need_preview)
             # TODO: IoU dedup (future work)
-            if not new_boxes:
+            if result is None:
                 continue
+            new_lines_norm, new_boxes_px, _iw, _ih = result
             detected += 1
 
-            # Đọc box cũ từ file .txt (nếu có)
             lbl_path = self._resolve_lbl_path(fp)
-            existing = self._read_yolo_ext(lbl_path, iw, ih) if lbl_path.exists() else []
 
             if mode == "auto":
                 # Ghi thẳng + reload nếu ảnh đang mở
-                merged = existing + [list(b) for b in new_boxes]
-                self._write_yolo_ext(lbl_path, merged, iw, ih)
+                self._batch_write_new_lines(lbl_path, new_lines_norm, dst_cid, replace_mode)
                 applied += 1
                 self.root.after(0, self._batch_maybe_reload_current, fp)
             else:  # mode == "review"
                 # Gửi preview lên UI thread, chờ quyết định
                 self._batch_review_evt.clear()
-                self.root.after(0, self._batch_show_review, fp, existing, new_boxes)
+                self.root.after(0, self._batch_show_review, fp, new_boxes_px)
                 self._batch_review_evt.wait()  # BLOCK cho tới khi user bấm nút review
 
                 if (self._batch_cancel_evt.is_set()
                         or self._batch_review_decision == "stop"):
                     break
                 if self._batch_review_decision == "apply":
-                    merged = existing + [list(b) for b in new_boxes]
-                    self._write_yolo_ext(lbl_path, merged, iw, ih)
+                    self._batch_write_new_lines(lbl_path, new_lines_norm, dst_cid,
+                                                replace_mode)
                     applied += 1
                     self.root.after(0, self._batch_maybe_reload_current, fp)
                 else:  # "skip"
@@ -4139,7 +4416,7 @@ class BBoxEditorTab(Frame):
         short = name if len(name) <= 40 else "…" + name[-38:]
         self._batch_status_lbl.config(text=f"[{i + 1}/{total}] {short}", fg=DIM)
 
-    def _batch_show_review(self, fp: Path, existing: list, new_boxes: list):
+    def _batch_show_review(self, fp: Path, new_boxes: list):
         """Mở ảnh fp, set preview overlay, hiện Row 3 review buttons (UI thread).
         Gọi _autosave() trước để không mất thay đổi chưa lưu của ảnh trước."""
         self._autosave()
