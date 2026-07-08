@@ -191,6 +191,9 @@ class BBoxEditorTab(Frame):
         _bind_cfg("bbox.batch.write_mode",     self._batch_write_mode_var)
         _bind_cfg("bbox.batch.src_label_dir",  self._batch_src_label_dir_var)
         _bind_cfg("bbox.batch.src_class_ids",  self._batch_src_class_ids_var)
+        # Phase 6 — collapsed state (IntVar: 1=thu gọn, 0=mở rộng; mặc định thu gọn)
+        self._batch_collapsed_var = IntVar(value=1)
+        _bind_cfg("bbox.batch.collapsed",      self._batch_collapsed_var)
 
         self._build()
         self.after(200, self._restore_session)
@@ -3758,14 +3761,23 @@ class BBoxEditorTab(Frame):
     def _build_batch_add_class_ui(self, parent):
         """Tạo LabelFrame '➕ Bổ sung class hàng loạt' và các widget con.
         Amendment Phase 4: thêm Row A (model picker), Row B (source radio),
-        Row C1/C2 (model / folder group), Row D (nhãn đích + chế độ ghi)."""
-        lf = LabelFrame(parent, text="➕ Bổ sung class hàng loạt",
-                        bg=CARD, fg=ACCENT2, font=F_BOLD,
+        Row C1/C2 (model / folder group), Row D (nhãn đích + chế độ ghi).
+        Phase 6: LabelFrame thu gọn được qua button toggle trong labelwidget."""
+        lf = LabelFrame(parent, bg=CARD, fg=ACCENT2, font=F_BOLD,
                         labelanchor=NW, relief="groove", padx=8, pady=4)
+        # Tạo button toggle SAU KHI lf đã tồn tại (tránh circular reference)
+        self._batch_toggle_btn = Button(lf, command=self._batch_toggle_collapse,
+                                        bg=CARD, fg=ACCENT2, font=F_BOLD,
+                                        relief="flat", activebackground=CARD,
+                                        cursor="hand2")
+        lf.configure(labelwidget=self._batch_toggle_btn)
         lf.pack(fill=X, pady=(2, 0))
 
+        # Container cho toàn bộ Row A-G — pack/pack_forget khi toggle collapse
+        self._batch_body = Frame(lf, bg=CARD)
+
         # Row A: Model picker (MỚI — đầu LabelFrame)
-        row_a = Frame(lf, bg=CARD)
+        row_a = Frame(self._batch_body, bg=CARD)
         row_a.pack(fill=X, pady=(2, 2))
         Label(row_a, text="🤖 Model:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
         self._batch_model_lbl = Label(row_a, text="(chưa load)", bg=CARD, fg=DIM,
@@ -3778,7 +3790,7 @@ class BBoxEditorTab(Frame):
                font=F_MAIN, relief="flat", padx=6, cursor="hand2").pack(side=LEFT)
 
         # Row B: Source selector radio (MỚI)
-        row_b = Frame(lf, bg=CARD)
+        row_b = Frame(self._batch_body, bg=CARD)
         row_b.pack(fill=X, pady=(0, 2))
         Label(row_b, text="Nguồn nhãn:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
         Radiobutton(row_b, text="🤖 Model detect",
@@ -3793,7 +3805,7 @@ class BBoxEditorTab(Frame):
                     activebackground=CARD, font=F_MAIN).pack(side=LEFT)
 
         # Row C1: Model source group (hiện mặc định khi mode="model")
-        self._batch_src_model_frame = Frame(lf, bg=CARD)
+        self._batch_src_model_frame = Frame(self._batch_body, bg=CARD)
         self._batch_src_model_frame.pack(fill=X, pady=(0, 2))
         Label(self._batch_src_model_frame, text="Class nguồn:",
               bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
@@ -3806,7 +3818,7 @@ class BBoxEditorTab(Frame):
                                          self._on_batch_src_class_change)
 
         # Row C2: Folder source group (ẩn ban đầu, hiện khi mode="folder")
-        self._batch_src_folder_frame = Frame(lf, bg=CARD)
+        self._batch_src_folder_frame = Frame(self._batch_body, bg=CARD)
         # KHÔNG pack ngay — hiện theo _on_batch_src_mode_change
         Label(self._batch_src_folder_frame, text="Thư mục label nguồn:",
               bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
@@ -3828,12 +3840,14 @@ class BBoxEditorTab(Frame):
               relief="flat", font=F_MAIN, bd=2, width=14).pack(side=LEFT, padx=(4, 0))
 
         # Row D: Nhãn đích + chế độ ghi (MỚI — gộp Nhãn đích từ Row 1 cũ + thêm radio)
-        row_d = Frame(lf, bg=CARD)
+        row_d = Frame(self._batch_body, bg=CARD)
         row_d.pack(fill=X, pady=(0, 2))
         Label(row_d, text="→ Nhãn đích:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
-        Entry(row_d, textvariable=self._batch_dst_label_var,
-              bg="#16162a", fg=TEXT, insertbackground=TEXT,
-              relief="flat", font=F_MAIN, bd=2, width=16).pack(side=LEFT, padx=(4, 12))
+        # Phase 6: đổi Entry → Combobox editable (KHÔNG readonly — user cần gõ tên mới)
+        self._batch_dst_combo = ttk.Combobox(
+            row_d, textvariable=self._batch_dst_label_var,
+            values=list(self.label_list), font=F_MAIN, width=16)
+        self._batch_dst_combo.pack(side=LEFT, padx=(4, 12))
         Label(row_d, text="Chế độ:", bg=CARD, fg=DIM, font=F_MAIN).pack(side=LEFT)
         Radiobutton(row_d, text="Chỉ thêm",
                     variable=self._batch_write_mode_var, value="append",
@@ -3845,7 +3859,7 @@ class BBoxEditorTab(Frame):
                     activebackground=CARD, font=F_MAIN).pack(side=LEFT)
 
         # Row E: nút bấm quét
-        row_e = Frame(lf, bg=CARD)
+        row_e = Frame(self._batch_body, bg=CARD)
         row_e.pack(fill=X, pady=(2, 2))
         self._btn_batch_auto = Button(row_e, text="🔍 Quét toàn bộ",
                                       command=self._batch_start_auto,
@@ -3869,7 +3883,7 @@ class BBoxEditorTab(Frame):
         # Không pack ngay — ẩn ban đầu, hiện khi batch đang chạy
 
         # Row F: progressbar + status
-        row_f = Frame(lf, bg=CARD)
+        row_f = Frame(self._batch_body, bg=CARD)
         row_f.pack(fill=X, pady=(0, 2))
         self._batch_pb = ttk.Progressbar(row_f, style="K.Horizontal.TProgressbar",
                                          orient=HORIZONTAL, mode="determinate",
@@ -3880,7 +3894,7 @@ class BBoxEditorTab(Frame):
         self._batch_status_lbl.pack(side=LEFT, fill=X, expand=False)
 
         # Row G: review buttons — ẩn ban đầu, chỉ pack khi review-waiting
-        self._batch_review_frame = Frame(lf, bg=CARD)
+        self._batch_review_frame = Frame(self._batch_body, bg=CARD)
         # KHÔNG pack ngay
 
         Button(self._batch_review_frame, text="✅ Áp dụng & tiếp theo",
@@ -3897,6 +3911,23 @@ class BBoxEditorTab(Frame):
         # Khởi tạo combo + model display sau khi widget đã tạo
         self._refresh_batch_class_combo()
         self._batch_refresh_model_display()
+        # Phase 6: áp dụng trạng thái collapsed ban đầu (đọc từ config hoặc mặc định thu gọn)
+        self._batch_apply_collapse_state()
+
+    def _batch_toggle_collapse(self):
+        """Đảo trạng thái thu gọn/mở rộng khung Batch (Phase 6)."""
+        self._batch_collapsed_var.set(0 if self._batch_collapsed_var.get() else 1)
+        # _bind_cfg trace tự lưu config — không cần gọi save thủ công
+        self._batch_apply_collapse_state()
+
+    def _batch_apply_collapse_state(self):
+        """Áp dụng trạng thái thu gọn/mở rộng dựa trên _batch_collapsed_var (Phase 6)."""
+        if self._batch_collapsed_var.get():  # 1 = thu gọn
+            self._batch_body.pack_forget()
+            self._batch_toggle_btn.config(text="▶ ➕ Bổ sung class hàng loạt")
+        else:  # 0 = mở rộng
+            self._batch_body.pack(fill=X)
+            self._batch_toggle_btn.config(text="▼ ➕ Bổ sung class hàng loạt")
 
     def _on_batch_src_class_change(self, _event=None):
         """Cập nhật nhãn đích khi user đổi class nguồn (chỉ khi đích đang rỗng)."""
@@ -3966,6 +3997,11 @@ class BBoxEditorTab(Frame):
             self._must_have_lb.itemconfig(END, fg=color)
             self._must_not_lb.insert(END, f"{i}: {name}")
             self._must_not_lb.itemconfig(END, fg=color)
+
+        # Phase 6: Combobox nhãn đích batch — dùng plain name (không format "idx: name")
+        # vì _batch_dst_label_var được so khớp trực tiếp bằng string tên nhãn ở _batch_start
+        if hasattr(self, "_batch_dst_combo"):
+            self._batch_dst_combo["values"] = list(self.label_list)
 
     def _resolve_lbl_path(self, fp: Path) -> Path:
         """Tính đường dẫn .txt label từ image path (giống logic _load_image)."""
