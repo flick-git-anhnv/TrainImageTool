@@ -1,7 +1,7 @@
 ---
 task: bbox-batch-add-class
 created: 2026-07-08
-updated: 2026-07-08 20:57
+updated: 2026-07-08 21:30
 status: in-progress
 workflow: WF-FEATURE (rút gọn — PM/BA/UX đã hoàn thành qua AskUserQuestion)
 priority: P2
@@ -75,8 +75,8 @@ Có 2 chế độ quét (chốt qua AskUserQuestion lần 2):
 | # | Bước | Agent | Status | Artifact | Hoàn thành lúc | Ghi chú |
 |---|------|-------|--------|----------|-----------------|---------|
 | 4.1 | Cập nhật TDD: thiết kế UI model-picker-trong-khung, radio nguồn nhãn (model/thư mục), ô nhập nhiều class_id, radio chế độ ghi (append/thay thế), refactor luồng lấy-box-mới thành 1 hàm trừu tượng dùng chung cho worker (model source vs folder source), vị trí đặt logic xoá-trước-khi-ghi. | tech-lead | ✅ | `docs/tech-design/TDD-batch-add-class.md` (mục 8 Amendment, +.docx ✓, .pdf ⚠️ RPC) | 2026-07-08 20:57 | Commit 3fa7f93. Chốt (a)-(g) + tên 7 biến + 6 method mới + 5 method sửa. Text-level write bảo toàn OBB 9-token |
-| 4.2 | Code amendment vào `tab_bbox.py` theo TDD cập nhật. | senior-developer | ⬜ | `tool/features/annotation/tab_bbox.py` (đã sửa) | - | KHÔNG phá hành vi mặc định (Append + Model detect) đã QA pass ở Phase 3 |
-| 4.3 | Review code amendment — đặc biệt: logic xoá-trước-khi-ghi (Thay thế) không xoá nhầm nhãn khác, đọc nhiều class_id nguồn đúng, chế độ Thư mục label không cần load ảnh vẫn hoạt động đúng cho preview (review mode vẫn cần mở ảnh để vẽ canvas, nhưng KHÔNG cần model). | tech-lead | ⬜ | Review comment / approved | - | |
+| 4.2 | Code amendment vào `tab_bbox.py` theo TDD cập nhật. | senior-developer | ✅ | `tool/features/annotation/tab_bbox.py` (commit 970e598) | 2026-07-08 21:25 | KHÔNG phá hành vi mặc định (Append + Model detect) đã QA pass ở Phase 3 |
+| 4.3 | Review code amendment — đặc biệt: logic xoá-trước-khi-ghi (Thay thế) không xoá nhầm nhãn khác, đọc nhiều class_id nguồn đúng, chế độ Thư mục label không cần load ảnh vẫn hoạt động đúng cho preview (review mode vẫn cần mở ảnh để vẽ canvas, nhưng KHÔNG cần model). | tech-lead | ✅ | **APPROVED** — commit 970e598 sẵn sàng QA. Không phát hiện bug thêm ngoài bug signature `_batch_show_review` mà Senior Dev đã sửa. AST + Import OK. | 2026-07-08 21:30 | Không cần vòng lại Senior Dev |
 | 4.4 | Smoke test lại: (a) chế độ Model detect + Append vẫn hoạt động như Phase 3 (regression), (b) chế độ Model detect + Thay thế xoá đúng nhãn cũ, (c) chế độ Thư mục label + Append, (d) chế độ Thư mục label + Thay thế, (e) nhập nhiều class_id nguồn (vd "0,2"), (f) model-picker mới trong khung Batch hoạt động đúng, đồng bộ với ô Model phía trên. | qa-engineer | ⬜ | `docs/test-cases/TC-bbox-batch-add-class.md` (cập nhật, thêm mục Amendment) | - | Chạy thật — KHÔNG mock |
 
 ## Handoff Log (BẮT BUỘC — xem CLAUDE.md §16.5 Bước 4)
@@ -153,6 +153,26 @@ Có 2 chế độ quét (chốt qua AskUserQuestion lần 2):
   - **Commit hash bước 3.1:** không có (không sửa code — chỉ review + cập nhật plan).
   - **KHÔNG cần đọc lại toàn bộ code** — mọi hàm quan trọng đã được review và OK. QA chỉ cần chạy app thật theo 4 kịch bản trên.
 
+### Bước 4.2 — Code amendment (model picker + import folder + replace mode)
+
+- **Đã làm:** Audit toàn bộ 385 dòng thêm mới trong working tree (uncommitted từ session trước). Xác nhận syntax OK và import OK. Phát hiện và sửa 1 bug thật: `_batch_show_review` signature mismatch — được gọi với 2 tham số `(fp, new_boxes_px)` nhưng định nghĩa có 3 tham số `(fp, existing, new_boxes)` → TypeError khi Tkinter dispatch qua `root.after` (chế độ Review/Quét lần lượt sẽ không bao giờ hiện preview). Fix: bỏ tham số `existing` khỏi signature (không được dùng ở bất cứ đâu trong body — body chỉ dùng `new_boxes`). Chạy 20 test thủ công trong scratchpad (không commit) — 20 PASS, 0 FAIL. Commit 970e598.
+- **File/module đã đọc hoặc đổi:**
+  - Đọc: `.claude/plans/PLAN-bbox-batch-add-class-2026-07-08.md`, `docs/tech-design/TDD-batch-add-class.md` (mục 8), `tool/features/annotation/tab_bbox.py` (dòng 4029-4459 = toàn bộ amendment block, 4356-4408 = _batch_worker)
+  - Sửa: `tool/features/annotation/tab_bbox.py` (1 dòng: signature `_batch_show_review` dòng 4419)
+- **Quyết định quan trọng:**
+  - Chỉ có 1 bug thật — signature mismatch `_batch_show_review`. Tất cả các điểm audit khác đều đúng theo TDD.
+  - Audit các method: `_batch_worker` (signature + call args đều khớp), `_batch_start` (gọi worker đúng thứ tự 6 tham số), `_batch_set_ui_state` idle logic (`folder OR model_names` — đúng), `_batch_write_new_lines` (text-level, OBB 9-token không bị parse lại), `_batch_get_new_boxes_for_image` folder+auto (không mở ảnh), `_on_batch_src_mode_change` (pack_forget/pack đúng, không chồng lấn), `_batch_refresh_model_display` (gọi đúng ở init và `_on_det_model_loaded` dòng 3328).
+  - Default path (source_mode="model", write_mode="append") không thay đổi so với Phase 3 — format dòng ghi `f"{cid} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}"` identical.
+- **Bước sau (Tech Lead review — bước 4.3) cần chú ý:**
+  - **Bug đã sửa:** `_batch_show_review` signature: `(fp, new_boxes_px)` → body dùng `new_boxes` đúng, không có vấn đề nào khác.
+  - **Điểm soi kỹ khi review:**
+    1. `_batch_write_new_lines` replace mode: xoá đúng `cid == dst_cid`, giữ nguyên mọi dòng khác kể cả OBB 9-token — verify bằng test A2 đã PASS.
+    2. `_batch_get_new_boxes_for_image` folder+auto: trả `(lines, [], 0, 0)` không mở ảnh — verify bằng test C1 đã PASS.
+    3. `_on_batch_src_mode_change` ẩn/hiện 2 frame: verify không có chồng lấn (code dùng `pack_forget` + `pack` đúng thứ tự).
+    4. Chế độ Review ("Quét lần lượt") với folder source: worker gọi `_batch_get_new_boxes_for_image(..., need_preview_px=True)` — cần mở PIL chỉ để lấy size → convert normalized→pixel cho overlay. Path này CHƯA được test code-level (cần Tkinter GUI thật).
+    5. `_batch_set_ui_state` nhánh idle: `can_run = (src_mode == "folder") or bool(self._det_model_names)` — logic đúng, folder mode không cần model.
+  - **Không có vấn đề về threading** — worker signature và sync events giữ nguyên hoàn toàn từ Phase 3.
+
 ### Bước 4.1 — TDD Amendment (model picker + import folder + replace mode)
 
 - **Đã làm:** Đọc lại code hiện tại (`tab_bbox.py` đoạn 3748-4245 = block Batch Add Class), TDD gốc (mục 1-7), verify line numbers thực tế sau Phase 1-3. Viết mục 8 (Amendment) vào cuối TDD — 7 mục con (8.1-8.5) gồm bối cảnh, 7 quyết định (a)-(g), sequence diagram mermaid, task breakdown 11 sub-task cho Senior Dev, checklist tài liệu. Commit 3fa7f93.
@@ -190,6 +210,53 @@ Có 2 chế độ quét (chốt qua AskUserQuestion lần 2):
   - **Commit hash bước 4.1:** `3fa7f93` (chưa push — theo prompt).
 
 
+
+### Bước 4.3 — Tech Lead review commit 970e598 (amendment)
+
+- **Đã làm:** Review commit 970e598 (385 dòng thêm) theo 5 điểm Senior Dev đề nghị + TDD mục 8. Verify bằng cách đọc code thật + grep tất cả call site (không chỉ tin lời Senior Dev). Kết luận: **APPROVED, không phát hiện bug thêm.** Chi tiết:
+  1. **Bug đã sửa (`_batch_show_review`)** — verify signature `def _batch_show_review(self, fp: Path, new_boxes: list)` (line 4419) khớp CHÍNH XÁC caller `self.root.after(0, self._batch_show_review, fp, new_boxes_px)` (line 4392) → 2 args + `self`. Body chỉ dùng `new_boxes` (line 4434) — không tham chiếu `existing` nào. FIX ĐÚNG.
+  2. **`_batch_write_new_lines` replace mode** — verify text-level: đọc raw text lines (line 4187), filter `if cid == dst_cid: continue` (line 4202), giữ nguyên mọi dòng khác kể cả OBB 9-token có cid ≠ dst_cid (line 4204), append `new_lines_norm` (line 4207), ghi lại UTF-8 (line 4209). KHÔNG round-trip float → an toàn 100% OBB. Bảo toàn dòng lạ (không parse được cid) qua nhánh `except ValueError: keep.append(ln)` (line 4200). ĐÚNG.
+  3. **`_batch_get_new_boxes_for_image` folder+auto** — verify line 4167-4169: `else: return (new_lines_norm, [], 0, 0)` — không mở PIL khi `need_preview_px=False`. Trả `iw=ih=0` (worker chỉ dùng `_iw`/`_ih` với dấu `_` — không sử dụng). Folder+review path (line 4147-4166) mở PIL header chỉ lấy size → convert normalized→pixel cho overlay — logic đúng (dùng `xc±w/2`, `yc±h/2` sau khi nhân iw/ih), verify bằng đọc code kỹ dù chưa test GUI thật. Skip dòng OBB 9-token từ source (line 4138-4139 `if len(parts) != 5: continue`) — hợp lý theo TDD (out of scope).
+  4. **`_on_batch_src_mode_change` ẩn/hiện 2 frame** — verify line 4043-4048: `pack_forget` frame kia TRƯỚC khi `pack` frame mình → KHÔNG chồng lấn dù nhấn radio nhanh. `_batch_src_model_frame` pack ngay lúc build (line 3797 — default mode="model"), `_batch_src_folder_frame` KHÔNG pack lúc build (line 3810 comment).
+  5. **`_batch_set_ui_state` idle** — line 4222: `can_run = (src_mode == "folder") or bool(self._det_model_names)` — folder mode luôn enable, model mode enable khi có `.names`. Consistent với `_refresh_batch_class_combo` (line 3933 delegate về `_batch_set_ui_state`).
+  - **Grep exhaustive** 6 method mới + 4 biến state mới: mọi call site khớp definition (không có dangling reference như bug đã sửa).
+  - **`_read_yolo_ext`/`_write_yolo_ext` cũ**: KHÔNG còn nơi nào gọi từ worker (chỉ còn tham chiếu trong docstring line 4360). Định nghĩa giữ nguyên phòng rollback (line 3977, 4003) như TDD yêu cầu.
+  - **`_batch_start` validate**: line 4260-4303 — model mode check `_det_model / _det_model_names / _batch_src_class_var`; folder mode check `_batch_parse_src_ids / _batch_src_label_dir_var / Path.is_dir()`. Tất cả nhánh đều `messagebox.showwarning + return`, không thread nào bị spawn khi validate fail. ĐÚNG.
+  - **Default path (model+append) IDENTICAL Phase 3**: `source_mode="model"` (line 186) + `write_mode="append"` (line 187). Format ghi `f"{int(dst_cid)} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}"` (line 4117) identical với Phase 3 `_write_yolo_ext`. Text-level append thay round-trip là improvement, không phải regression.
+  - **UI Layout**: Row A (model picker MỚI) + Row B (source radio MỚI) + Row C1 (class combo — moved từ Row 1 cũ) + Row C2 (folder source MỚI, hidden) + Row D (nhãn đích Row 1 cũ + chế độ ghi MỚI) + Row E (3 nút quét Row 1 cũ) + Row F (progressbar Row 2 cũ) + Row G (review buttons Row 3 cũ, hidden). Insert TRƯỚC nút quét, không đảo thứ tự cũ. ĐÚNG.
+- **File/module đã đọc hoặc đổi:** Đọc: `git show 970e598 --stat`, `.claude/plans/PLAN-bbox-batch-add-class-2026-07-08.md`, `tool/features/annotation/tab_bbox.py` (line 170-196 init state, 3315-3330 `_on_det_model_loaded`, 3758-3934 UI build + refresh combo + helpers, 3970-4025 `_resolve_lbl_path` + `_read_yolo_ext` + `_write_yolo_ext`, 4029-4210 6 method mới, 4214-4231 `_batch_set_ui_state`, 4240-4351 `_batch_start` + `_batch_stop`, 4356-4494 `_batch_worker` + UI callbacks). Grep exhaustive 6 method + 4 biến state. KHÔNG SỬA code (không có lỗi cần fix).
+- **Quyết định quan trọng:**
+  - **APPROVED** — không blocker, không request changes, không tự sửa gì thêm.
+  - Bug `_batch_show_review` mà Senior Dev đã sửa được verify là ĐÚNG (single-source-of-truth: signature khớp caller, body dùng new_boxes).
+  - Amendment KHÔNG phá default path Phase 3 — hành vi (model+append) identical bit-by-bit về output file.
+  - Text-level ghi (`_batch_write_new_lines`) an toàn hơn round-trip cũ (`_write_yolo_ext`) — cải thiện, không phải regression.
+  - Điểm 4 (folder+review path — chưa test code-level) đọc code kỹ và tự tin logic đúng, chờ QA GUI test để confirm cuối.
+- **Bước sau (QA Engineer — bước 4.4) cần biết:**
+  - **KHÔNG cần đọc lại toàn bộ code** — mọi hàm quan trọng đã được review + approve. QA chỉ cần chạy code-level test theo pattern Phase 3.
+  - **Entry point**: `python app.py` tại `d:\Tool`. Tab **BBox Editor (v1)**, LabelFrame "➕ Bổ sung class hàng loạt".
+  - **Môi trường**: Agent headless — KHÔNG có Tkinter GUI. QA Phase 3 đã dùng pattern code-level test (import các method rồi test logic) — TIẾP TỤC pattern đó.
+  - **Chuẩn bị test data:**
+    - Bộ ảnh có label (tái dùng data Phase 3): thư mục `runs/detect/train/` hoặc tương tự có ảnh + `.txt` YOLO.
+    - **THÊM**: 1 thư mục label NGUỒN RIÊNG (khác với `lbl_dir_var` của project) để test folder source mode. Có thể tạo bằng script scratchpad: copy 1 vài file `.txt` từ project sang thư mục tạm, sửa lại vài class_id (VD viết đè 1 file có "0 0.5 0.5 0.2 0.2\n2 0.3 0.3 0.15 0.15" để test src_ids={0,2}).
+    - **1 file .txt có mix 5-token + 9-token OBB** trong thư mục ĐÍCH — để test replace mode không phá OBB.
+    - Model: `yolo11n.pt` (đã có tại `d:\Tool\yolo11n.pt`).
+  - **6 kịch bản test bắt buộc (Phase 4):**
+    1. **(a) Model detect + Append (REGRESSION)** — Load model YOLO, chọn class person, default "Chỉ thêm" → Quét toàn bộ → verify file .txt được append box mới, box cũ giữ nguyên (identical Phase 3 QA PASS). Có ít nhất 1 test với file có OBB 9-token → verify KHÔNG bị phá.
+    2. **(b) Model detect + Thay thế** — Cùng thao tác nhưng chọn "Thay thế nhãn cùng class đích" → verify file .txt: (i) dòng có class_id == dst_cid ĐÃ BỊ XOÁ, (ii) dòng có class_id != dst_cid GIỮ NGUYÊN (kể cả OBB 9-token), (iii) box mới được append. Dùng `_batch_write_new_lines` trực tiếp với input mock (existing_lines + replace_mode=True) để verify từng nhánh.
+    3. **(c) Thư mục label + Append** — Chọn radio "📁 Thư mục label", nhập thư mục nguồn, class_id="0", đích="test_person" → Quét toàn bộ → verify: (i) chỉ ảnh có file .txt tương ứng trong nguồn được xử lý, (ii) dòng cid=0 trong nguồn được đọc và append vào file đích với cid=index(test_person). Ảnh không có file nguồn tương ứng → skip im lặng (detected count không tăng).
+    4. **(d) Thư mục label + Thay thế** — Cùng thao tác nhưng "Thay thế" → verify replace logic hoạt động đúng cả với folder source.
+    5. **(e) Nhiều class_id nguồn** — Nhập "0,2,5" hoặc "0; 2; 5" → verify `_batch_parse_src_ids` parse đúng thành `{0,2,5}`, worker đọc TẤT CẢ dòng có cid ∈ {0,2,5} từ file nguồn và append với dst_cid duy nhất. Test edge case: "abc" → err_msg, "" → err_msg, "0,,2" → OK bỏ qua token trống.
+    6. **(f) Model picker mới trong khung Batch** — Test `_batch_refresh_model_display` hiển thị đúng basename của `_det_model_path`, "(chưa load)" khi rỗng. Verify được gọi ở `_on_det_model_loaded` (line 3328) và cuối `_build_batch_add_class_ui` (line 3899). Nút "📂 Đổi model" gọi cùng `_browse_det_model` — verify không tạo model slot riêng.
+  - **Edge case bổ sung:**
+    - Toggle radio nguồn nhãn qua lại nhiều lần → verify không có widget chồng lấn (pack/pack_forget hoạt động đúng).
+    - `_batch_set_ui_state("idle")` khi source_mode="folder" và model chưa load → verify 2 nút Quét vẫn ENABLE (folder mode không cần model).
+    - `_batch_parse_src_ids` test unit riêng — pattern `str.replace(";", ",").split(",")` với input `"0"`, `"0,2,5"`, `"0; 2; 5"`, `"0 2 5"` (space không được — chỉ dấu phẩy/chấm phẩy), `"abc"`, `""`, `"0,,2"`.
+    - `_batch_write_new_lines` với `lbl_path` không tồn tại (ảnh chưa có label) → verify tạo file mới đúng (dùng `mkdir parents`).
+  - **KHÔNG cần regression full Phase 3** — chỉ cần 1 test (a) là đủ verify default path không đổi.
+  - **Artifact bắt buộc bước 4.4:** cập nhật `docs/test-cases/TC-bbox-batch-add-class.md` (thêm mục Amendment, 6 kịch bản mới), gộp DOCX/PDF.
+  - **Commit hash bước 4.3:** cập nhật riêng — Tech Lead approve KHÔNG sửa code.
+
+### Bước 3.2 — QA Engineer smoke test code-level
 
 - **Đã làm:** Code-level smoke test (môi trường agent không có GUI Tkinter). Viết script Python import trực tiếp logic `_read_yolo_ext`, `_write_yolo_ext`, batch worker logic từ source. Chạy real YOLO detect với `yolo11n.pt` trên ảnh thật (`train_batch0.jpg`, có zebra class 22). Tổng 21 TC: 20 PASS, 1 SKIP (edge case GUI), 0 FAIL.
 - **File/module đã đọc hoặc đổi:**
@@ -232,6 +299,8 @@ Không có
 | 2026-07-08 19:29 | Bước 3.1 hoàn thành — Tech Lead review APPROVED commit e6b1f73. Không có blocker. Phát hiện 1 minor UX (không chặn): `_load_image` không reset `_batch_preview_active` → nếu user click image listbox trong review-waiting sẽ thấy preview boxes sai toạ độ trên ảnh mới. Không crash. QA test riêng edge case này. Sẵn sàng chuyển QA. | tech-lead |
 | 2026-07-08 20:15 | Bước 3.2 hoàn thành — QA smoke test code-level (agent headless). 20 PASS / 1 SKIP / 0 FAIL. Bug P3 ghi nhận (preview coords - non-blocker, đã biết). QA sign-off: PASS. Commit fe7a1ec. Plan status: completed. | qa-engineer |
 | 2026-07-08 20:57 | Bước 4.1 hoàn thành — TDD Amendment (mục 8, +475 dòng) chốt 7 quyết định (a)-(g) + tên 7 biến/6 method mới + task breakdown 4.2 (~4h). Text-level write bảo toàn OBB 9-token 100%. Default path (model+append) IDENTICAL bit-by-bit với bản gốc. Commit 3fa7f93 (chưa push). DOCX ✓, PDF ⚠️ RPC (non-blocker). Sẵn sàng chuyển Senior Dev bước 4.2. | tech-lead |
+| 2026-07-08 21:25 | Bước 4.2 hoàn thành — Audit + sửa bug `_batch_show_review` signature mismatch (existing param thừa), 20 test thủ công PASS, AST+Import OK. Commit 970e598 (chưa push). Sẵn sàng Tech Lead review bước 4.3. | senior-developer |
+| 2026-07-08 21:30 | Bước 4.3 hoàn thành — Tech Lead review commit 970e598 APPROVED. Verify lại bug đã sửa (`_batch_show_review(fp, new_boxes)` khớp caller `root.after(0, ..., fp, new_boxes_px)`). Grep 6 method mới + 4 biến state mới: mọi call site khớp definition. `_read_yolo_ext`/`_write_yolo_ext` cũ KHÔNG còn được gọi bởi worker. Default path (model+append) IDENTICAL Phase 3. Text-level `_batch_write_new_lines` an toàn OBB 9-token. `_batch_start` validate đầy đủ theo `source_mode`. Layout Row A/B/C/D/E/F/G không phá cũ. Không sửa gì thêm. Sẵn sàng QA bước 4.4. | tech-lead |
 
 ---
 **Status icons:** ⬜ Todo | 🔄 In Progress | ✅ Done | 🛑 Blocked | ⏭️ Skipped
