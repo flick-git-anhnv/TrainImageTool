@@ -3774,15 +3774,20 @@ class BBoxEditorTab(Frame):
         Amendment Phase 4: thêm Row A (model picker), Row B (source radio),
         Row C1/C2 (model / folder group), Row D (nhãn đích + chế độ ghi).
         Phase 6: LabelFrame thu gọn được qua button toggle trong labelwidget."""
-        lf = LabelFrame(parent, bg=CARD, fg=ACCENT2, font=F_BOLD,
-                        labelanchor=NW, relief="groove", padx=8, pady=4)
-        # Tạo button toggle SAU KHI lf đã tồn tại (tránh circular reference)
+        # Phase 8 hotfix: Frame thuần thay LabelFrame+labelwidget.
+        # Root cause đã reproduce bằng Tk thật: LabelFrame với labelwidget=Button
+        # KHÔNG recalculate reqheight sau khi pack_forget() body con — height bị
+        # frozen ở giá trị cũ (winfo_reqheight() giữ nguyên dù body.winfo_ismapped()==0).
+        # Fix: dùng Frame(relief="groove") + Button header packs fill=X — pattern này
+        # propagate geometry đúng, container shrink về chiều cao button khi body bị ẩn.
+        lf = Frame(parent, bg=CARD, relief="groove", bd=1)
+        lf.pack(fill=X, pady=(2, 0))
+        # Toggle button nằm trực tiếp trong Frame, chiều ngang full (anchor W = căn trái)
         self._batch_toggle_btn = Button(lf, command=self._batch_toggle_collapse,
                                         bg=CARD, fg=ACCENT2, font=F_BOLD,
                                         relief="flat", activebackground=CARD,
-                                        cursor="hand2")
-        lf.configure(labelwidget=self._batch_toggle_btn)
-        lf.pack(fill=X, pady=(2, 0))
+                                        cursor="hand2", anchor=W, padx=8)
+        self._batch_toggle_btn.pack(fill=X)
 
         # Container cho toàn bộ Row A-G — pack/pack_forget khi toggle collapse
         self._batch_body = Frame(lf, bg=CARD)
@@ -3932,12 +3937,13 @@ class BBoxEditorTab(Frame):
         self._batch_apply_collapse_state()
 
     def _batch_apply_collapse_state(self):
-        """Áp dụng trạng thái thu gọn/mở rộng dựa trên _batch_collapsed_var (Phase 6)."""
+        """Áp dụng trạng thái thu gọn/mở rộng dựa trên _batch_collapsed_var (Phase 6).
+        Phase 8: pack body với padx/pady thay vì dùng LabelFrame padx/pady (đã đổi sang Frame)."""
         if self._batch_collapsed_var.get():  # 1 = thu gọn
             self._batch_body.pack_forget()
             self._batch_toggle_btn.config(text="▶ ➕ Bổ sung class hàng loạt")
         else:  # 0 = mở rộng
-            self._batch_body.pack(fill=X)
+            self._batch_body.pack(fill=X, padx=8, pady=(0, 4))
             self._batch_toggle_btn.config(text="▼ ➕ Bổ sung class hàng loạt")
 
     def _on_batch_src_class_change(self, _event=None):
