@@ -1,8 +1,8 @@
 ---
 task: bbox-batch-add-class
 created: 2026-07-08
-updated: 2026-07-08 22:40
-status: in-progress
+updated: 2026-07-08 23:22
+status: completed
 workflow: WF-FEATURE (rút gọn — PM/BA/UX đã hoàn thành qua AskUserQuestion)
 priority: P2
 ---
@@ -150,7 +150,24 @@ Có 2 chế độ quét (chốt qua AskUserQuestion lần 2):
 |---|------|-------|--------|----------|-----------------|---------|
 | 7.1 | Fix 5 điểm trên trong `tab_bbox.py`. Test thủ công: tạo 1 file `.txt` có dòng "0 nan nan nan nan" → mở ảnh đó trong app → verify KHÔNG crash, box lỗi bị bỏ qua (không vẽ). Test `_batch_get_new_boxes_for_image` folder-mode với 1 file nguồn có dòng "9 nan 0.5 0.2 0.2" → verify dòng đó bị lọc bỏ, không lọt vào `new_lines_norm`. | senior-developer | ✅ | `tool/features/annotation/tab_bbox.py` (commit 3417d52) | 2026-07-08 22:36 | 12/12 test PASS. AST OK, Import OK. Ưu tiên P2 — crash bug đang chặn user dùng thật |
 | 7.2 | Review nhanh — xác nhận validate đúng vị trí, không bỏ sót box hợp lệ (false positive lọc nhầm box đúng), không phá logic OBB. | tech-lead | ✅ | **APPROVED (có sửa nhẹ)** commit 3417d52 + follow-up commit aa74f48. Guard `isfinite` đúng vị trí (trước min/max poly4, trước append cả `_read_yolo`/`_read_yolo_ext`). Nới tolerance range check folder branch từ `[0.0, 1.0]` sang `[-0.001, 1.001]` (chống false positive từ rounding). AST + Import OK, 12/12 test edge case PASS. | 2026-07-08 22:40 | Sửa 1 điểm minor (tolerance) — commit riêng aa74f48 |
-| 7.3 | Smoke test tối thiểu: mở lại file label có box NaN (nếu user cung cấp được, hoặc tự tạo file test) → verify không crash; verify path chính (model detect + folder import bình thường, dữ liệu sạch) không bị ảnh hưởng bởi validation mới (không lọc nhầm box hợp lệ). | qa-engineer | ⬜ | Ghi log kết quả trong `docs/test-cases/TC-bbox-batch-add-class.md` (mục Hotfix) | - | Chạy thật, không mock |
+| 7.3 | Smoke test tối thiểu: mở lại file label có box NaN (nếu user cung cấp được, hoặc tự tạo file test) → verify không crash; verify path chính (model detect + folder import bình thường, dữ liệu sạch) không bị ảnh hưởng bởi validation mới (không lọc nhầm box hợp lệ). | qa-engineer | ✅ | `docs/test-cases/TC-bbox-batch-add-class.md` (mục Hotfix Phase 7, +.docx ✅, PDF ⚠️ RPC non-blocker). Commit 706e12a | 2026-07-08 22:55 | 11 PASS / 0 FAIL / 0 SKIP. Code-level test. QA SIGN-OFF PASS. |
+
+### Phase 8: HOTFIX — Bấm nút toggle không thực sự đóng khung Batch (chỉ đổi text ▶, vẫn còn khoảng trắng)
+
+> User phản hồi kèm screenshot (2026-07-08, sau Phase 6): bấm nút "▶ ➕ Bổ sung class hàng loạt" để đóng lại, text đổi đúng thành ▶ (icon collapsed) nhưng khoảng trống lớn (nơi Row A-G từng hiển thị) VẪN CÒN CHIẾM DIỆN TÍCH giữa header và thanh "📋 Attributes" bên dưới — tức về mặt trực quan panel KHÔNG thực sự thu gọn dù trạng thái logic đã đổi đúng.
+
+**Đọc code hiện tại (`_build_batch_add_class_ui`, `_batch_toggle_collapse`, `_batch_apply_collapse_state`, dòng ~3772-3941) cho thấy logic VỀ MẶT ĐỌC CODE tưởng đúng:** `_batch_apply_collapse_state()` gọi `self._batch_body.pack_forget()` khi collapsed=1, đổi text button đúng ▶/▼. KHÔNG tìm thấy `pack_propagate(False)` nào áp lên `lf`/`_batch_body`/`center` gây cản trở tự co lại. → **Cần Senior Dev REPRODUCE THẬT bằng Tk (đã xác nhận khả dụng trong môi trường) để tìm root cause thực sự** — khả năng cao là 1 trong các nguyên nhân sau (không loại trừ nguyên nhân khác chưa nghĩ tới):
+1. `LabelFrame` dùng `labelwidget=Button` có thể giữ lại kích thước tối thiểu (min height) dựa trên nội dung ĐÃ TỪNG hiển thị trước đó do quirk của Tk khi `labelwidget` được set — cần kiểm tra `lf.winfo_reqheight()`/`lf.winfo_height()` trước/sau toggle bằng code thật.
+2. Có thể do MÔI TRƯỜNG THỰC TẾ user đang chạy KHÔNG PHẢI từ source `.py` mới nhất (VD chạy qua bản build/exe cũ đóng gói bằng `KZTEK-Image-Tools.spec`/PyInstaller, hoặc `__pycache__/*.pyc` cache cũ) — Senior Dev cần xác nhận với user hoặc kiểm tra xem có file `.exe`/`dist/` nào khả nghi, và nhắc lại trong báo cáo nếu nghi ngờ đây là nguyên nhân (không tự ý kết luận, chỉ nêu khả năng).
+3. Widget nào đó KHÁC (không phải `_batch_body`) đang chiếm chỗ đó — cần dùng `winfo_children()`/debug print để liệt kê toàn bộ children thực tế của `lf` sau khi collapse, xác nhận `_batch_body` có thực sự bị `pack_forget()` (kiểm tra `_batch_body.winfo_ismapped()` phải trả `False` sau khi bấm) hay không.
+4. Command `self._batch_toggle_collapse` gắn trên Button-làm-labelwidget có thể có race/double-binding nào đó khiến `_batch_apply_collapse_state()` chạy nhưng NGAY SAU ĐÓ có 1 lời gọi khác (VD `_refresh_batch_class_combo` hay `_batch_set_ui_state` nào đó) vô tình gọi lại `self._batch_body.pack(fill=X)` đè lên, khiến visual "bật lại" ngay sau khi vừa ẩn — grep TẤT CẢ nơi gọi `.pack(` liên quan tới `_batch_body` hoặc các Row con để loại trừ.
+
+**Agent chain (hotfix, P2 — bug UI rõ ràng, ảnh hưởng trực tiếp tính năng vừa thêm):** `senior-developer` (reproduce Tk thật + fix) → `tech-lead` (review nhanh).
+
+| # | Bước | Agent | Status | Artifact | Hoàn thành lúc | Ghi chú |
+|---|------|-------|--------|----------|-----------------|---------|
+| 8.1 | Reproduce bằng Tk thật: dựng `BBoxEditorTab` (hoặc tối thiểu đủ để gọi `_build_batch_add_class_ui`), set collapsed=0 (mở), verify `_batch_body` hiện đúng, gọi `_batch_toggle_collapse()` → kiểm tra `_batch_body.winfo_ismapped()`, `lf.winfo_reqheight()` trước/sau. Xác định ĐÚNG root cause (1 trong 4 giả thuyết trên hoặc khác), sửa fix tương ứng, verify lại bằng Tk thật là panel THỰC SỰ co lại (chiều cao `lf` giảm đáng kể, không còn khoảng trắng). | senior-developer | ✅ | `tool/features/annotation/tab_bbox.py` (commit f532e0e) | 2026-07-08 23:16 | Root cause: Giả thuyết 1 CONFIRMED. LabelFrame+labelwidget quirk. Fix: Frame+Button. Verify Tk: 157→28→157px. AST+Import OK. |
+| 8.2 | Review nhanh — xác nhận fix đúng root cause (không phải patch tạm/che triệu chứng), verify bằng Tk thật lại 1 lần nữa độc lập. | tech-lead | ✅ | **APPROVED** commit f532e0e — verify độc lập Tk thật: (a) script cô lập 10 cycle toggle liên tiếp 197↔32px (delta 165px) NHẤT QUÁN không leak; (b) BBoxEditorTab thật 5 cycle 222↔37px (delta 185px), body.ismapped chuyển đúng; (c) đổi source_mode radio khi panel COLLAPSED KHÔNG revive body (test edge case ngoài scope Senior Dev). Không LabelFrame nào khác trong tab_bbox → không có visual inconsistency. AST + Import OK. | 2026-07-08 23:22 | Không sửa thêm code. Plan hoàn tất — sẵn sàng merge/push. |
 
 ## Handoff Log (BẮT BUỘC — xem CLAUDE.md §16.5 Bước 4)
 
@@ -437,6 +454,51 @@ Có 2 chế độ quét (chốt qua AskUserQuestion lần 2):
   - **KHÔNG cần đọc lại code** — mọi điểm đã review kỹ. QA chỉ cần chạy 5 kịch bản trên qua GUI thật.
   - **Commit hash bước 7.2 (Tech Lead fix nhẹ):** `aa74f48` — 4 dòng thay đổi (comment + tolerance).
 
+### Bước 7.3 — QA Engineer smoke test hotfix crash NaN
+
+- **Đã làm:** Chạy smoke test 5 kịch bản (11 TC) bằng code-level (Tk khả dụng nhưng không lái GUI bằng mouse trong môi trường agent). Import trực tiếp `math.isfinite` guard logic từ `tab_bbox.py` thật; simulate `_read_yolo`, `_draw_all_bboxes`, `_batch_get_new_boxes_for_image` folder/model branch; gọi `run_model_predict` với model thật `yolo11n.pt` + ảnh thật `train_batch0.jpg`. 11/11 PASS, 0 FAIL, 0 SKIP. Cập nhật `TC-bbox-batch-add-class.md` + xuất `.docx` (PDF: RPC non-blocker). Commit `706e12a`. Scratchpad dọn sạch.
+- **File/module đã đọc hoặc đổi:**
+  - Đọc: `tool/features/annotation/tab_bbox.py` (dòng 1, 1108-1134, 1390-1410, 4155-4220), `docs/test-cases/TC-bbox-batch-add-class.md` (content cũ), plan file.
+  - Sửa: `docs/test-cases/TC-bbox-batch-add-class.md` (thêm mục Phase 7, 11 TC)
+  - Xuất: `docs/test-cases/TC-bbox-batch-add-class.docx` (PDF thất bại RPC, non-blocker)
+  - Tạo tạm (đã xóa): `scratchpad/qa_hotfix_nan/` (test script + test data)
+- **Quyết định quan trọng:**
+  - Tất cả 11 TC PASS — fix hotfix commit 3417d52 + aa74f48 đúng.
+  - TC-NAN-05b note: class 0 (person) không detect được trên ảnh zebra `train_batch0.jpg` — không phải bug, isfinite=True, PASS vì không crash và append logic đúng.
+  - PDF lỗi RPC giống các phase trước — non-blocker, DOCX có.
+- **Bước sau cần biết:** KHÔNG CÓ — đây là bước cuối cùng. Plan `completed`. Hotfix P2 sẵn sàng merge/push theo quy trình thông thường.
+
+### Bước 8.1 — Senior Developer hotfix toggle collapse
+
+- **Đã làm:** Reproduce bằng Tk thật (script tối thiểu, không cần full BBoxEditorTab). Xác nhận: `body.winfo_ismapped()==False` sau `pack_forget()` nhưng `lf.winfo_reqheight()` vẫn giữ nguyên 161px — LabelFrame không shrink. Fix: thay `LabelFrame(labelwidget=Button)` bằng `Frame(relief="groove", bd=1)` + Button `pack(fill=X)` làm header + body Frame bên dưới. Verify Tk thật: open=157px, collapsed=28px (button only), reopen=157px, toggle lần 2 OK. AST OK, Import OK. Commit f532e0e.
+- **File/module đã đọc hoặc đổi:**
+  - Đọc: plan file (Phase 8), `tool/features/annotation/tab_bbox.py` (dòng 3772-3942)
+  - Sửa: `tool/features/annotation/tab_bbox.py` — `_build_batch_add_class_ui` (thay LabelFrame→Frame+Button), `_batch_apply_collapse_state` (body.pack thêm padx=8, pady=(0,4))
+  - Script test tạm (không commit): scratchpad `test_collapse_repro.py`, `test_fix_verify.py`, `test_final_verify.py`
+- **Quyết định quan trọng:**
+  - Root cause THẬT: Giả thuyết 1 CONFIRMED — Tkinter quirk của `LabelFrame` với `labelwidget=Button`: sau `pack_forget()` body con, `winfo_reqheight()` không recalculate, bị frozen ở giá trị cũ. Không liên quan giả thuyết 2 (exe cũ), 3 (widget khác chiếm chỗ), 4 (re-pack sau).
+  - Fix THAY THẾ THIẾT KẾ (không patch che triệu chứng): loại bỏ hoàn toàn `LabelFrame`+`labelwidget` pattern, dùng `Frame(relief="groove")` + Button header — pattern này propagate geometry đúng trong Tkinter.
+  - Không thay đổi bất kỳ logic nghiệp vụ nào: Row A-G, toggle logic, persist config — tất cả giữ nguyên.
+- **Bước sau (Tech Lead review — bước 8.2) cần biết:**
+  - Root cause đã xác định bằng script Tk thật (không đoán): `LabelFrame+labelwidget quirk`. Fix không phải patch tạm.
+  - Diff gọn: 14 dòng thêm / 8 dòng xóa (2 chỗ: `_build_batch_add_class_ui` và `_batch_apply_collapse_state`).
+  - Kiểm tra cần ưu tiên: (1) `_batch_toggle_btn` vẫn là `Button(lf, ...)` — parent đúng, (2) `_batch_body` vẫn là `Frame(lf, ...)` — parent đúng, (3) `_batch_apply_collapse_state` không có reference nào tới `lf` trực tiếp → không cần sửa thêm, (4) visual: Frame với `relief="groove", bd=1` trông gần giống LabelFrame cũ (có viền groove, không có text label ngoài nữa — nhưng button đã thay thế vai trò label).
+  - Verify lại bằng Tk thật độc lập: copy `test_final_verify.py` từ scratchpad hoặc viết lại tương tự — confirm 157→28→157px.
+
+### Bước 8.2 — Tech Lead review hotfix toggle collapse (commit f532e0e)
+
+- **Đã làm:** Review commit f532e0e (14 dòng thêm / 8 dòng xóa) — không tin số liệu Senior Dev, tự viết 2 script Tk thật độc lập để verify. (1) Script cô lập mô phỏng đúng pattern MỚI (Frame+Button header thay LabelFrame+labelwidget) với 7 Row nội dung: toggle 10 lần liên tiếp → open=197, collapsed=32 (delta 165px), nhất quán tuyệt đối (không leak, không tăng dần). (2) Script khởi tạo BBoxEditorTab thật (full context): 5 cycle toggle → open=222, collapsed=37 (delta 185px), body.ismapped chuyển đúng 1/0. (3) Test edge case ngoài scope Senior Dev: đổi source_mode radio khi panel COLLAPSED — verify body KHÔNG bị revive (`_on_batch_src_mode_change` chỉ pack sub-frame vào `_batch_body` đã unmapped, không revive parent). Verify visual consistency: grep xác nhận KHÔNG có LabelFrame nào khác trong tab_bbox.py → không có concern "tụt hạng thẩm mỹ" so với các khung khác. AST + Import OK.
+- **File/module đã đọc hoặc đổi:**
+  - Đọc: `git show f532e0e` (diff), `tool/features/annotation/tab_bbox.py` (dòng 3770-3960 sau fix, `_on_batch_src_mode_change` dòng 4097-4112, `_batch_set_ui_state` line 4296)
+  - Chạy: `scratchpad/tl_indep_verify_step8_2.py` (10 cycle isolated), `scratchpad/tl_full_context_verify.py` (5 cycle + edge case full tab)
+  - Sửa plan: `.claude/plans/PLAN-bbox-batch-add-class-2026-07-08.md` (status 8.2, updated frontmatter, lịch sử cập nhật)
+- **Quyết định quan trọng:**
+  - **APPROVED** — fix đúng root cause, không phải patch che triệu chứng. Không request changes.
+  - Verify độc lập cho ra delta khác Senior Dev (185px vs 129px) do context khác (full tab vs script cô lập tối thiểu) — không phải bug, chỉ khác content chiếm chiều cao.
+  - Điểm tích cực bonus: `_on_batch_src_mode_change` an toàn ngay cả khi panel collapsed (pack sub-frame vào body đã unmapped ⇒ không hiển thị, không revive parent) — không cần bảo vệ thêm.
+  - Không có `pack_propagate(False)` áp lên `lf` hay `_batch_body` → geometry propagate tự do đúng như Tk expect.
+- **Bước sau cần biết:** KHÔNG CÓ — đây là bước cuối Phase 8, plan đã `completed`. Commit f532e0e sẵn sàng merge/push. Không blocker nào tồn tại. Nếu user báo bug UI khác trong tương lai → mở Phase mới, KHÔNG cần vòng lại Phase 8.
+
 ### Bước 3.2 — QA Engineer smoke test code-level
 
 - **Đã làm:** Code-level smoke test (môi trường agent không có GUI Tkinter). Viết script Python import trực tiếp logic `_read_yolo_ext`, `_write_yolo_ext`, batch worker logic từ source. Chạy real YOLO detect với `yolo11n.pt` trên ảnh thật (`train_batch0.jpg`, có zebra class 22). Tổng 21 TC: 20 PASS, 1 SKIP (edge case GUI), 0 FAIL.
@@ -489,6 +551,9 @@ Không có
 | 2026-07-08 22:36 | Bước 7.1 hoàn thành — Hotfix crash NaN/Inf. Fix 5 diem: import math, _draw_all_bboxes guard, _read_yolo validate, _read_yolo_ext validate, _batch_get_new_boxes_for_image (folder parse+validate, model guard iw/ih+validate). 12/12 test PASS. AST OK. Commit 3417d52. San sang Tech Lead review buoc 7.2. | senior-developer |
 | 2026-07-08 22:28 | Bước 6.2 hoàn thành — Tech Lead review APPROVED commit 8a4dd7b. Verify 4 điểm: (1) labelwidget pattern đúng thứ tự (lf tạo trước → Button master=lf → lf.configure(labelwidget=btn) → lf.pack), (2) `_batch_review_frame` đổi parent sang `_batch_body` — grep 2 nơi pack/pack_forget đều dùng default parent nên vẫn đúng, hành vi khi collapsed=ẩn cả review UI là expected (buttons quét cũng ẩn theo), (3) `_batch_dst_combo` chỉ có 4 reference, không nơi nào set `state=readonly/disabled`, mặc định editable, (4) `_refresh_label_widgets` có guard `hasattr` giống pattern `_rl_from_combo`. Toggle button hiển thị đủ affordance (F_BOLD, arrow ▶/▼, hand2). AST + Import OK. Không sửa thêm code. Phase 6 sẵn sàng, chuyển Phase 7 (hotfix NaN). | tech-lead |
 | 2026-07-08 22:40 | Bước 7.2 hoàn thành — Tech Lead review APPROVED commit 3417d52 + 1 follow-up sửa nhẹ. Verify: (1) `_draw_all_bboxes` guard isfinite đúng vị trí trước `min(xs)/max(ys)` (poly4) và trước tính toán width/height (5-token) — an toàn khỏi silent bug của `min([nan,...])`; (2) `_read_yolo`/`_read_yolo_ext` validate sau `map(float,...)` trước `append` — dòng lỗi được `continue` sạch, không rác vào bboxes; (3) folder branch nới tolerance range `[0.0,1.0]` → `[-0.001,1.001]` để chống false positive từ exporter có floating-point rounding — NaN/Inf vẫn bị chặn bởi isfinite. 12/12 test edge case PASS (bao gồm test box sát biên `cx=0.999,cy=0.001,w=0.002,h=0.002` không bị lọc). AST + Import OK. Sẵn sàng QA bước 7.3. | tech-lead |
+| 2026-07-08 22:55 | Bước 7.3 hoàn thành — QA smoke test hotfix NaN (11 TC). Code-level test (Tk kha dung nhung khong lai duoc GUI). 11 PASS / 0 FAIL / 0 SKIP. Kiem tra day du 5 kich ban: crash cu khong con, box sat bien OK, rounding OK, out-of-range bi loc, regression model detect OK. QA SIGN-OFF PASS. Commit 706e12a. Plan status: completed. | qa-engineer |
+| 2026-07-08 23:16 | Bước 8.1 hoàn thành — Hotfix panel Batch không thu gọn. Root cause xác định bằng Tk thật: LabelFrame+labelwidget quirk (winfo_reqheight frozen). Fix: Frame+Button header thay LabelFrame. Verify Tk: 157→28→157px. AST OK, Import OK. Commit f532e0e. | senior-developer |
+| 2026-07-08 23:22 | Bước 8.2 hoàn thành — Tech Lead review APPROVED commit f532e0e. Verify ĐỘC LẬP 2 script Tk thật: (a) isolated 10 cycle → 197↔32px ổn định không leak; (b) BBoxEditorTab thật 5 cycle → 222↔37px, body.ismapped=1/0 đúng; (c) edge case ngoài scope Senior Dev: đổi source_mode khi panel COLLAPSED KHÔNG revive body. Không LabelFrame khác trong tab_bbox → không có visual inconsistency. AST + Import OK. Plan `completed`. | tech-lead |
 
 ---
 **Status icons:** ⬜ Todo | 🔄 In Progress | ✅ Done | 🛑 Blocked | ⏭️ Skipped
