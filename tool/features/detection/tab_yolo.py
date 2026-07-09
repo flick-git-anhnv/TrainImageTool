@@ -84,6 +84,7 @@ class YoloTab(Frame, YoloModelMixin, YoloImageListMixin, YoloReviewMixin,
         self._pan_origin  = [0, 0]   # _img_pos tại lúc bắt đầu kéo
         self._mmb_pan_start  = None  # middle mouse / Ctrl+drag pan
         self._mmb_pan_origin = [0, 0]
+        self._zoom_settle_after = None  # after-ID: render nhanh (BILINEAR) khi cuộn, LANCZOS khi settle
         self._search_after = None
         self._autoplay_id = None
         self._last_n_det = -1

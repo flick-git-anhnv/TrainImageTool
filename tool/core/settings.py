@@ -51,7 +51,12 @@ def _cfg_dir(key: str) -> str:
 
 
 def _bind_history(key: str, combo, max_items: int = 20):
-    """Bind a ttk.Combobox to a persistent history list in _CFG."""
+    """Bind a ttk.Combobox to a persistent history list in _CFG.
+
+    Nhấn phím Delete khi đang mở dropdown (item đang highlight) sẽ xóa mục đó
+    khỏi lịch sử VÀ lưu lại ngay (trước đây chỉ xóa khỏi hiển thị, mở lại app
+    hoặc combobox khác dùng chung key vẫn thấy mục cũ vì _CFG chưa được cập nhật).
+    """
     hist = _CFG.get(key, [])
     if hist:
         combo["values"] = hist
@@ -75,6 +80,37 @@ def _bind_history(key: str, combo, max_items: int = 20):
     combo.bind("<FocusOut>", _save)
     combo.bind("<Return>",   _save)
     combo.bind("<<ComboboxSelected>>", _save)
+
+    def _delete_selected():
+        try:
+            popdown = combo.tk.call("ttk::combobox::PopdownWindow", combo)
+            lb = f"{popdown}.f.l"
+            sel = combo.tk.call(lb, "curselection")
+            sel = combo.tk.splitlist(sel) if sel else ()
+            if not sel:
+                return
+            idx = int(sel[0])
+            values = list(combo["values"])
+            if idx >= len(values):
+                return
+            removed = values[idx]
+            del values[idx]
+            combo["values"] = values
+            _CFG[key] = [v for v in _CFG.get(key, []) if v != removed]
+            _cfg_save()
+            combo.tk.call(lb, "delete", idx)
+            if combo.get() == removed:
+                combo.set(values[0] if values else "")
+        except Exception:
+            pass
+
+    # Popdown listbox được tạo lazy khi post lần đầu — tạo ngay để bind Delete.
+    try:
+        popdown = combo.tk.call("ttk::combobox::PopdownWindow", combo)
+        lb = f"{popdown}.f.l"
+        combo.tk.call("bind", lb, "<Delete>", combo.register(_delete_selected))
+    except Exception:
+        pass
 
 
 def _push_history(key: str, val: str, max_items: int = 20):

@@ -33,8 +33,13 @@ class YoloCanvasMixin:
 
     # ======================================================== ZOOM / RENDER ==
 
-    def _render_display(self):
-        """Re-render Canvas từ PIL với zoom & pan hiện tại."""
+    def _render_display(self, resample=None):
+        """Re-render Canvas từ PIL với zoom & pan hiện tại.
+
+        resample=None → LANCZOS (chất lượng cao, mặc định). Khi cuộn chuột zoom
+        liên tục, gọi với resample=BILINEAR (nhanh hơn nhiều trên ảnh lớn/zoom cao)
+        rồi debounce một lần render LANCZOS sau khi ngừng cuộn — tránh giật lag.
+        """
         if not _PIL_OK:
             return
         pil = (self._pil1_orig
@@ -45,17 +50,18 @@ class YoloCanvasMixin:
         self.canvas.update_idletasks()
         cw = max(self.canvas.winfo_width(),  400)
         ch = max(self.canvas.winfo_height(), 300)
+        _rs = resample if resample is not None else Image.Resampling.LANCZOS
         if self._zoom_factor == 0.0:
             scale = min(cw / pil.width, ch / pil.height)  # fit inside, giữ tỉ lệ
             nw = max(1, int(pil.width  * scale))
             nh = max(1, int(pil.height * scale))
-            img = pil.resize((nw, nh), Image.Resampling.LANCZOS)
+            img = pil.resize((nw, nh), _rs)
             self._img_pos = [(cw - nw) // 2, (ch - nh) // 2]
             self.lbl_zoom.config(text="Fit")
         else:
             nw = max(1, int(pil.width  * self._zoom_factor))
             nh = max(1, int(pil.height * self._zoom_factor))
-            img = pil.resize((nw, nh), Image.Resampling.LANCZOS)
+            img = pil.resize((nw, nh), _rs)
             self.lbl_zoom.config(text=f"{int(self._zoom_factor * 100)}%")
         self._photo_ref = ImageTk.PhotoImage(image=img)
         self.canvas.delete("all")
@@ -197,4 +203,9 @@ class YoloCanvasMixin:
         self._img_pos[0] = int(cx - (cx - self._img_pos[0]) * ratio)
         self._img_pos[1] = int(cy - (cy - self._img_pos[1]) * ratio)
         self._zoom_factor = new
-        self._render_display()
+        # Render nhanh (BILINEAR) ngay trong lúc cuộn để tránh giật lag khi zoom
+        # cao, rồi settle lại chất lượng cao (LANCZOS) sau khi ngừng cuộn 150ms.
+        self._render_display(resample=Image.Resampling.BILINEAR)
+        if self._zoom_settle_after:
+            self.canvas.after_cancel(self._zoom_settle_after)
+        self._zoom_settle_after = self.canvas.after(150, self._render_display)
