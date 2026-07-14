@@ -404,8 +404,14 @@ class BBoxEditorTab(Frame):
 
         # ── Nhãn có trong ảnh hiện tại ──
         Frame(left, bg=DIM, height=1).pack(fill=X, padx=6, pady=(0, 2))
-        Label(left, text="Nhãn trong ảnh:", bg=CARD, fg=TEXT,
-              font=F_BOLD).pack(pady=(4, 1), padx=8, anchor=W)
+        pres_hdr = Frame(left, bg=CARD)
+        pres_hdr.pack(fill=X, padx=8, pady=(4, 1))
+        Label(pres_hdr, text="Nhãn trong ảnh:", bg=CARD, fg=TEXT,
+              font=F_BOLD).pack(side=LEFT)
+        Button(pres_hdr, text="🗑 Xóa nhãn này", command=self._delete_present_label,
+               bg="#c62828", fg="white", activebackground="#8b0000",
+               activeforeground="white", font=("Segoe UI", 8),
+               relief="flat", padx=6, cursor="hand2").pack(side=RIGHT)
         pres_frm = Frame(left, bg=CARD)
         pres_frm.pack(fill=X, padx=6, pady=(0, 4))
         self._present_lb = Listbox(pres_frm, bg="#16162a", fg=TEXT,
@@ -420,6 +426,7 @@ class BBoxEditorTab(Frame):
         pres_sb_x.pack(side=BOTTOM, fill=X)
         self._present_lb.pack(fill=BOTH, expand=True)
         self._present_lb.bind("<<ListboxSelect>>", self._on_present_lb_select)
+        self._present_lb.bind("<Delete>", lambda e: self._delete_present_label())
 
         Label(left, text="Nhãn (class)", bg=CARD, fg=TEXT,
               font=F_BOLD).pack(pady=(4, 2), padx=8, anchor=W)
@@ -2112,6 +2119,26 @@ class BBoxEditorTab(Frame):
         self._selected = max(self._selected_set) if self._selected_set else -1
         self._render()
         self._update_info_lbl()
+
+    def _delete_present_label(self):
+        sel = self._present_lb.curselection()
+        if not sel:
+            self._status.config(text="Chưa chọn nhãn nào trong 'Nhãn trong ảnh' để xóa")
+            return
+        idx = sel[0]
+        if idx >= len(self._present_label_cids):
+            return
+        cid  = self._present_label_cids[idx]
+        name = self.label_list[cid] if cid < len(self.label_list) else str(cid)
+        n    = sum(1 for b in self._bboxes if b[0] == cid)
+        if not messagebox.askyesno(
+                "Xóa nhãn",
+                f"Xóa toàn bộ {n} bbox thuộc nhãn [{cid}] {name} trong ảnh này?\n"
+                "Các nhãn khác trong file label vẫn được giữ nguyên."):
+            return
+        self._selected_set = {i for i, b in enumerate(self._bboxes) if b[0] == cid}
+        self._delete_selected()
+        self._status.config(text=f"Đã xóa nhãn [{cid}] {name}  ({n} bbox)  |  {len(self._bboxes)} bbox còn lại")
 
     # ── Xóa hình hiện tại ─────────────────────────────────────────────────────
 

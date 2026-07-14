@@ -184,10 +184,11 @@
   "ip.to": "2026-07-05 23:59:59",
   "h.yolo.model": [
     "D:/Software/Model/kztek_v6_scratch_200ep/weights/best.pt",
+    "C:/Users/nguye/Downloads/best3006.pt",
+    "C:/Users/nguye/Desktop/rfdetr-nano (1).onnx",
     "D:/Software/Model/kztek_train_1280_05072026_2_s1/weights/best.pt",
     "K:/Software/Label/Model/VietAnh/kztek_train_03072026/weights/best.pt",
     "D:/Software/Model/kztek_train_segment_03072026/weights/best.pt",
-    "C:/Users/nguye/Desktop/rfdetr-nano (1).onnx",
     "K:/Software/Label/Model/VietAnh/kztek_train_02072026/weights/best.pt",
     "C:/Users/nguye/Desktop/rfdetr-nano.onnx",
     "D:/Software/Model/kztek_train_02072026/weights/best.pt",
@@ -201,8 +202,7 @@
     "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best2606.pt",
     "D:/Software/Model/kztek_train/weights/best.pt",
     "D:/Software/Model/kztek_test_150ep_v2/weights/best.pt",
-    "D:/Software/Model/kztek_test_100ep/weights/best.pt",
-    "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best2306.pt"
+    "D:/Software/Model/kztek_test_100ep/weights/best.pt"
   ],
   "yolo.model_path": "D:/Software/Model/kztek_v6_scratch_200ep/weights/best.pt",
   "yolo.check_folder": "C:/Users/nguye/Desktop",
@@ -6684,6 +6684,7 @@
   ],
   "cls_test.subfolder": true,
   "h.yolo.model2": [
+    "C:/Users/nguye/Desktop/best.pt",
     "D:/Software/Model/kztek_v6_scratch_200ep/weights/best.pt",
     "C:/Users/nguye/Desktop/rfdetr-nano (1).onnx",
     "K:/Software/Label/Model/VietAnh/kztek_train_02072026/weights/best.pt",
@@ -6702,12 +6703,11 @@
     "K:/Software/1.PhanLoaiPhuongTienChuan/Model/Colab/best_2006.pt",
     "K:/Software/1.PhanLoaiPhuongTienChuan/Model/VietAnh/best.pt",
     "K:/Software/PhanLoaiPhuongTien/TrainModel/kztek_train_20062026_1/weights/best.pt",
-    "K:/Software/PhanLoaiPhuongTien/TrainModel/kztek_train_19062026_3/weights/best.pt",
-    "K:/Software/TrainModel/kztek_train_18062026/weights/best.pt"
+    "K:/Software/PhanLoaiPhuongTien/TrainModel/kztek_train_19062026_3/weights/best.pt"
   ],
   "yolo.conf_thresh": 0.0,
   "yolo.conf": 0.4973846153846154,
-  "yolo.iou": 0.4745384615384615,
+  "yolo.iou": 0.5887692307692308,
   "cls.optimizer": "auto",
   "cls.epochs": "100",
   "cls.cache": "False",
@@ -6945,7 +6945,7 @@
   ],
   "bbox.last_image": "K:\\Software\\Label\\PhanLoaiPhuongTien\\Lotte-VoChiCong\\Parking\\Bike\\00h17m52s_6QMXIB_IMG.jpg",
   "yolo.session.folder": "C:/Users/nguye/Desktop",
-  "yolo.session.image": "C:/Users/nguye/Desktop\\z8022918781594_55429866273d55e88979ffa372a0ee5f.jpg",
+  "yolo.session.image": "C:/Users/nguye/Desktop\\Lộ trình học AI.jpg",
   "bbox.show_label": false,
   "bbox.show_size": true,
   "lotte.keyword": "41703A27",
@@ -7022,7 +7022,7 @@
   "bbox.det_replace": true,
   "train.two_stage": true,
   "yolo.lpr_timeout": 10,
-  "yolo.check_lpr": true,
+  "yolo.check_lpr": false,
   "h.yolo.lpr_url": [
     "http://lpr.demo.kztek.io.vn/alpr",
     "http://192.168.21.202:8000/read-plate",
@@ -7115,8 +7115,8 @@
     "car,motorcycle,bus,truck,bicycle,license_plate,plate_vang,plate_xanh,plate_do"
   ],
   "h.yolo.model3": [
-    "C:/Users/nguye/Desktop/rfdetr-nano (1).onnx",
     "C:/Users/nguye/Desktop/rfdetr-nano.onnx",
+    "C:/Users/nguye/Desktop/rfdetr-nano (1).onnx",
     "C:/Users/nguye/Desktop/checkpoint_19.onnx"
   ],
   "seg.img_dir": "D:/Software/valid/images",
