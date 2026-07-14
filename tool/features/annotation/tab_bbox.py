@@ -2130,15 +2130,132 @@ class BBoxEditorTab(Frame):
             return
         cid  = self._present_label_cids[idx]
         name = self.label_list[cid] if cid < len(self.label_list) else str(cid)
-        n    = sum(1 for b in self._bboxes if b[0] == cid)
-        if not messagebox.askyesno(
-                "Xóa nhãn",
-                f"Xóa toàn bộ {n} bbox thuộc nhãn [{cid}] {name} trong ảnh này?\n"
-                "Các nhãn khác trong file label vẫn được giữ nguyên."):
+
+        scope = messagebox.askyesnocancel(
+            "Xóa nhãn",
+            f"Xóa nhãn [{cid}] {name}\n\n"
+            f"Có     → xóa trên TOÀN BỘ ảnh trong folder (đang lọc)\n"
+            f"Không  → chỉ xóa trong ảnh hiện tại\n"
+            f"Hủy    → không làm gì")
+        if scope is None:
             return
-        self._selected_set = {i for i, b in enumerate(self._bboxes) if b[0] == cid}
-        self._delete_selected()
-        self._status.config(text=f"Đã xóa nhãn [{cid}] {name}  ({n} bbox)  |  {len(self._bboxes)} bbox còn lại")
+        if scope:
+            self._delete_label_batch(cid, name)
+        else:
+            n = sum(1 for b in self._bboxes if b[0] == cid)
+            self._selected_set = {i for i, b in enumerate(self._bboxes) if b[0] == cid}
+            self._delete_selected()
+            self._status.config(
+                text=f"Đã xóa nhãn [{cid}] {name}  ({n} bbox, ảnh hiện tại)  |  {len(self._bboxes)} bbox còn lại")
+
+    def _delete_label_batch(self, cid: int, name: str):
+        """Xóa toàn bộ bbox thuộc 1 nhãn (cid) trên nhiều file label .txt trong folder,
+        đồng bộ luôn file .attrs.json tương ứng. Các nhãn khác được giữ nguyên."""
+        files = [fp for _, fp in self._filtered_files] if self._filtered_files else list(self.image_files)
+        if not files:
+            messagebox.showwarning("Cảnh báo", "Không có ảnh nào để xử lý.")
+            return
+
+        scope_desc = f"{len(files)} ảnh"
+        if not messagebox.askyesno(
+                "Xác nhận xóa hàng loạt",
+                f"Xóa toàn bộ bbox thuộc nhãn [{cid}] {name} trong {scope_desc}?\n\n"
+                f"Thao tác sẽ sửa trực tiếp file label (.txt), các nhãn khác được giữ nguyên."):
+            return
+
+        import json
+        lbl_dir = self.lbl_dir_var.get().strip()
+        changed_files  = 0
+        changed_bboxes = 0
+
+        for fp in files:
+            lbl_path = (Path(lbl_dir) / (fp.stem + ".txt")
+                        if lbl_dir else fp.parent / (fp.stem + ".txt"))
+            if not lbl_path.exists():
+                continue
+            try:
+                raw_lines = lbl_path.read_text(encoding="utf-8").splitlines()
+            except Exception:
+                continue
+
+            attrs_path = self._attrs_path(lbl_path)
+            attrs_data = None
+            if attrs_path.exists():
+                try:
+                    _d = json.loads(attrs_path.read_text(encoding="utf-8"))
+                    if isinstance(_d, list):
+                        attrs_data = _d
+                except Exception:
+                    attrs_data = None
+            new_attrs = [] if attrs_data is not None else None
+
+            out_lines    = []
+            file_changed = False
+            valid_idx    = 0
+            for line in raw_lines:
+                parts = line.strip().split()
+                valid = False
+                line_cid = None
+                if parts:
+                    try:
+                        line_cid = int(parts[0])
+                        if len(parts) == 5:
+                            valid = all(math.isfinite(v) for v in map(float, parts[1:5]))
+                        elif len(parts) == 9:
+                            valid = all(math.isfinite(v) for v in map(float, parts[1:9]))
+                    except ValueError:
+                        valid = False
+
+                if not valid:
+                    out_lines.append(line)
+                    continue
+
+                cur_attr_idx = valid_idx
+                valid_idx += 1
+                if line_cid == cid:
+                    file_changed   = True
+                    changed_bboxes += 1
+                    continue  # bỏ dòng này = xóa bbox khỏi file
+                out_lines.append(line)
+                if new_attrs is not None:
+                    new_attrs.append(attrs_data[cur_attr_idx]
+                                      if cur_attr_idx < len(attrs_data)
+                                      else self._default_attrs())
+
+            if file_changed:
+                try:
+                    lbl_path.write_text("\n".join(out_lines), encoding="utf-8")
+                    changed_files += 1
+                    if new_attrs is not None:
+                        self._write_attrs_to(attrs_path, new_attrs)
+                except Exception:
+                    pass
+
+        # Reload ảnh hiện tại nếu bị ảnh hưởng
+        if self.current_idx >= 0 and self._pil_img is not None:
+            fp = self.image_files[self.current_idx]
+            lbl_path = (Path(lbl_dir) / (fp.stem + ".txt")
+                        if lbl_dir else fp.parent / (fp.stem + ".txt"))
+            if lbl_path.exists():
+                self._bboxes     = self._read_yolo(lbl_path)
+                self._bbox_attrs = self._read_attrs(
+                    self._attrs_path(lbl_path), len(self._bboxes))
+            else:
+                self._bboxes     = []
+                self._bbox_attrs = []
+            self._modified     = False
+            self._selected     = -1
+            self._selected_set = set()
+            self._render()
+            self._refresh_present_labels()
+            self._refresh_attr_bar()
+
+        self._thumb_cache.clear()
+        self._update_filmstrip()
+        msg = (f"✅ Đã xóa nhãn [{cid}] {name}  |  "
+               f"{changed_bboxes} bbox trong {changed_files}/{len(files)} ảnh")
+        self._status.config(text=msg)
+        messagebox.showinfo("Hoàn tất", msg)
 
     # ── Xóa hình hiện tại ─────────────────────────────────────────────────────
 

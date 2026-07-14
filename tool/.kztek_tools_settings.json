@@ -7202,5 +7202,5 @@
   "bbox.batch.write_mode": "replace",
   "bbox.batch.src_class_ids": "10",
   "bbox.batch.src_label_dir": "C:/Users/nguye/Desktop/Test/yolo_labels",
-  "bbox.batch.collapsed": 0
+  "bbox.batch.collapsed": 1
 }
