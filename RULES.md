@@ -14,7 +14,8 @@ CTO  (Cấp cao nhất)
 │   ├── Tech Lead
 │   │   ├── Senior Developer
 │   │   ├── Junior Developer
-│   │   └── Code Migrator          ← CHỈ khi user yêu cầu migrate code (Opus khi lập plan, Sonnet khi code)
+│   │   ├── Code Migrator          ← CHỈ khi user yêu cầu migrate code (Opus khi lập plan, Sonnet khi code)
+│   │   └── GitHub Repo Researcher ← CHỈ khi user gửi link GitHub yêu cầu nghiên cứu (Sonnet)
 │   ├── QA Lead
 │   │   ├── QA Engineer
 │   │   └── UX/UI Reviewer         ← gọi khi code vừa sửa/thêm giao diện
@@ -36,7 +37,7 @@ CTO  (Cấp cao nhất)
 | L1 - Executive | CTO | Phê duyệt kiến trúc, ngân sách, chiến lược kỹ thuật |
 | L2 - Management | Engineering Manager, Product Manager | Phân bổ resource, quyết định scope, đánh giá hiệu suất |
 | L3 - Lead | Tech Lead, QA Lead, DevOps Lead, Project Manager | Phân chia task kỹ thuật, code review cuối cùng, mentor |
-| L4 - Senior IC | Senior Developer, Business Analyst, UI/UX Designer, Documentation Writer (chỉ khi user yêu cầu), Code Migrator (Opus — chỉ khi lập plan migrate, chỉ khi user yêu cầu) | Thiết kế giải pháp, code review, làm task khó |
+| L4 - Senior IC | Senior Developer, Business Analyst, UI/UX Designer, Documentation Writer (chỉ khi user yêu cầu), Code Migrator (Opus — chỉ khi lập plan migrate, chỉ khi user yêu cầu), GitHub Repo Researcher (Sonnet — chỉ khi user gửi link GitHub) | Thiết kế giải pháp, code review, làm task khó |
 | L5 - Junior IC | Junior Developer, QA Engineer, DevOps Engineer, UX/UI Reviewer (gọi khi code vừa đổi/thêm giao diện) | Thực thi task được giao, học hỏi, báo cáo tiến độ |
 
 **Nguyên tắc:** Cấp dưới KHÔNG được phép tự ý quyết định ngoài phạm vi task được giao. Khi gặp vấn đề vượt thẩm quyền, PHẢI escalate lên cấp trên trực tiếp.
@@ -80,6 +81,8 @@ Engineering Manager / CTO (release sign-off)
 > **UX/UI Reviewer:** bỏ qua bước này nếu thay đổi chỉ ở backend/logic, không đụng giao diện. Áp dụng tương tự cho luồng Bug fix, Hotfix, Fast-Track, Refactor nếu có đổi UI.
 >
 > **Code Migrator:** KHÔNG nằm trong luồng "Yêu cầu mới" ở trên. Chỉ dùng cho yêu cầu riêng "chuyển đổi framework/ngôn ngữ/UI stack" (xem `CLAUDE.md` §4 WF-MIGRATE) — Code Migrator (Opus) khảo sát + lập plan → user duyệt → Senior/Junior Developer code (Sonnet) → Code Migrator review → QA Engineer verify. KHÔNG tự động chạy trong luồng feature/bug thông thường.
+>
+> **GitHub Repo Researcher:** KHÔNG nằm trong luồng "Yêu cầu mới" ở trên. Chỉ dùng khi user gửi link GitHub repo và yêu cầu nghiên cứu (xem `CLAUDE.md` §4 WF-GITHUB-RESEARCH) — Phase 0 audit → tạo nhánh → clone & phân tích → **viết phân tích repo TRƯỚC** (mục đích/cấu trúc/điểm nổi bật, không kèm đề xuất) → sau đó rẽ theo 2 mục đích: **Mode A (cải tiến KZTEK)** viết bảng đề xuất riêng biệt → user duyệt → áp dụng → user xác nhận merge → merge main; **Mode B (học tập/tham khảo cá nhân)** hỏi user muốn tìm hiểu nguyên lý/cách áp dụng nào → giải thích tương tác đến khi user xác nhận đã nắm rõ → viết tài liệu tổng hợp → merge. KHÔNG tự merge khi chưa có xác nhận rõ ràng của user tại thời điểm merge (áp dụng cho cả 2 Mode).
 
 ### 3.2. Luồng báo cáo (Reporting Flow)
 
@@ -98,7 +101,7 @@ Engineering Manager / CTO (release sign-off)
 3. KHÔNG làm thay đổi luồng nghiệp vụ (Business Logic) hiện tại.
 4. KHÔNG đụng chạm đến cơ sở dữ liệu (Database Schema) hoặc luồng xác thực (Auth Core).
 
-**Luồng thực thi Fast-Track:**
+**Luồng thực thi Fast-Track (tham khảo nhanh):**
 Người dùng giao task nhỏ
 ↓
 Dispatcher (Phân loại tự động thành WF-FASTTRACK)
@@ -115,6 +118,31 @@ QA Engineer (Smoke Test nhanh bằng tay trên staging, không cần tạo Test 
 ↓
 DevOps Engineer (Deploy thẳng lên môi trường đích)
 > **Lưu ý an toàn:** Nếu Tech Lead trong lúc review phát hiện tác động của task Fast-Track lớn hơn dự kiến (ví dụ: ảnh hưởng đến file core trên Code Graph), Tech Lead có quyền HỦY Fast-Track và ép luồng này quay trở lại trạng thái chờ duyệt PPP thông thường.
+
+---
+
+### 3.4. Nguyên tắc song song hoá (Parallel Execution) — bổ sung, lấy cảm hứng từ Ruflo/Claude Flow
+
+**Mục tiêu:** Rút ngắn thời gian workflow bằng cách chạy các bước ĐỘC LẬP đồng thời, thay vì ép tuần tự khi không cần thiết. KHÔNG áp dụng cho bất kỳ cặp bước nào có quan hệ review/approve (vi phạm Two-Eyes Principle §5).
+
+**Điều kiện BẮT BUỘC để 2 bước được chạy song song (phải thỏa mãn TẤT CẢ):**
+1. Cả hai bước cùng nhận input từ MỘT bước trước đó — không bước nào phụ thuộc output của bước kia.
+2. Không có quan hệ "làm → review/approve" giữa 2 bước.
+3. Artifact của 2 bước độc lập nhau — không cùng ghi vào 1 file tại cùng thời điểm (nếu có, phải tuần tự phần đó).
+4. Cả hai đều đã đủ điều kiện bắt đầu ngay (không blocked, không chờ user).
+
+**Danh sách cặp bước đã xác định đủ điều kiện song song** (ký hiệu `∥` trong `CLAUDE.md` §4):
+- WF-FEATURE: Senior Developer (code phần phức tạp) ∥ Junior Developer (code CRUD/UI đơn giản) — cùng nhận task breakdown từ Tech Lead.
+- WF-FEATURE / WF-BUGFIX / WF-HOTFIX / WF-FASTTRACK / WF-REFACTOR (khi có UXR): UX/UI Reviewer (đánh giá trực quan) ∥ QA Engineer (test chức năng) — cùng nhận code đã merge, không phụ thuộc lẫn nhau.
+- WF-SPRINT: Business Analyst (AC check) ∥ Tech Lead (pre-estimate) — cùng dùng backlog từ Product Manager.
+
+**Cách thực thi:** Dispatcher gọi nhiều subagent trong CÙNG 1 lời gọi Agent tool (không tuần tự từng cái một). Mỗi agent vẫn PHẢI tự tạo đủ artifact riêng theo đúng domain (§11 CLAUDE.md) — song song hoá KHÔNG được phép làm giảm chất lượng artifact hay bỏ qua bất kỳ bước kiểm tra nào.
+
+**TUYỆT ĐỐI KHÔNG song song hoá:**
+- Bất kỳ cặp bước nào một bên review/approve output của bên kia (VD: Senior Dev code → Tech Lead review PHẢI tuần tự).
+- Các bước ghi đè lên cùng 1 file/artifact cùng lúc.
+- Bất kỳ bước nào trong WF-INCIDENT liên quan quyết định rollback/hotfix (cần quyết định tuần tự, trách nhiệm rõ ràng theo từng người).
+
 ---
 
 ## 4. QUY TẮC GIAO VIỆC (Delegation Rules)
@@ -186,6 +214,8 @@ Trong Claude Code, gọi agent bằng cách:
 - "Cần thiết kế kiến trúc microservice" → Tech Lead, có thể escalate lên CTO.
 - "Chuyển đổi project WinForms sang Avalonia" → Code Migrator tiếp nhận (chỉ khi yêu cầu rõ ràng, không tự động).
 - Sau khi Senior/Junior Developer code xong màn hình mới → UX/UI Reviewer tự động được gọi kiểm tra trực quan trước khi QA vào.
+- "Nghiên cứu repo https://github.com/... này giúp tôi" → GitHub Repo Researcher tiếp nhận (chỉ khi có link GitHub, không tự động).
+- "Xem repo https://github.com/... này cho tôi học/tìm hiểu công nghệ, chưa cần áp dụng vào KZTEK" → GitHub Repo Researcher tiếp nhận, chạy Mode B (giải thích nguyên lý/hướng dẫn áp dụng tương tác, không bắt buộc đề xuất/merge code vào KZTEK).
 
 ---
 

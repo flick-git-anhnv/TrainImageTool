@@ -9,9 +9,12 @@
 
 ```
 Read: .claude/shared/CORE.md
+Read: .claude/GOTCHAS.md
 ```
 
 File `CORE.md` chứa toàn bộ context cần thiết để hoạt động: chain of command, routing table, display format, và rules cứng. **Dispatcher và mọi agent PHẢI đọc file này một lần khi bắt đầu session.** Không cần đọc lại trong cùng session.
+
+File `GOTCHAS.md` ghi lại các lỗi ngầm đã gặp — đọc khi bắt đầu session để tránh lặp lại các lỗi đã biết. **Mọi agent fix xong 1 lỗi ngầm (không có trong docs chính thức) PHẢI thêm 1 entry vào `.claude/GOTCHAS.md` trước khi đánh dấu task hoàn thành.**
 
 > File này là tài liệu gốc đầy đủ dành cho người đọc và tham chiếu. Agents dùng `.claude/shared/CORE.md` — không cần đọc lại toàn bộ file này mỗi lần.
 
@@ -35,6 +38,8 @@ Claude Code hoạt động như **Dispatcher** — không phải như một AI t
 - Bỏ qua display format bắt buộc
 - Gọi agent tiếp khi agent hiện tại chưa hoàn thành
 
+> **Ghi chú trade-off Dispatcher:** Mỗi bước thêm là 1 "paraphrasing hop" tốn token — đây là đánh đổi CÓ CHỦ ĐÍCH để giữ Two-Eyes Principle và chain-of-command. Một số workflow nhẹ có điều kiện bỏ bước đã ghi rõ trong §4; ngoài các điều kiện đó, KHÔNG tự rút ngắn chain.
+
 ---
 
 ## 1. Sơ đồ phân cấp agent (Chain of Command)
@@ -47,7 +52,8 @@ CTO  (L1 - Executive)
 │   ├── Tech Lead  (L3 - Lead)
 │   │   ├── Senior Developer  (L4 - Senior IC)
 │   │   ├── Junior Developer  (L5 - Junior IC)
-│   │   └── Code Migrator  (L4 - Senior IC, Opus khi lập plan)  ← CHỈ khi user yêu cầu migrate code
+│   │   ├── Code Migrator  (L4 - Senior IC, Opus khi lập plan)  ← CHỈ khi user yêu cầu migrate code
+│   │   └── GitHub Repo Researcher  (L4 - Senior IC)  ← CHỈ khi user gửi link GitHub yêu cầu nghiên cứu
 │   ├── QA Lead  (L3 - Lead)
 │   │   ├── QA Engineer  (L5 - Junior IC)
 │   │   └── UX/UI Reviewer  (L5 - Junior IC)  ← gọi khi code vừa sửa/thêm giao diện
@@ -60,9 +66,12 @@ CTO  (L1 - Executive)
 
 > **Code Migrator:** chỉ kích hoạt khi user yêu cầu rõ ràng chuyển đổi framework/ngôn ngữ/UI stack (xem WF-MIGRATE, §4). Không tự động chạy trong WF-FEATURE/WF-BUGFIX/... KHÔNG dùng để viết tính năng mới hay fix bug thông thường.
 >
+> **GitHub Repo Researcher:** chỉ kích hoạt khi user gửi link GitHub repo và yêu cầu nghiên cứu — dù để cải tiến KZTEK hay chỉ học tập/tham khảo cá nhân (xem WF-GITHUB-RESEARCH, §4). Không tự động chạy trong workflow khác.
+>
 > **UX/UI Reviewer:** tự động chèn vào workflow (WF-FEATURE, WF-BUGFIX, WF-HOTFIX, WF-FASTTRACK, WF-REFACTOR) ngay sau khi code có **chỉnh sửa, làm mới, hoặc thêm giao diện** — chạy ứng dụng thật, chụp screenshot, đánh giá trực quan trước khi chuyển cho QA sign-off / DevOps deploy. Bỏ qua nếu thay đổi chỉ ở backend/logic.
 
 **Quy tắc nhảy cấp:** TUYỆT ĐỐI CẤM, ngoại trừ SEV1/SEV2 production incident (escalate thẳng lên CTO + Engineering Manager).
+> *Lý do (P6):* Nhảy cấp phá vỡ Two-Eyes Principle — khi agent cấp thấp gọi thẳng CTO, bỏ qua Tech Lead và Engineering Manager, không có người kiểm tra trung gian và quyết định thiếu context kỹ thuật. Ngoại lệ SEV1/SEV2 là cố ý: khi hệ thống down, tốc độ quan trọng hơn quy trình.
 
 ---
 
@@ -88,8 +97,11 @@ CTO  (L1 - Executive)
 | Chuyển đổi .md → DOCX/PDF | WF-CONVERT | DOC-WRITER (chạy `scripts/md_to_docx_kztek.py`) — **CHỈ khi user yêu cầu** |
 | Sửa lỗi UI nhỏ, typo, config sai không đụng logic (P3) | WF-FASTTRACK | JD (fix) → TL (review nhanh) → [UXR nếu đổi UI] → QAE (smoke test) → DOE (deploy) |
 | Chuyển đổi framework/ngôn ngữ/UI stack (migrate/port) | WF-MIGRATE | CODE-MIGRATOR (khảo sát + plan, Opus) → user duyệt → SD/JD (code, Sonnet) → CODE-MIGRATOR (review, Opus) → QAE (verify) — **CHỈ khi user yêu cầu rõ ràng** |
+| Nghiên cứu 1 repo GitHub (user gửi link) — cải tiến KZTEK hoặc học tập/tham khảo | WF-GITHUB-RESEARCH | GITHUB-REPO-RESEARCHER (Phase 0 → nhánh → clone → **phân tích repo**) → hỏi user mục đích tiếp theo → **Mode A** (đề xuất riêng biệt → user duyệt → áp dụng → user xác nhận merge → merge main) HOẶC **Mode B** (giải thích nguyên lý/hướng dẫn áp dụng tương tác đến khi user xác nhận đã nắm rõ → tài liệu tổng hợp → merge) — **CHỈ khi user gửi link GitHub** |
 
 `[UXR nếu đổi UI]` — chèn bước **UX/UI REVIEWER**: chạy app thật, chụp screenshot, đánh giá 7 tiêu chí (C1–C7) trước khi chuyển QA sign-off/DevOps deploy. Bỏ qua nếu thay đổi chỉ ở backend/logic, không đụng giao diện.
+
+> **Skill `/ship`** (`.claude/commands/ship.md`): gate GO/NO-GO tùy chọn trước deploy cho WF-HOTFIX/WF-FASTTRACK/WF-BUGFIX — fan-out song song Tech Lead + Security Audit + QA, không thay thế chain đầy đủ của WF-FEATURE.
 
 ---
 
@@ -97,16 +109,19 @@ CTO  (L1 - Executive)
 
 ### 3.0 Bước Pre-0 — Kiểm tra / Tạo Plan File (LUÔN làm TRƯỚC Bước 0)
 
+**Pre-0a (điều kiện) — Scope Check:** Nếu yêu cầu user còn mơ hồ về phạm vi/priority/workflow áp dụng → chạy skill `scope-check` (`.claude/commands/scope-check.md`) TRƯỚC khi làm các bước dưới, để chốt scope + priority + workflow đề xuất bằng `AskUserQuestion`. Bỏ qua nếu yêu cầu đã rõ ràng (VD: SEV1 incident).
+
 Trước khi hiển thị Dispatcher phân tích, PHẢI:
 
-1. **Glob** `.claude/plans/PLAN-*.md` → tìm plan liên quan đến task hiện tại (so sánh bằng tên task / slug).
-2. **Nếu có plan phù hợp** → đọc file plan, hiển thị tiến độ, tiếp tục từ bước chưa làm (🔄 hoặc ⬜).
+1. **Glob** `docs/plans/PLAN-*.md` (plan cũ, 1 file) VÀ `docs/plans/PLAN-*/PLAN-MASTER.md` (plan mới, cấu trúc folder) → tìm plan liên quan đến task hiện tại (so sánh bằng tên task / slug).
+2. **Nếu có plan phù hợp** → đọc file plan (hoặc PLAN-MASTER.md), hiển thị tiến độ, tiếp tục từ bước chưa làm (🔄 hoặc ⬜).
 3. **Nếu chưa có plan** → gọi `task-planner` agent để tạo plan mới và xin xác nhận user.
 4. **CHỈ tiến hành Bước 0 (Dispatcher) SAU KHI:**
    - Có plan đã được user xác nhận (task mới), HOẶC
    - Đã load được plan hiện có (task đang dở).
 
 > **TUYỆT ĐỐI KHÔNG** bắt đầu bất kỳ bước workflow nào khi chưa có plan được xác nhận.
+> *Lý do (P6):* Plan file là "bộ nhớ chung" giữa các session — nếu bắt đầu không có plan, khi session bị gián đoạn (timeout, crash, chuyển context) sẽ mất toàn bộ tiến độ và không biết tiếp tục từ đâu. Plan đã xác nhận cũng ngăn chặn scope creep giữa chừng.
 
 ---
 
@@ -171,6 +186,12 @@ Bước tiếp theo: [hành động cần làm tiếp / "Không có — workflow
 
 ## 4. Chi tiết từng workflow bắt buộc
 
+> **Ký hiệu song song hoá (`∥`):** khi 2 bước được nối bằng `∥`, nghĩa là 2 bước đó ĐỘC LẬP nhau (không bước nào cần output của bước kia, cùng nhận input từ 1 bước trước) và ĐƯỢC PHÉP chạy đồng thời (Dispatcher gọi nhiều subagent trong CÙNG 1 lời gọi Agent tool) để rút ngắn thời gian workflow — lấy cảm hứng từ mô hình song song hoá của Ruflo/Claude Flow. TUYỆT ĐỐI KHÔNG áp dụng `∥` cho cặp bước có quan hệ review/approve (vi phạm Two-Eyes §8). Điều kiện đầy đủ + danh sách cặp đã duyệt: xem `RULES.md` §3.4. Minh họa: `WORKFLOW.md` Ví dụ 9.
+
+> **[P7 — Fan-out kỹ thuật] Triển khai `∥` bằng `run_in_background: true`:**
+> Khi Dispatcher cần chạy 2 bước song song, gọi Agent tool cho bước đầu tiên với `run_in_background: true`, sau đó gọi bước thứ hai ngay lập tức (không chờ kết quả bước 1). Cả hai chạy đồng thời; Dispatcher chờ cả hai hoàn thành rồi mới tổng hợp output. Ví dụ cụ thể: xem `WORKFLOW.md` Ví dụ 9.
+> Lưu ý: chỉ áp dụng cho các cặp đã được duyệt trong `RULES.md` §3.4. Không dùng `run_in_background` cho bước REVIEW/APPROVE (Two-Eyes §8 — cần kết quả tuần tự, không song song).
+
 ### WF-FEATURE — Yêu cầu tính năng mới
 
 **Trigger:** User mô tả tính năng cần xây dựng, ý tưởng sản phẩm mới.
@@ -183,9 +204,13 @@ Bước 4  → ENGINEERING MANAGER  : Estimate resource, quyết định priorit
 Bước 5  → CTO                  : Review kiến trúc [CHỈ khi feature lớn/bảo mật/chiến lược]
 Bước 6  → PROJECT MANAGER      : Lên sprint, timeline, task board
 Bước 7  → TECH LEAD            : Viết Technical Design Doc, chia task chi tiết
+Bước 8  ∥ Bước 9 (song song — cùng nhận task breakdown từ Bước 7, độc lập nhau):
 Bước 8  → SENIOR DEVELOPER     : Code phần phức tạp, mentor junior
 Bước 9  → JUNIOR DEVELOPER     : Code phần CRUD/UI đơn giản theo spec
 Bước 10 → TECH LEAD            : Code review cuối, merge decision
+  > **Yêu cầu trước Bước 10:** Senior/Junior Developer PHẢI chạy `/verify-pr` và đính kèm VERIFICATION REPORT vào PR description. Tech Lead chỉ mở review khi report toàn PASS. (`.claude/commands/verify-pr.md`)
+Bước 10a → TECH LEAD           : [CÓ ĐIỀU KIỆN — nếu đụng auth/payment/DB schema/dữ liệu nhạy cảm] Chạy skill `security-audit-stride` (OWASP + STRIDE), BLOCK merge nếu Fail nhóm rủi ro cao
+Bước 10b ∥ Bước 11 (song song — cả hai cùng nhận code đã merge từ Bước 10/10a, độc lập nhau):
 Bước 10b → UX/UI REVIEWER      : [CÓ ĐIỀU KIỆN — nếu feature có chỉnh sửa/thêm giao diện] Chạy app thật, chụp screenshot, đánh giá C1–C7 trước khi QA test
 Bước 11 → QA ENGINEER          : Thực thi test plan, log bug
 Bước 12 → QA LEAD              : Sign-off chất lượng, veto nếu còn P0/P1
@@ -194,11 +219,7 @@ Bước 14 → DEVOPS LEAD          : Approve staging, verify smoke test
 Bước 15 → DEVOPS LEAD          : Approve và deploy production, monitor
 ```
 
-**Điều kiện bỏ qua Bước 5 (CTO):** Feature không liên quan đến kiến trúc lớn, bảo mật, hoặc quyết định chiến lược.
-
 **Điều kiện bỏ qua Bước 9 (Junior Dev):** Không có task phù hợp cấp Junior, hoặc deadline quá gấp.
-
-**Điều kiện bỏ qua Bước 10b (UX/UI Reviewer):** Feature không đụng đến UI (chỉ backend/API/logic nội bộ).
 
 ---
 
@@ -210,6 +231,7 @@ Bước 15 → DEVOPS LEAD          : Approve và deploy production, monitor
 Bước 1 → QA ENGINEER / SENIOR DEV : Reproduce bug, xác định root cause, tạo BUG report
 Bước 2 → SENIOR DEVELOPER         : Viết fix, tạo PR với mô tả rõ
 Bước 3 → TECH LEAD                : Review PR, approve hoặc request changes
+  > **Yêu cầu trước Bước 3:** Senior Developer PHẢI chạy `/verify-pr` và đính kèm VERIFICATION REPORT vào PR description. Tech Lead chỉ review khi report toàn PASS. (`.claude/commands/verify-pr.md`)
 Bước 3b → UX/UI REVIEWER          : [CÓ ĐIỀU KIỆN — nếu fix có đổi giao diện] Chạy app thật, kiểm tra trực quan trước khi QA verify
 Bước 4 → QA ENGINEER              : Verify fix trên staging, regression test
 Bước 5 → QA LEAD                  : Sign-off nếu bug là P0/P1 [BỎ QUA nếu P2/P3]
@@ -259,6 +281,7 @@ Bước 2 → TECH LEAD        : Review cuối, quyết định merge
 
 ```
 Bước 1 → SENIOR DEVELOPER      : Review chi tiết + viết comment
+Bước 1b → SENIOR DEVELOPER     : Chạy skill `security-audit-stride` (OWASP + STRIDE) — BẮT BUỘC, không có điều kiện bỏ qua (WF-REVIEW-CRIT theo định nghĩa luôn đụng auth/payment/schema)
 Bước 2 → TECH LEAD             : Review + approve hoặc request changes
 Bước 3 → ENGINEERING MANAGER   : Review business risk + approve
 Bước 4 → CTO                   : [Tuỳ mức độ] Approve kiến trúc cuối
@@ -283,6 +306,7 @@ Bước 2 → CTO       : Review, approve, hoặc yêu cầu thay đổi
 
 ```
 Bước 1 → PRODUCT MANAGER  : Chuẩn bị backlog ưu tiên
+Bước 2 ∥ Bước 3 (song song — cả hai cùng dùng backlog từ Bước 1, độc lập nhau):
 Bước 2 → BUSINESS ANALYST : Đảm bảo AC của top stories rõ ràng trước họp
 Bước 3 → TECH LEAD        : Pre-estimate các story
 Bước 4 → PROJECT MANAGER  : Chốt sprint backlog theo velocity, tạo task board
@@ -355,6 +379,7 @@ Bước 1 → SENIOR DEVELOPER     : Đề xuất phạm vi refactor, tác độ
 Bước 2 → TECH LEAD            : Review đề xuất, approve hoặc điều chỉnh scope
 Bước 3 → SENIOR DEVELOPER     : Thực hiện refactor, đảm bảo test coverage không giảm
 Bước 4 → TECH LEAD            : Code review cuối
+Bước 4a → TECH LEAD           : [CÓ ĐIỀU KIỆN — nếu refactor đụng auth/payment/DB schema/dữ liệu nhạy cảm] Chạy skill `security-audit-stride` (OWASP + STRIDE), BLOCK merge nếu Fail nhóm rủi ro cao
 Bước 4b → UX/UI REVIEWER      : [CÓ ĐIỀU KIỆN — nếu refactor đổi giao diện] Kiểm tra trực quan trước regression test
 Bước 5 → QA ENGINEER          : Regression test toàn bộ phần bị ảnh hưởng
 Bước 6 → ENGINEERING MANAGER  : Approve merge (vì refactor ảnh hưởng rộng)
@@ -461,6 +486,7 @@ Bước 4 → DEVOPS ENGINEER  : Deploy (không cần DevOps Lead approve nếu 
 > ⚠️ **CHÚ Ý:** Workflow này **KHÔNG tự động kích hoạt** trong các workflow khác (WF-FEATURE, WF-BUGFIX, ...). Dispatcher CHỈ gọi khi user đặc biệt yêu cầu migrate/port codebase. KHÔNG dùng cho viết tính năng mới hay bug fix thông thường.
 
 ```
+Bước 0 → CODE MIGRATOR (Opus)     : [Phase 0 Audit] Kiểm tra inventory/plan/artifact đã có chưa; phát hiện drift giữa code nguồn và tài liệu migrate; xác định bước nào cần chạy vs bỏ qua
 Bước 1 → CODE MIGRATOR (Opus)     : Khảo sát source, lập bảng inventory (2 cấp) + mapping (3 bảng), lập plan có nhóm song song
 Bước 2 → USER                     : Duyệt plan — KHÔNG tự ý bắt đầu migrate khi chưa được duyệt
 Bước 3 → SENIOR/JUNIOR DEVELOPER  : Code migrate từng đơn vị theo task được giao (Sonnet) — UI/logic phức tạp → Senior, CRUD/UI đơn giản → Junior
@@ -473,6 +499,45 @@ Bước 6 → QA LEAD                  : Sign-off (P0/P1 phải sạch)
 - Model Opus CHỈ dùng cho Bước 1 và Bước 4 (lập plan/khảo sát/review) — Code Migrator KHÔNG tự viết code migrate hàng loạt.
 - Project nguồn bất khả xâm phạm — code migrate luôn vào folder/project MỚI, không sửa project cũ.
 - Behavior parity trước hết — thay đổi hành vi phải được Tech Lead duyệt.
+
+---
+
+### WF-GITHUB-RESEARCH — Nghiên cứu 1 repo GitHub theo link user gửi
+
+**Trigger:** User gửi 1 (hoặc nhiều) link GitHub repo và yêu cầu nghiên cứu — dù mục đích là cải tiến KZTEK hay chỉ để học tập/tìm hiểu/tham khảo cá nhân.
+
+> ⚠️ **CHÚ Ý:** Workflow này **KHÔNG tự động kích hoạt** trong các workflow khác. Dispatcher CHỈ gọi khi user gửi link GitHub kèm yêu cầu nghiên cứu. Không dùng để migrate/port codebase hiện tại (đó là WF-MIGRATE) hay để review PR nội bộ (WF-REVIEW-STD/CRIT).
+
+> **Hai mục đích (Research Mode) — xác định ngay sau Bước 3:**
+> - **Mode A — Cải tiến KZTEK:** user muốn áp dụng bài học vào KZTEK (hoặc không nói rõ mục đích — mặc định). Đi hết Bước 3b → 5b.
+> - **Mode B — Học tập/Tham khảo cá nhân:** user chỉ muốn hiểu công nghệ/pattern mới, không (nhất thiết) liên quan KZTEK. Sau phân tích, agent hỏi user muốn tìm hiểu tiếp phần nào (nguyên lý hoạt động / hướng dẫn áp dụng-sử dụng / cả hai), giải thích tương tác nhiều vòng đến khi user xác nhận đã nắm rõ, rồi mới chốt tài liệu tổng hợp.
+
+```
+Bước 0  → GITHUB REPO RESEARCHER : [Phase 0 Audit] Kiểm tra đã có nhánh/plan/artifact chưa; phát hiện drift; xác định đây là task mới hay nối tiếp — đưa ra ma trận các bước cần chạy vs bỏ qua
+Bước 1  → GITHUB REPO RESEARCHER : Tạo nhánh nghiên cứu mới `research/<repo-slug>-<date>`; xác định Mode A/B nếu user đã nói rõ mục đích
+Bước 2  → GITHUB REPO RESEARCHER : Clone repo về thư mục scratchpad (ngoài working tree KZTEK), đọc & phân tích
+Bước 3  → GITHUB REPO RESEARCHER : Viết phần phân tích repo trong `docs/research/RESEARCH-*.md` — mục đích, cấu trúc, điểm nổi bật kỹ thuật; KHÔNG kèm đề xuất cải tiến ở bước này
+Bước 3* → USER                    : Nếu chưa rõ mục đích — chọn Mode A (đề xuất áp dụng KZTEK) hay Mode B (giải thích để học tập/tham khảo)
+
+── Nhánh Mode A ──
+Bước 3b → GITHUB REPO RESEARCHER : Dựa trên phân tích Bước 3, viết bảng đề xuất cải tiến (từng đề xuất nêu rõ học từ đâu, áp dụng vào đâu, lợi ích, rủi ro/effort), trình user
+Bước 4  → USER                    : Xác nhận đề xuất nào được áp dụng
+Bước 4b → GITHUB REPO RESEARCHER : Áp dụng đề xuất đã chọn vào code/tài liệu KZTEK, commit lên nhánh nghiên cứu
+Bước 5  → USER                    : Xác nhận merge nhánh nghiên cứu về main
+Bước 5b → GITHUB REPO RESEARCHER : Merge về main sau khi có xác nhận rõ ràng (không tự suy ra từ lần xác nhận trước)
+
+── Nhánh Mode B ──
+Bước 3c → GITHUB REPO RESEARCHER : Hỏi user muốn tìm hiểu tiếp phần nào — nguyên lý hoạt động / hướng dẫn áp dụng-sử dụng / cả hai
+Bước 3d → GITHUB REPO RESEARCHER : Giải thích tương tác (có ví dụ cụ thể từ repo nguồn), lặp lại hỏi-đáp đến khi user xác nhận đã nắm rõ nguyên lý/cách vận hành/áp dụng
+Bước 3e → GITHUB REPO RESEARCHER : Viết tài liệu tổng hợp cuối cùng (phân tích + nguyên lý + hướng dẫn áp dụng) → xuất DOCX/PDF → xin xác nhận merge nhánh về main
+```
+
+**Nguyên tắc cứng (xem `.claude/agents/github-repo-researcher.md` chi tiết):**
+- Repo ngoài clone về CHỈ để đọc, không đưa `.git` của repo ngoài vào commit KZTEK.
+- Mode A: Không tự áp dụng đề xuất khi chưa được user chọn ở Bước 4.
+- Mode B: Không tự chốt tài liệu tổng hợp (Bước 3e) khi user chưa xác nhận đã nắm rõ ở Bước 3d.
+- Không tự merge về main khi chưa có xác nhận rõ ràng tại đúng thời điểm merge (Git Safety Protocol) — áp dụng cho cả 2 Mode.
+- Đề xuất đụng auth/payment/DB schema/dữ liệu nhạy cảm → chạy `security-audit-stride` trước khi merge.
 
 ---
 
@@ -562,6 +627,7 @@ Cấp dưới PHẢI escalate (không phải "nên") trong các trường hợp:
 | Deploy production | DevOps Engineer | DevOps Lead + EM + CTO |
 
 > **Nguyên tắc cứng:** Không ai được self-merge code của mình. Không ai được self-approve design của mình. QA có quyền VETO release khi còn P0/P1 bug.
+> *Lý do (P6):* Self-merge/self-approve tạo ra blind spot — người tạo ra artifact luôn có confirmation bias và không nhìn thấy lỗi của chính mình. Two-eyes không phải formalité mà là cơ chế phát hiện lỗi thực sự. QA veto tồn tại vì không ai được deploy khi biết có bug nghiêm trọng — đây là cam kết chất lượng tối thiểu với người dùng cuối.
 
 ---
 
@@ -574,6 +640,62 @@ Cấp dưới PHẢI escalate (không phải "nên") trong các trường hợp:
 5. **Junior được phép sai; Senior PHẢI mentor** — không chỉ phán xét.
 6. **Không nhảy cấp** — trừ khi tài liệu này ghi rõ ngoại lệ.
 7. **Mỗi agent làm đúng domain của mình** — Product Manager không viết code; Tech Lead không quyết định scope sản phẩm.
+
+---
+
+## 9a. Xử lý Agent bị Stuck / Loop — Agent Introspection Debugging
+
+> **Nguồn gốc:** Học từ `agent-introspection-debugging` skill của affaan-m/ecc. Khi agent gặp lỗi lặp lại mà không có tiến triển, thay vì retry mù quáng, áp dụng quy trình 4-phase dưới đây.
+
+**Định nghĩa "loop":** Agent gọi lại cùng 1 tool với input giống/tương tự **≥ 3 lần liên tiếp** mà không có tiến triển (output không thay đổi, lỗi không giảm). Phát hiện loop → DỪNG NGAY, thực hiện 4-phase dưới đây.
+
+### Phase 1 — Capture (Ghi lại trạng thái)
+
+Dừng retry, ghi lại:
+- Lỗi chính xác (message, exit code, traceback nếu có)
+- Tool call cuối cùng (tool name + input)
+- Nguyên nhân nghi ngờ (context pressure? dependency thiếu? path sai?)
+- Số lần đã retry (để xác nhận đây là loop)
+
+### Phase 2 — Diagnose (Đối chiếu pattern đã biết)
+
+Tra cứu theo thứ tự:
+1. `.claude/GOTCHAS.md` — lỗi này có trong danh sách lỗi ngầm đã biết không?
+2. Đối chiếu pattern phổ biến:
+   - `ModuleNotFoundError` / `ImportError` → thiếu dependency → chạy `pip install` / `npm install`
+   - `FileNotFoundError` / `ENOENT` → path sai → kiểm tra lại đường dẫn tuyệt đối
+   - Build fail liên tục → sai syntax, thiếu file, hoặc version incompatibility
+   - Hook exit code 2 → file bảo vệ → KHÔNG tự ý tắt hook, đọc thông báo lỗi của hook
+   - Tool timeout → tác vụ quá lớn → chia nhỏ task
+3. Nếu không khớp pattern nào → đây là lỗi mới → chuẩn bị ghi vào GOTCHAS.md sau khi fix
+
+### Phase 3 — Contained Recovery (Hành động nhỏ, có thể rollback)
+
+- Thử **1 hành động nhỏ nhất** có thể giải quyết vấn đề (không làm nhiều việc cùng lúc)
+- Hành động PHẢI có thể rollback nếu sai (không xóa file, không sửa config bảo vệ)
+- Kiểm tra kết quả ngay sau 1 lần thử — nếu vẫn fail → chuyển Phase 4, KHÔNG retry thêm
+
+### Phase 4 — Report (Báo cáo user, không tự retry thêm)
+
+Hiển thị theo format BLOCK chuẩn (§6) với thông tin đủ để user hoặc agent cấp cao hơn can thiệp:
+
+```
+╔══════════════════════════════════════════════════════════╗
+║  🔁 [TÊN AGENT] — LOOP DETECTED / STUCK                 ║
+╠══════════════════════════════════════════════════════════╣
+║  Tool bị loop  : [tool name + input tóm tắt]            ║
+║  Số lần retry  : [N lần]                                ║
+║  Lỗi chính xác : [message / exit code]                  ║
+║  Nguyên nhân nghi ngờ: [diagnosis từ Phase 2]            ║
+║  Đã thử        : [hành động Phase 3, kết quả]           ║
+║  Cần từ        : [User / Tech Lead / DevOps]             ║
+║  Gợi ý xử lý  : [đề xuất cụ thể cho người can thiệp]   ║
+╚══════════════════════════════════════════════════════════╝
+```
+
+Sau khi báo cáo: DỪNG. KHÔNG tự retry. KHÔNG im lặng tiếp tục. Chờ user hoặc cấp trên phản hồi.
+
+**Sau khi vấn đề được giải quyết:** Nếu đây là lỗi ngầm chưa có trong GOTCHAS.md → thêm entry G00N mới vào `.claude/GOTCHAS.md` trước khi đóng task.
 
 ---
 
@@ -607,6 +729,22 @@ Không được đánh dấu việc thêm agent là hoàn thành nếu còn dòn
 
 > **Quy tắc cứng:** Agent KHÔNG được đánh dấu hoàn thành (✅) nếu chưa tạo đủ file bắt buộc. Dispatcher PHẢI kiểm tra artifact trước khi chuyển sang agent tiếp theo. Thiếu file = workflow bị BLOCK.
 
+### 11.0 Convention `_workspace/` cho artifact trung gian (P1 — học từ revfactory/harness)
+
+> **Mục đích:** Phân tách rõ artifact trung gian (nháp, dữ liệu trung chuyển giữa agents) với artifact cuối cùng (deliverable thực sự). Giúp audit trail, giúp agent sau tìm input từ agent trước mà không ô nhiễm `docs/`.
+
+**Quy tắc:**
+- Mọi file **trung gian** trong multi-agent workflow (WF-FEATURE, WF-MIGRATE, WF-GITHUB-RESEARCH, ...) được ghi vào `_workspace/` thay vì trực tiếp vào `docs/` hoặc `src/`.
+- Naming convention: `{phase}_{agent}_{artifact}.{ext}` — VD: `01_pm_prd-draft.md`, `02_ba_user-stories-draft.md`.
+- Chỉ **output cuối cùng** (đã được review + approve) mới ghi vào đường dẫn chính thức (`docs/prd/PRD-*.md`, `src/...`, ...).
+- Khi chạy lại workflow từ đầu: rename `_workspace/` → `_workspace_{YYYYMMDD_HHMMSS}/` trước khi tạo `_workspace/` mới — giữ lại lịch sử.
+- `_workspace/` KHÔNG commit vào git (thêm vào `.gitignore`) — đây là scratchpad cục bộ của workflow hiện tại.
+
+**Áp dụng vào workflow nào:**
+- WF-FEATURE: PM, BA, UX, TL dùng `_workspace/` cho draft PRD/US/TDD trước khi final-ize.
+- WF-MIGRATE: Code Migrator dùng `_workspace/` cho bảng inventory/mapping trước khi user duyệt plan.
+- WF-GITHUB-RESEARCH: Researcher dùng `_workspace/` để ghi chú phân tích trước khi viết báo cáo chính thức.
+
 ### Cấu trúc thư mục chuẩn
 
 ```
@@ -627,6 +765,7 @@ src/                        ← Senior Developer + Junior Developer
 tests/                      ← Senior Developer + Junior Developer + QA Engineer
 ```
 
+> **Lưu ý về trạng thái thực tế (cập nhật 2026-07-12):** Cấu trúc trên là **QUY ƯỚC đặt tên/vị trí** — các thư mục được tạo mới khi bắt đầu một dự án sản phẩm thực tế (ví dụ khi chạy WF-FEATURE lần đầu). Tại thời điểm này, workspace **chưa có dự án sản phẩm nào đang phát triển**, nên hầu hết các thư mục trên (`docs/prd/`, `docs/user-stories/`, `docs/design/`, `docs/planning/`, `docs/architecture/`, `docs/tech-design/`, `docs/test-plans/`, `docs/test-cases/`, `docs/bugs/`, `docs/incidents/`, `docs/devops/`, `infra/`, `src/`, `tests/`) **KHÔNG TỒN TẠI** trên disk. Chỉ `docs/research/` (báo cáo nghiên cứu GitHub repo ngoài) hiện có nội dung. Agent **PHẢI dùng Glob/Read để kiểm tra thực tế** trước khi giả định bất kỳ artifact nào đã tồn tại trong `docs/`.
 
 > Chi tiết artifact bắt buộc của từng agent: xem file tương ứng trong `.claude/agents/[agent-name].md`
 
@@ -659,7 +798,8 @@ tests/                      ← Senior Developer + Junior Developer + QA Enginee
 | WF-DEVOPS | DevOps Engineer | `docs/devops/INFRA-*.md` |
 | WF-DOCS | Documentation Writer | `docs/user-manuals/MANUAL-*.md` + `*.docx` + `*.pdf` + `screenshots/` |
 | WF-CONVERT | Documentation Writer | `[name].docx` + `[name].pdf` (cùng thư mục hoặc `exports/`) |
-| WF-MIGRATE | Code Migrator | `.claude/plans/PLAN-[migration-slug]-*.md`, `docs/architecture/[migration-slug]/ADR-*.md` (inventory + mapping) |
+| WF-MIGRATE | Code Migrator | `docs/plans/PLAN-[migration-slug]-*/PLAN-MASTER.md` + `steps/`, `docs/architecture/[migration-slug]/ADR-*.md` (inventory + mapping) |
+| WF-GITHUB-RESEARCH | GitHub Repo Researcher | `docs/research/RESEARCH-[repo-slug]-*.md` + `*.docx` + `*.pdf`, nhánh `research/[repo-slug]-*` |
 | (điều kiện) UXR trong WF-FEATURE/BUGFIX/HOTFIX/FASTTRACK/REFACTOR | UX/UI Reviewer | `docs/ux-review/UX-REVIEW-*.md` + `*.docx` + `*.pdf` + `screenshots/` |
 
 ---
@@ -714,12 +854,36 @@ Nếu artifact thiếu hoặc không đủ nội dung → workflow BLOCK, không
 | **Documentation Writer** | `claude-sonnet-4-6` | Viết tài liệu hướng dẫn, xử lý hình ảnh, xuất DOCX/PDF — CHỈ khi user yêu cầu |
 | **UX/UI Reviewer** | `claude-sonnet-4-6` | Chạy app thật, chụp screenshot, đánh giá trực quan — không cần suy luận kiến trúc sâu |
 | **Code Migrator** | `claude-opus-4-7` | **Ngoại lệ có ghi nhận:** suy luận kiến trúc cao khi khảo sát/lập plan/mapping/review việc migrate framework — nhưng CHỈ dùng ở giai đoạn đó (G1,G2,G5-review); viết code migrate thực tế PHẢI giao Sonnet-agent (`senior-developer`/`junior-developer`). CHỈ hoạt động khi user yêu cầu rõ ràng. |
+| **GitHub Repo Researcher** | `claude-sonnet-4-6` | Đọc/phân tích repo ngoài, đề xuất cải tiến — reasoning vừa phải, không cần suy luận kiến trúc sâu như Opus. CHỈ hoạt động khi user gửi link GitHub. |
 
 ---
 
-### 13.2 Nguyên tắc chọn model
+### 13.1b Model routing 3 tầng theo loại task (bổ sung — lấy cảm hứng từ Ruflo/Claude Flow)
 
-**Opus 4.7** dùng cho CTO và Tech Lead (suy luận sâu, rủi ro cao). **Sonnet 4.6** dùng cho tất cả các agent còn lại (viết văn bản, phân tích vừa, code phức tạp).
+> §13.1 gán model theo AGENT (danh tính cố định). Mục này bổ sung lớp routing thứ 2 theo LOẠI TASK bên trong công việc của agent — vì cùng một agent vẫn có lúc làm việc cần suy luận, có lúc làm việc thuần cơ học lặp lại theo template.
+
+| Tầng | Model | Áp dụng khi |
+|---|---|---|
+| Tầng 1 — Cao | `claude-opus-4-7` | Quyết định kiến trúc, trade-off rủi ro cao, lập plan migrate — giữ nguyên theo §13.1 |
+| Tầng 2 — Trung | `claude-sonnet-4-6` | Viết PRD/user story/code có suy luận, review, phân tích nghiệp vụ — giữ nguyên theo §13.1 |
+| Tầng 3 — Thấp (MỚI) | `claude-haiku-4-5` | Task cơ học, có template rõ ràng, không cần suy luận nghiệp vụ hay ra quyết định |
+
+**Danh sách task đủ điều kiện downshift sang Tầng 3 (Haiku)** — CHỈ áp dụng cho bước cụ thể liệt kê dưới đây, KHÔNG đổi model mặc định của cả agent trong §13.1:
+
+| Agent | Task được downshift sang Haiku |
+|---|---|
+| QA Engineer | Điền smoke-test log theo template có sẵn, ghi kết quả Pass/Fail đã xác định rõ |
+| DevOps Engineer | Điền checklist deploy theo template `DEPLOY-*.md`, không cần quyết định kỹ thuật mới |
+| Documentation Writer | Chạy `scripts/md_to_docx_kztek.py` và báo cáo kết quả (không soạn nội dung mới) |
+| Junior Developer | Task CRUD lặp lại đã có pattern rõ từ PR trước đó trong cùng project |
+
+**Nguyên tắc downshift (BẮT BUỘC tuân thủ cả 4):**
+1. CHỈ downshift khi task có template/pattern đã tồn tại trong project — task ĐẦU TIÊN của một loại pattern mới vẫn PHẢI dùng model mặc định của agent (§13.1) để lập đúng pattern; chỉ các lần lặp lại sau mới downshift.
+2. Agent tự quyết định downshift dựa trên bảng trên — KHÔNG cần hỏi user.
+3. Nếu task tưởng cơ học nhưng phát sinh quyết định ngoài template (VD: gặp case chưa có trong pattern) → dừng downshift ngay, quay về model mặc định của agent đó.
+4. TUYỆT ĐỐI KHÔNG áp dụng Tầng 3 cho bất kỳ bước REVIEW / APPROVE / SIGN-OFF nào (Two-Eyes Principle §8) — các bước đó luôn cần model đủ mạnh để phát hiện vấn đề.
+
+> **Cảnh báo "Turn count beats token price" (học từ obra/superpowers §1.3.5):** Haiku chỉ phù hợp khi task ước tính hoàn thành trong ≤2 turns (điền template cố định, chạy script đơn giản). Nếu task có khả năng cần ≥3 turns — phải tự sửa lỗi, xử lý case ngoài template, hoặc ra quyết định phụ — dùng Sonnet dù nhìn qua tưởng đơn giản. Model rẻ hơn thường mất nhiều turns hơn; tổng chi phí (turns × đơn giá) có thể cao hơn Sonnet, và còn tốn thêm thời gian chờ.
 
 ---
 
@@ -854,21 +1018,33 @@ Trước khi đánh dấu bất kỳ task code nào là hoàn thành, developer 
 
 ## 16. BẮT BUỘC: Quản lý Plan File (Tiến độ task)
 
-> **Quy tắc cứng:** Mọi task mới PHẢI có plan file được user xác nhận trước khi thực hiện. Khi tiếp tục task, PHẢI đọc plan cũ và tiếp tục từ bước chưa làm. KHÔNG được bắt đầu workflow khi chưa có plan.
+> **Quy tắc cứng:** Mọi task mới PHẢI có plan (MASTER + step files) được user xác nhận trước khi thực hiện. Khi tiếp tục task, PHẢI đọc MASTER cũ và tiếp tục từ bước chưa làm. KHÔNG được bắt đầu workflow khi chưa có plan.
+
+> **Plan file cũ (1 file `.md` duy nhất, tạo trước khi §16 v2 áp dụng):** KHÔNG bắt buộc migrate sang cấu trúc folder mới — tiếp tục dùng đúng định dạng cũ (`PLAN-template.md`) cho đến khi task đó hoàn thành. Cấu trúc MASTER + step file dưới đây CHỈ áp dụng cho plan tạo MỚI.
 
 ### 16.1 Nguyên tắc hoạt động
 
 | Tình huống | Hành động bắt buộc |
 |---|---|
-| Task mới, chưa có plan | Tạo plan → xin xác nhận user → CHỈ bắt đầu sau khi được OK |
-| Task đang dở, có plan | Đọc plan → hiển thị tiến độ → tiếp tục từ bước chưa làm |
-| Sau mỗi bước hoàn thành | Cập nhật plan ngay (⬜ → ✅, ghi artifact, cập nhật updated:) |
+| Task mới, chưa có plan | Tạo folder plan (MASTER + step files) → xin xác nhận user → CHỈ bắt đầu sau khi được OK |
+| Task đang dở, có plan | Đọc MASTER → hiển thị tiến độ → tiếp tục từ bước chưa làm (đọc thêm step file nếu cần chi tiết) |
+| Sau mỗi bước hoàn thành | Cập nhật CẢ HAI: step file (chi tiết đầy đủ) + đúng 1 dòng status trong MASTER (⬜ → ✅, link step file, thời gian hoàn thành) |
 
-### 16.2 Naming convention
+### 16.2 Cấu trúc thư mục & naming convention
+
+> **Lý do (P6):** 1 file plan gộp chung tiến độ + chi tiết + Handoff Log của mọi bước ngày càng phình to theo số bước, khiến agent bước sau phải đọc toàn bộ lịch sử không liên quan. Tách MASTER (tổng quan, nhẹ) khỏi step file (chi tiết, riêng từng bước) giữ mỗi file gọn và chỉ nạp đúng phần cần thiết.
 
 ```
-.claude/plans/PLAN-[task-slug]-[YYYY-MM-DD].md
+docs/plans/PLAN-[task-slug]-[YYYY-MM-DD]/
+├── PLAN-MASTER.md              ← tổng quan: mô tả, bảng phases/steps (status + link), blockers, lịch sử cập nhật
+└── steps/
+    ├── STEP-1.1-[ten].md       ← chi tiết bước 1.1: nhiệm vụ, Đã làm, artifact, Handoff Log riêng
+    ├── STEP-1.2-[ten].md
+    └── STEP-N.M-[ten].md
 ```
+
+- MASTER KHÔNG chứa chi tiết từng bước — chỉ 1 dòng trạng thái + link tới step file tương ứng.
+- Mỗi step file độc lập, tự chứa đủ context Handoff Log của riêng bước đó.
 
 ### 16.3 Status icons bắt buộc
 
@@ -880,15 +1056,15 @@ Trước khi đánh dấu bất kỳ task code nào là hoàn thành, developer 
 | 🛑 | Blocked — bị chặn, cần giải quyết trước |
 | ⏭️ | Skipped — bỏ qua có lý do ghi rõ |
 
-### 16.4 Cách Dispatcher cập nhật plan sau mỗi bước
+### 16.4 Cách cập nhật plan sau mỗi bước
 
-Sau khi mỗi agent hoàn thành, Dispatcher PHẢI dùng `Edit` để cập nhật file plan:
-1. Đổi trạng thái bước vừa xong: `⬜` → `✅`
-2. Điền tên artifact vào cột Artifact
-3. Cập nhật trường `updated:` trong frontmatter
-4. Thêm dòng vào bảng "Lịch sử cập nhật"
+Sau khi 1 bước hoàn thành, PHẢI `Edit` cả 2 file theo đúng thứ tự:
+1. **Step file trước:** điền "Đã làm", artifact, quyết định quan trọng, Handoff Log, commit hash, đổi `status:` trong frontmatter → `done`, điền `completed_at`.
+2. **MASTER sau:** đổi đúng 1 dòng status trong bảng Phases & Steps (`⬜`/`🔄` → `✅`), điền cột "Hoàn thành lúc", cập nhật `updated:` ở frontmatter MASTER, thêm 1 dòng vào "Lịch sử cập nhật".
 
-**Template plan file:** xem `.claude/templates/PLAN-template.md`
+KHÔNG chép lại nội dung chi tiết của step file vào MASTER — MASTER chỉ link tới.
+
+**Template:** `.claude/templates/PLAN-MASTER-template.md` + `.claude/templates/PLAN-STEP-template.md`
 **Agent quản lý plan:** `task-planner`
 
 ---
@@ -909,20 +1085,18 @@ Nếu không chắc chắn → hỏi user xác nhận môi trường trước kh
 #### Bước 2a — Cơ chế LOCAL (dùng `Agent` tool)
 
 Với mỗi bước ⬜/🔄 kế tiếp trong plan:
-1. Gọi `Agent` với `subagent_type` đúng vai trò phụ trách bước đó (VD: `senior-developer`, `junior-developer`, `qa-engineer`...). Prompt PHẢI tự chứa đủ context: mô tả bước, đường dẫn plan file, artifact mong đợi — vì subagent không thấy lịch sử session chính.
+1. Gọi `Agent` với `subagent_type` đúng vai trò phụ trách bước đó (VD: `senior-developer`, `junior-developer`, `qa-engineer`...). Prompt PHẢI tự chứa đủ context: mô tả bước, đường dẫn PLAN-MASTER.md, đường dẫn step file (`steps/STEP-N.M-*.md`) cần điền, artifact mong đợi, và nguyên văn Handoff Log của bước liền trước (nếu có) — vì subagent không thấy lịch sử session chính.
 2. Subagent thực hiện xong bước PHẢI tự:
    a. `git add` + `git commit` — message chi tiết theo format ở Bước 3 dưới.
    b. `git push` lên remote/nhánh hiện tại (nếu remote đã cấu hình và user đã cho phép push trong phạm vi task).
-   c. `Edit` plan file: đổi status bước đó ⬜/🔄 → ✅, điền artifact, điền **thời gian hoàn thành thực tế** (`YYYY-MM-DD HH:mm`, lấy từ lệnh hệ thống — KHÔNG tự đoán).
+   c. `Edit` step file (`steps/STEP-N.M-*.md`): điền "Đã làm", artifact, quyết định quan trọng, Handoff Log, commit hash, `status: done`, **thời gian hoàn thành thực tế** (`YYYY-MM-DD HH:mm`, lấy từ lệnh hệ thống — KHÔNG tự đoán) vào `completed_at`.
+   d. `Edit` PLAN-MASTER.md: đổi đúng 1 dòng status bước đó ⬜/🔄 → ✅, điền cột "Hoàn thành lúc".
 3. Subagent trả về **tóm tắt ngắn** (≤ 5 dòng: đã làm gì, artifact nào, đã commit/push chưa) — KHÔNG trả nguyên log/tool-call chi tiết về session chính.
 4. Session chính chỉ hiển thị tóm tắt đó theo format §5 CORE.md, không giữ lại toàn bộ quá trình subagent đã chạy.
 
 #### Bước 2b — Cơ chế WEB (dùng `RemoteTrigger`)
 
-Với mỗi bước ⬜/🔄 kế tiếp trong plan:
-1. Gọi `RemoteTrigger` action `create` (bước đầu) hoặc `run` (các lần sau) với `body` chứa prompt tương đương: mô tả bước, đường dẫn plan file, artifact mong đợi, và yêu cầu tự commit + push + cập nhật plan giống mục LOCAL (a, b, c ở trên).
-2. Trigger chạy như 1 session Web độc lập (xuất hiện ở tab "Web"/"Routines" trong danh sách session) — tách biệt hoàn toàn khỏi session chính.
-3. Sau khi trigger chạy xong, `task-planner` PHẢI `Read` lại plan file (đã được trigger cập nhật) để xác nhận bước đã ✅ trước khi tiếp tục bước kế tiếp — KHÔNG tự đoán trạng thái khi chưa đọc lại file.
+Tương tự Bước 2a với 2 điều chỉnh: **(1)** Dùng `RemoteTrigger` action `create` (bước đầu) hoặc `run` (các lần sau) thay `Agent` tool — trigger chạy như session Web độc lập (xuất hiện ở tab "Web"/"Routines"). Body chứa prompt tương đương yêu cầu tự commit + push + cập nhật step file + MASTER như mục LOCAL. **(2)** Sau khi trigger xong, `task-planner` PHẢI `Read` lại PLAN-MASTER.md (và step file nếu cần chi tiết) để xác nhận bước đã ✅ trước khi tiếp tục — trigger không trả kết quả trực tiếp, KHÔNG tự đoán trạng thái.
 
 #### Bước 3 — Format commit message bắt buộc (áp dụng cả 2 môi trường)
 
@@ -932,28 +1106,44 @@ Với mỗi bước ⬜/🔄 kế tiếp trong plan:
 - <chi tiết thay đổi 1>
 - <chi tiết thay đổi 2>
 
-Plan: .claude/plans/PLAN-[slug]-[date].md
+Plan: docs/plans/PLAN-[slug]-[date]/steps/STEP-N.M-[ten].md
 ```
 
 #### Bước 4 — BẮT BUỘC: Handoff Log (tránh bước sau phải đọc lại / nghiên cứu lại)
 
-> Vì mỗi bước chạy trong subagent/trigger tách biệt (Bước 2a/2b), agent thực hiện bước N+1 KHÔNG thấy được lịch sử session của bước N. Nếu không ghi lại, bước sau sẽ phải tự đọc code, tự suy luận lại từ đầu — tốn thời gian và có thể suy luận SAI khác với bước trước.
-
-1. Ngay sau khi hoàn thành bước (cùng lúc với Bước 2a.c / 2b tương ứng), agent/trigger PHẢI `Edit` thêm 1 entry vào mục **"## Handoff Log"** của plan file (xem cấu trúc ở `PLAN-template.md`), theo format:
+1. Ngay sau khi hoàn thành bước (cùng lúc với Bước 2a.c / 2b tương ứng), agent/trigger PHẢI điền mục **"## Handoff Log — bước sau cần biết"** trong CHÍNH step file của bước đó (`steps/STEP-N.M-*.md`, xem cấu trúc ở `PLAN-STEP-template.md`), theo format:
    ```
-   ### Bước N.M — [tên bước ngắn]
    - Đã làm: [tóm tắt 2-3 câu, KHÔNG chép lại toàn bộ log]
    - File/module đã đọc hoặc đổi: [đường dẫn cụ thể]
    - Quyết định quan trọng: [nếu có — vd: chọn cách A vì lý do X]
    - Bước sau cần biết: [cảnh báo / gotcha / điều KHÔNG cần làm lại — nếu có, ghi rõ; nếu không có → "Không có"]
    ```
-2. Trước khi giao bước kế tiếp cho subagent/trigger mới, `task-planner`/Dispatcher PHẢI `Read` toàn bộ mục "Handoff Log" hiện có trong plan file, và **nhúng nguyên văn nội dung đó vào đầu prompt** của bước kế tiếp — coi như "bối cảnh đã biết", không để agent mới tự đọc lại toàn bộ codebase để suy ra lại những gì bước trước đã xác định.
-3. Agent bước sau CHỈ đọc thêm file/code ngoài phạm vi Handoff Log đã cung cấp — không đọc lại phần đã được tóm tắt rõ.
+2. Trước khi giao bước kế tiếp cho subagent/trigger mới, `task-planner`/Dispatcher PHẢI `Read` mục "Handoff Log" trong step file của bước LIỀN TRƯỚC (không cần đọc toàn bộ các step file cũ hơn), và **nhúng nguyên văn nội dung đó vào đầu prompt** của bước kế tiếp — coi như "bối cảnh đã biết", không để agent mới tự đọc lại toàn bộ codebase để suy ra lại những gì bước trước đã xác định.
+3. Agent bước sau CHỈ đọc thêm file/code ngoài phạm vi Handoff Log đã cung cấp — không đọc lại phần đã được tóm tắt rõ. Nếu nghi ngờ cần bối cảnh từ bước xa hơn (không phải bước liền trước) → agent tự `Read` thêm đúng step file đó, không đọc toàn bộ `steps/`.
 
 #### Ngoại lệ — KHÔNG áp dụng session isolation khi:
 - Plan chỉ có 1 bước duy nhất (không đáng tách session).
 - Bước là câu hỏi/xác nhận với user, không phải bước thực thi.
 - User yêu cầu rõ chạy toàn bộ trong 1 session (VD: để debug liên tục, cần giữ context xuyên suốt).
+
+#### Khuyến nghị Strategic Compact (học từ `strategic-compact` skill của affaan-m/ecc)
+
+> **Mục đích:** Tránh auto-compact xảy ra giữa lúc đang thực hiện dở 1 bước nhiều-turn — mất chi tiết Handoff Log giữa việc sẽ khiến agent bước sau phải đọc lại từ đầu.
+
+**Quy tắc:** Ngay sau khi 1 phase/bước trong plan vừa hoàn thành (logical boundary rõ ràng) VÀ context window đã dùng ≥ 50%, Dispatcher PHẢI chủ động gợi ý user:
+
+```
+Gợi ý: Phase [N] vừa hoàn thành — đây là điểm dừng tốt để compact context.
+Gõ /compact ngay bây giờ để giải phóng context window trước khi bắt đầu Phase [N+1].
+(Nếu bỏ qua, auto-compact có thể xảy ra giữa Phase [N+1] và làm mất Handoff Log.)
+```
+
+**Thời điểm nên gợi ý compact (theo thứ tự ưu tiên):**
+1. Vừa xong toàn bộ 1 phase (Phase 0, Phase 1, Phase 2...)
+2. Vừa xong 1 bước dài (nhiều tool calls, nhiều file được đọc/sửa)
+3. Vừa commit+push xong — trạng thái git sạch, an toàn để reset context
+
+**KHÔNG gợi ý compact khi:** đang giữa bước (chưa commit), bước kế tiếp ước tính ≤ 5 tool calls, hoặc user vừa /compact trong 2 bước trước.
 
 ---
 
@@ -1092,6 +1282,18 @@ Nhận xét: Workflow này mang tính đặc thù — không có pattern tái s�
 
 ### 18.5 Quy tắc tạo file định nghĩa (khi user xác nhận)
 
+> **BẮT BUỘC — Eval-Driven Development (EDD, học từ affaan-m/ecc `eval-harness`):**
+> TRƯỚC khi tạo file định nghĩa agent/skill mới, PHẢI tạo file eval tương ứng tại `.claude/evals/[name].md` theo template `.claude/templates/EVAL-template.md`. Sau khi implement, chạy thử các ví dụ trong eval và ghi kết quả pass/fail. Agent/skill chỉ được thêm vào routing table (CLAUDE.md §2) khi có ≥ 2/3 Capability Eval pass.
+
+**Thứ tự bắt buộc khi tạo agent/skill mới:**
+```
+1. Tạo .claude/evals/[name].md từ EVAL-template.md — điền CE-01, CE-02, CE-03
+2. Tạo .claude/agents/[name].md hoặc .claude/commands/[name].md
+3. Chạy thử từng CE theo thứ tự, ghi kết quả vào bảng "Kết quả chạy thử"
+4. Nếu ≥ 2/3 CE pass → điền ≥ 1/2 RE pass → đánh dấu "APPROVED" → mới thêm vào routing
+5. Nếu CE fail → sửa lại định nghĩa agent → chạy lại eval
+```
+
 **Với Agent mới:**
 ```markdown
 ---
@@ -1116,6 +1318,7 @@ description: [1 câu mô tả trigger condition — khi nào invoke skill này]
 ```
 
 **Vị trí lưu:**
+- Eval: `.claude/evals/[name].md` (PHẢI tạo TRƯỚC)
 - Agent: `.claude/agents/[name].md`
 - Skill: `.claude/commands/[name].md`
 
@@ -1211,3 +1414,31 @@ Agent PHẢI thêm vào phần artifact output:
 
 - User chỉ định rõ framework/UI stack khác (WPF, MAUI, Blazor, Console app, class library không UI, ...) → theo đúng yêu cầu đó.
 - Migrate sang stack khác (WF-MIGRATE) → theo mapping do Code Migrator lập, không bắt buộc dùng lại đúng `KztekComponent`/`KztekComponentAvalonia` nếu stack đích không phải WinForms/Avalonia.
+
+### 20.4 BẮT BUỘC: Tách UI thành từng item/UserControl riêng — KHÔNG viết gộp
+> **Nguồn gốc:** Rule phát sinh từ thực tế `LaneSettingsWindow.axaml`/`.axaml.cs` phình to (gộp cả 7 tab cấu hình lane vào 1 file duy nhất qua nhiều phase phát triển) — khó review, khó maintain, dễ xung đột khi nhiều agent/dev sửa song song.
+**Quy tắc cứng:** Khi thiết kế màn hình có nhiều đơn vị lặp lại về mặt cấu trúc (tab, step, card, section, dòng danh sách, panel cấu hình con...), PHẢI tách MỖI đơn vị đó thành 1 UserControl/View riêng — KHÔNG được viết gộp toàn bộ nội dung trực tiếp vào 1 file View cha, kể cả khi mỗi đơn vị chỉ vài chục dòng.
+| Tình huống | Bắt buộc |
+|---|---|
+| Cửa sổ có N tab (TabControl) | Mỗi `TabItem` → 1 UserControl riêng (`XxxTabView.axaml`/`.axaml.cs`), View cha chỉ còn `TabControl` host + khai báo N `<TabItem><views:XxxTabView/></TabItem>` |
+| Danh sách item lặp lại có logic riêng (step, dòng cấu hình, card) | Mỗi loại item → 1 UserControl/DataTemplate tách file riêng (không viết `DataTemplate` khổng lồ inline trong View cha nếu nội dung > ~30-40 dòng hoặc có code-behind riêng) |
+| Panel cấu hình con có thể bật/tắt độc lập (Expander, section có thể collapse) | Tách UserControl riêng, View cha chỉ compose lại |
+**Nguyên tắc áp dụng:**
+1. **Ngay từ đầu khi thiết kế mới** — Tech Lead/Senior Developer PHẢI đánh giá "nội dung này có tách được thành item riêng không?" TRƯỚC khi viết code, không đợi file phình to rồi mới refactor.
+2. **DataContext dùng chung** — các UserControl con dùng chung ViewModel của View cha qua binding kế thừa `DataContext` (không tạo ViewModel riêng cho mỗi UserControl con trừ khi thực sự cần state độc lập) — tránh vỡ binding hiện có.
+3. **Đặt tên nhất quán:** `{TênNộiDung}TabView`/`{TênNộiDung}ItemView`/`{TênNộiDung}Card` theo đúng vai trò, đặt trong thư mục con cùng cấp (VD: `Views/LaneSettingsTabs/`, `Views/Blocks/`).
+4. **Review checklist bắt buộc:** Tech Lead/Senior Developer review PR có thêm UI mới PHẢI kiểm tra mục "Đã tách item/tab thành UserControl riêng chưa, hay đang viết gộp?" — REQUEST-CHANGES nếu phát hiện gộp không cần thiết.
+5. **Refactor code cũ đã gộp:** Khi chạm vào 1 file View đã gộp nhiều đơn vị (do lịch sử phát triển trước khi rule này có hiệu lực), nếu task hiện tại có sửa đổi đáng kể trong đó → tách ra theo rule này trong cùng lần sửa (không để nợ kỹ thuật tích lũy thêm); nếu chỉ sửa nhỏ không liên quan → có thể hoãn tách sang task refactor riêng, nhưng PHẢI ghi chú lại việc này chưa tách.
+**Ngoại lệ:** Nội dung thực sự chỉ có 1 instance duy nhất, không lặp lại, không có khả năng tái sử dụng, và ngắn (< 30 dòng) — có thể giữ inline nếu tách ra sẽ tạo thêm file không cần thiết chỉ vì rule, không phải vì lợi ích thực sự.
+---
+
+## 21. Changelog — Lịch sử thay đổi hệ thống agent
+
+> Mục đích: Audit trail khi hệ thống agent phát triển. Ghi nhận mọi thay đổi đáng kể vào agent/workflow/rule để dễ onboarding, phát hiện regression, và hiểu lý do đằng sau các quyết định thiết kế.
+
+| Ngày | Phiên bản | Nội dung thay đổi | Đối tượng | Lý do |
+|------|-----------|------------------|-----------|-------|
+| 2026-07-12 | v1.3 | Rút gọn CLAUDE.md: xóa 7 đoạn overhead/trùng lặp (P1,P3,P4,P6,P7,P8,P9 + Modify P2), tiết kiệm 34 dòng thực tế — xem `_workspace` phân tích WF-REFACTOR optimize-framework | CLAUDE.md | Giảm overhead quy trình, loại bỏ nội dung trùng lặp giữa các §, không đổi nguyên tắc cứng nào |
+| 2026-07-12 | v1.2 | Áp dụng 7 đề xuất E1-E7 từ nghiên cứu affaan-m/ecc: E1 hook bảo vệ config (`.claude/hooks/config-protection.js` + `settings.json`), E2 GOTCHAS.md + yêu cầu đọc khi khởi động (§KHỞI ĐỘNG), E3 bảng DAILY/LIBRARY (CORE.md §6b), E4 skill `/verify-pr` + yêu cầu trong WF-BUGFIX/WF-FEATURE, E5 EVAL-template.md + EDD requirement (§18.5), E6 Agent Introspection Debugging 4-phase (§9a), E7 Strategic Compact gợi ý (§16.5) | CLAUDE.md §KHỞI ĐỘNG §9a §16.5 §18.5 §WF-FEATURE §WF-BUGFIX §21; CORE.md §6b; `.claude/hooks/`; `.claude/commands/`; `.claude/templates/` | Tăng safety (config protection), giảm lỗi lặp (GOTCHAS), tối ưu context window (compact/DAILY-LIBRARY), chuẩn hoá pre-PR (verify-pr), chuẩn hoá tạo agent (EDD). Xem `docs/research/RESEARCH-ecc-2026-07-12.md` |
+| 2026-07-12 | v1.1 | Áp dụng 8 đề xuất từ nghiên cứu revfactory/harness: P1 `_workspace/` convention (§11.0), P2 Progressive Disclosure cho documentation-writer.md, P3 pushy description cho agents, P4 Phase 0 Audit trong WF-GITHUB-RESEARCH + WF-MIGRATE, P5 tạo skill `skill-trigger-test`, P6 why-first cho quy tắc TUYỆT ĐỐI, P7 hướng dẫn fan-out `run_in_background` (§4), P8 Changelog (§21) | CLAUDE.md §4 §11 §21, `.claude/agents/`, `.claude/commands/` | Cải thiện Dispatcher routing accuracy, giảm context window per session, tăng maintainability. Xem `docs/research/RESEARCH-harness-2026-07-12.md` |
+| 2026-07-12 | v1.0 | Khởi tạo hệ thống agent KZTEK — 17 agents, 4 skills, routing table đầy đủ | Toàn bộ hệ thống | Tạo mới |
