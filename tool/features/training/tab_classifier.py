@@ -21,14 +21,9 @@ from ...core.settings import (_bind_cfg, _cfg_dir, _bind_history,
                                _push_history, _get_history)
 from ...core.ui_helpers import _folder_row, _make_logbox, _append_log
 
-try:
-    import matplotlib
-    matplotlib.use("TkAgg")
-    from matplotlib.figure import Figure
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-    _MPL_OK = True
-except ImportError:
-    _MPL_OK = False
+from ...shared.lazy_import import module_available, matplotlib_tk
+
+_MPL_OK = module_available("matplotlib")   # lazy — nạp khi mở biểu đồ
 
 try:
     from PIL import Image as _PILImage, ImageTk as _PILImageTk, ImageEnhance as _PILEnhance
@@ -1117,6 +1112,7 @@ class ClassifierTrainTab(Frame):
                bg=ACCENT2, fg="white", activebackground=ACCENT, activeforeground="white",
                font=F_MAIN, relief="flat", padx=10, cursor="hand2").pack(side=RIGHT)
 
+        Figure, FigureCanvasTkAgg = matplotlib_tk()
         fig  = Figure(figsize=(10, 5.5), dpi=92, facecolor="#16162a")
         axes = fig.subplots(2, 2)
         fig.subplots_adjust(left=0.07, right=0.97, top=0.93,

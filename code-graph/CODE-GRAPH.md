@@ -1,4 +1,5 @@
-# CODE_GRAPH.md — KZTEK Image Tools
+# CODE-GRAPH.md — KZTEK Image Tools
+<!-- Cập nhật: 2026-07-26 | **Khởi động app: ~46s → ~2.4s.** (1) Thêm `tool/shared/lazy_import.py` — mọi thư viện nặng nay nạp ở lần dùng đầu tiên thay vì lúc import module. Thủ phạm lớn nhất là `core/imports.py` import `paddleocr` ở mức module, kéo theo torch (7.8s) + transformers + matplotlib ngay khi mở app dù user không dùng tab OCR; kế đến là `rfdetr` (11.5s) trong `yolo_model_mixin.py` và `torch` trong `tab_slot_classifier.py`. `import tool.core.app`: 41.2s → 1.1s. (2) `core/app.py` dựng tab LƯỜI — `__init__` chỉ add 17 khung rỗng vào Notebook, nội dung tab dựng ở `_ensure_built()` khi user mở tab đó lần đầu (trước đây dựng đủ 17 tab lúc khởi động, kể cả tab user đã tắt trong "⚙ Cài đặt Tab"): `App()` 3.9s → 0.35s. `_wrap_scrollable` đổi thành `_fill_scrollable(outer, ...)`, `_all_tabs` thay bằng `_tab_titles`/`_tab_pending`, `_tab_objects` thành property. (3) **Xóa `tab_bbox2.py`** (`BBoxEditorTab2`, 3016 dòng) — bản fork trùng 99% `tab_bbox.py` (122/123 hàm trùng tên) trong khi thiếu 40 hàm của bản gốc (toàn bộ tính năng batch-add-class); mọi fix trước đây phải sửa 2 lần. Tab "🖊 BBox v2" đã gỡ khỏi Notebook. (4) `core/settings.py`: `_bind_cfg` ghi qua `_cfg_save_soon()` (debounce 0.5s) thay vì ghi lại toàn bộ file JSON ~220 key SAU MỖI KÝ TỰ user gõ; `_cfg_save()` trả bool + `last_save_error()` thay vì nuốt lỗi im lặng, `_on_close` hỏi lại user nếu không ghi được. (5) `bad_image_viewer.py` dùng `os.startfile` thay `Popen(["start",…], shell=True)` (tên file chứa `&`/`|` không còn bị cmd.exe diễn giải). (6) Thêm `requirements.txt`. Xem `docs/review/AUDIT-tool-2026-07-26.md` |
 <!-- Cập nhật: 2026-07-05 (2) | Thêm engine thứ 2 cho `tab_locate_anything.py`: YOLOE (model `yoloe-11s-seg.pt` có sẵn trong dự án) bên cạnh `locate-anything.cpp` CLI — GPU 4GB VRAM của máy KHÔNG đủ chứa cả bản GGUF nhỏ nhất (~4.7GB) nên CLI chỉ chạy CPU (chậm); YOLOE chạy in-process, nhẹ, nhanh, và test thực tế cho kết quả CHÍNH XÁC HƠN (bắt được "bus" mà CLI q4_k bỏ sót). Thêm `tool/shared/yoloe_utils.run_yoloe_detect` (bbox thô, không cần mask) + `tool/shared/yoloe_detect_runner.run_yoloe_one` (wrapper trả cùng shape dict với `locate_anything_runner.run_one` để tab dùng chung 1 code path qua `_current_engine_runner`). Tách `tool/features/detection/locate_anything_layout_mixin.py` (build UI) khỏi `tab_locate_anything.py` (orchestration) vì file gốc chạm giới hạn cứng 500 dòng sau khi thêm engine mới |
 <!-- Cập nhật: 2026-07-05 | Tích hợp thử nghiệm locate-anything.cpp (open-vocabulary detection theo text prompt, https://github.com/mudler/locate-anything.cpp) — build C++/ggml test tại `d:/Tool/locate-anything.cpp/` (KHÔNG track git, xem `.gitignore`). Thêm `tool/shared/locate_anything_runner.py` (subprocess CLI, KHÔNG Tkinter) + `tool/features/detection/tab_locate_anything.py` (`LocateAnythingTab`, 2 pane detect ảnh đơn/batch folder) + app standalone `LocateAnythingApp/RunLocateAnything.py`. **Bug quan trọng đã fix:** downscale nội bộ của locate-anything.cpp chỉ kích hoạt khi lưới patch > 25600 token — ngưỡng quá cao cho RAM máy thường (self-attention bậc hai theo token), ảnh gần ngưỡng (VD 1920x2560) khiến `ggml` xin cấp ~39GB RAM và fail âm thầm (0 detections). Fix: `_safe_resize` resize client-side xuống cạnh dài ≤1280px (cấu hình được qua UI "Max cạnh ảnh") trước khi gọi CLI -->
 <!-- Cập nhật: 2026-07-04 | Web Image tab: thêm nút 📂 mở thư mục lưu đang chọn (`_open_dir`, `os.startfile`) cạnh nút "Chọn…" | Segment tab: thêm thanh "🔤 Text Prompt (YOLOE)" — text-prompt segmentation thay thế SAM3 (SAM3 yêu cầu Python 3.12+/PyTorch 2.7+/CUDA 12.6+/HuggingFace auth, KHÔNG khả dụng trên máy hiện tại Python 3.10/torch 2.5/CUDA 12.1 — đã kiểm tra kỹ trước khi chọn hướng thay thế). Nhập mô tả tiếng Anh (cách nhau dấu phẩy) → `shared/yoloe_utils.run_yoloe_text` quét toàn ảnh, tự thêm 1 segment/object tìm được, map nhãn → CLASS_NAMES id qua `_label_to_cid` (không khớp thì dùng class đang chọn ở toolbar). `cv_segment.mask_array_to_polygon` (findContours RETR_EXTERNAL + contour lớn nhất) tách ra dùng CHUNG giữa `sam_utils._extract` và `yoloe_utils` — tránh trùng lặp code trích polygon sạch từ mask pixel | cv_segment.polygon_to_mask + Segment tab: CV Edge MỞ RỘNG THÊM segment đang chọn (seed `_cv_mask` từ polygon có sẵn qua `_cv_seed_si`) thay vì luôn tạo mới — khắc phục Auto-tách/SAM Box chỉ bắt 1 phần object (VD thân xe, bỏ sót bánh xe/đuôi xe do khác màu/lẫn bóng) | mode "draw" tự nhận diện Sửa/SAM Box theo cử chỉ (click=vẽ, click+kéo=SAM Box, click trúng điểm=sửa) qua `_pending_click` | sam_utils._extract lấy `masks.data` (mask pixel thô) thay vì `masks.xy` (tránh seam nối mảnh rời/lỗ của ultralytics `strategy="all"`); `clean_polygon` dùng convex hull sửa segment CŨ | run_grabcut_box: fallback GC_INIT_WITH_RECT khi object hình chữ nhật khớp sát khung | FIX Enter nhảy 2 ảnh; undo-stack thật; "Đệ quy subfolder"; `.kztek_progress.json`; "👁 Hiện segment H"; PanedWindow | Refactor tab_yolo.py (7017→195 dòng) thành 17 file mixin/helper | Web Image tab: bổ sung nguồn **Pexels** (bên cạnh Bing/Google qua DDG) — thêm `web_image._search_pexels` (Pexels API `/v1/search`, header `Authorization: <api_key>`, tự lặp trang tới 80 ảnh/trang), engine combobox thêm giá trị "Pexels", hàng nhập **Pexels API Key** (ẩn/hiện theo engine qua `_on_engine_change`, lưu `web_img.pexels_api_key` + history) | Segment tab: thay thanh YOLOE bằng "🔤 Text Prompt (SAM 3)" (`shared/sam3_onnx_utils.py`, ONNX qua vietanhdev/segment-anything-3-onnx-models, không cần HF gated, chạy CPU vì onnxruntime-gpu 1.23.2 chưa hỗ trợ opset21/Squeeze trên CUDA) + Spinbox Ngưỡng | Fix crash `NameError: free variable 'ex'` (7 chỗ, closure tham chiếu biến exception sau khi Python tự xóa — xem ERRORS.md [E024]) | Vật cản chia object: `cv_segment._bridge_fragments` bắc cầu (morphological CLOSE tăng dần kernel) nối mảnh rời do vật cản (VD bánh xe tách khỏi thân xe) thành ĐÚNG 1 segment — không tách nhiều segment, không mất mảnh, không convexHull lấn vùng vật cản | Màu segment theo index (mỗi object 1 màu) thay vì theo class | **FIX** Web Image tab: `req_count = min(need * 3, 300)` cap CỨNG 300 ứng viên bất kể "Max ảnh/từ khóa" đặt bao nhiêu (VD đặt 500 vẫn chỉ tải được ~300-320 ảnh dù nguồn còn nhiều) — tách cap riêng theo engine: `_DDG_MAX_CAND=300` (giữ nguyên, tránh spam DDG), `_PEXELS_MAX_CAND=8000` (đúng giới hạn thực tế của Pexels API); log thêm cảnh báo khi Pexels trả về ít hơn `need` — do thư viện Pexels là ảnh stock chọn lọc, số ảnh khớp 1 từ khóa thường ít hơn nhiều so với ước tính hiển thị trên web Bing/Google/trang chủ Pexels -->
@@ -126,8 +127,11 @@ Global: `_CFG: dict`, `_SETTINGS_FILE: Path`
 | Hàm | Chữ ký | Mô tả |
 |---|---|---|
 | `_cfg_load` | `()` | Đọc JSON từ `_SETTINGS_FILE` vào `_CFG` |
-| `_cfg_save` | `()` | Ghi `_CFG` ra file JSON |
-| `_bind_cfg` | `(key, var)` | Bind Tkinter Var ↔ config key |
+| `_cfg_save` | `() → bool` | Ghi `_CFG` ra file JSON NGAY. Trả `False` nếu lỗi (không còn nuốt im lặng) |
+| `_cfg_save_soon` | `()` | Hẹn ghi sau 0.5s, hủy lần hẹn trước — dùng cho đường gõ phím của `_bind_cfg` |
+| `_cfg_flush` | `() → bool` | Ghi ngay phần đang chờ debounce; gọi lúc đóng app |
+| `last_save_error` | `() → str` | Lỗi ghi settings gần nhất (`""` nếu không có) |
+| `_bind_cfg` | `(key, var)` | Bind Tkinter Var ↔ config key (ghi qua `_cfg_save_soon`) |
 | `_cfg_dir` | `(key) → str` | Trả về directory đã lưu (validated) |
 | `_bind_history` | `(key, combo, max_items=20)` | Bind Combobox với history list |
 | `_push_history` | `(key, val, max_items=20)` | Thêm val vào history |
@@ -157,7 +161,12 @@ Class: `GridPageNav(Frame)`, `DateTimePicker(Frame)`
 
 #### `tool/core/imports.py`
 Không có class/function. Chỉ flags:
-`_REQUESTS_OK`, `_CV2_OK`, `_TTS_OK`, `_GTTS_OK`, `_DND_OK`, `_PADDLE_OK`
+`_REQUESTS_OK`, `_CV2_OK`, `_TTS_OK`, `_GTTS_OK`, `_DND_OK`, `_PADDLE_OK`, `_DDGS_OK`
+
+⚠ Thư viện NẶNG (`paddleocr`, `gtts`, `ddgs`) chỉ khai báo cờ khả dụng ở đây,
+KHÔNG import ở mức module — object thật (`_PaddleOCR`, `_gTTS`, `_DDGS`) là proxy
+lazy từ `tool/shared/lazy_import.py`, nạp ở lần gọi đầu tiên. Đừng đổi lại thành
+`from paddleocr import …`: nó kéo torch + transformers vào lúc mở app (+15s).
 
 ---
 
@@ -166,8 +175,11 @@ Class: `App(Tk)`
 
 | Thành phần | Mô tả |
 |---|---|
-| `_wrap_scrollable(nb_parent, TabClass, root_ref, *extra)` | Tạo scrollable tab frame → `(outer, tab_obj)` |
-| `App.__init__` | Khởi tạo Notebook 15 tab, bind phím tắt |
+| `_fill_scrollable(outer, TabClass, root_ref, *extra)` | Đổ Canvas+Scrollbar + TabClass vào `outer` đã có → `tab_obj` |
+| `App.__init__` | Add 17 khung tab RỖNG vào Notebook + bind phím tắt. KHÔNG dựng nội dung tab ở đây |
+| `App._ensure_built(outer)` | Dựng nội dung tab nếu chưa dựng → `tab_obj` (lazy) |
+| `App._on_tab_changed(event)` | Handler `<<NotebookTabChanged>>` — dựng tab vừa được chọn |
+| `App._tab_objects` | *(property)* danh sách tab ĐÃ dựng |
 | `App._set_tab_visible(title, visible)` | Ẩn/hiện tab trong Notebook |
 | `App._open_tab_config()` | Dialog bật/tắt tab (lưu vào `app.enabled_tabs`) |
 | `App._bind_shortcuts()` | Đăng ký tất cả phím tắt toàn cục |
@@ -258,6 +270,24 @@ Tab đã đăng ký (theo thứ tự trong `_tab_defs`, xem `app.py` để biế
 ### tool/shared/
 
 > Module tái dùng cho nhiều tab. Import pattern: `from ...shared.X import Y` (3 dots từ features).
+
+#### `tool/shared/lazy_import.py`
+Nạp thư viện nặng theo yêu cầu — lý do app khởi động ~2s thay vì ~46s.
+
+| Symbol | Chữ ký | Mô tả |
+|---|---|---|
+| `module_available` | `(name) → bool` | Module có cài không — dùng `find_spec`, KHÔNG import |
+| `load_attr` | `(module, attr)` | Import module (nếu chưa) → trả thuộc tính, có cache |
+| `lazy_callable` | `(module, attr) → _LazyCallable` | Proxy gọi được, chỉ import ở lần gọi đầu |
+| `matplotlib_tk` | `() → (Figure, FigureCanvasTkAgg)` | Nạp matplotlib backend TkAgg đúng 1 lần |
+
+⚠ **Quy tắc:** không `import torch / ultralytics / rfdetr / paddleocr / matplotlib`
+ở mức module trong bất kỳ file nào. Dùng cặp `module_available()` (cho cờ `_X_OK`)
+\+ `lazy_callable()` (cho object). Dùng bởi: `core/imports.py`,
+`features/detection/yolo_model_mixin.py`, `yolo_detect_all_mixin.py`,
+`yolo_eval_mixin.py`, `yolo_eval_validate_mixin.py`, `tab_slot_classifier.py`,
+`tab_classifier_tester.py`, `features/training/tab_train.py`, `tab_classifier.py`,
+`features/collection/iparking_stats_ui.py`.
 
 #### `tool/shared/bbox_renderer.py`
 | Symbol | Mô tả |

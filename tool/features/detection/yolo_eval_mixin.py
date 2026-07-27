@@ -18,11 +18,10 @@ try:
     _PIL_OK = True
 except ImportError:
     _PIL_OK = False
-try:
-    from ultralytics import YOLO
-    _YOLO_OK = True
-except ImportError:
-    _YOLO_OK = False
+from ...shared.lazy_import import module_available, lazy_callable
+
+_YOLO_OK = module_available("ultralytics")   # lazy — xem shared/lazy_import.py
+YOLO     = lazy_callable("ultralytics", "YOLO")
 from .yolo_utils import _iou_xywhn
 
 

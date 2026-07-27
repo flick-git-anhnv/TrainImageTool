@@ -85,3 +85,8 @@ TestResults/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Temp/scratch cua agent + workflow
+temp/
+_workspace/
+_workspace_*/

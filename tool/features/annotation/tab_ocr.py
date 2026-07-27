@@ -409,7 +409,15 @@ class OcrTab(Frame):
                 kwargs["device"] = "gpu"
             else:
                 kwargs["enable_mkldnn"] = False
-            self._ocr_engine = _PaddleOCR(**kwargs)
+            try:
+                self._ocr_engine = _PaddleOCR(**kwargs)
+            except Exception as exc:
+                # paddleocr nay được nạp lazy — bản cài hỏng/thiếu paddlepaddle
+                # sẽ lộ ở đây thay vì lúc khởi động app, nên phải tự báo lỗi
+                # rõ ràng giống thông báo của nhánh `not _PADDLE_OK` ở trên.
+                raise RuntimeError(
+                    f"Không khởi tạo được PaddleOCR: {exc}\n\n"
+                    "Kiểm tra lại:\n  pip install paddleocr paddlepaddle") from exc
         return self._ocr_engine
 
     def _start_ocr(self):

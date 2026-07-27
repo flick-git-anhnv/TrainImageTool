@@ -7,16 +7,13 @@ from ...core.constants import (BG, CARD, ACCENT, ACCENT2, TEXT, DIM, SUCCESS,
                          F_MAIN, F_BOLD, F_MONO, IMAGE_EXTENSIONS)
 from ...core.settings import (_bind_cfg, _cfg_dir, _CFG, _cfg_save,
                         _bind_history, _push_history, _get_history)
-try:
-    from ultralytics import YOLO
-    _YOLO_OK = True
-except ImportError:
-    _YOLO_OK = False
-try:
-    from rfdetr import RFDETRBase as _RFDETRBase
-    _RFDETR_OK = True
-except ImportError:
-    _RFDETR_OK = False
+from ...shared.lazy_import import module_available, lazy_callable
+
+# Lazy: chỉ nạp ultralytics/rfdetr khi thật sự load model (xem shared/lazy_import.py)
+_YOLO_OK    = module_available("ultralytics")
+_RFDETR_OK  = module_available("rfdetr")
+YOLO        = lazy_callable("ultralytics", "YOLO")
+_RFDETRBase = lazy_callable("rfdetr", "RFDETRBase")
 from .yolo_onnx import _OnnxRunner
 
 

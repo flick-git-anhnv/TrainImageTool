@@ -1,14 +1,24 @@
 import sys
 import json
+import threading
 from pathlib import Path
 
 if getattr(sys, "frozen", False):
     # Chay tu EXE (PyInstaller): luu config canh file .exe
     _SETTINGS_FILE = Path(sys.executable).parent / ".kztek_tools_settings.json"
 else:
-    # Chay tu script: luu config o thu muc goc du an (parent cua tool/)
+    # Chay tu script: luu config trong thu muc package `tool/`
+    # (Path(__file__).parent = tool/core  ->  .parent.parent = tool/)
     _SETTINGS_FILE = Path(__file__).parent.parent / ".kztek_tools_settings.json"
 _CFG: dict = {}
+
+# Loi ghi settings gan nhat — de UI co the hoi va bao cho user biet, thay vi
+# nuot im lang roi user mat toan bo cau hinh ma khong hieu tai sao.
+_LAST_SAVE_ERROR: str = ""
+
+_save_timer: "threading.Timer | None" = None
+_save_lock = threading.Lock()
+_SAVE_DELAY = 0.5      # giay — gom nhieu lan goi lien tiep thanh 1 lan ghi dia
 
 
 def _cfg_load():
@@ -20,12 +30,47 @@ def _cfg_load():
         _CFG = {}
 
 
-def _cfg_save():
+def last_save_error() -> str:
+    """Thong bao loi cua lan ghi settings gan nhat ("" neu khong co loi)."""
+    return _LAST_SAVE_ERROR
+
+
+def _cfg_save() -> bool:
+    """Ghi settings ra dia ngay lap tuc. Tra ve True neu thanh cong."""
+    global _LAST_SAVE_ERROR
     try:
         _SETTINGS_FILE.write_text(
             json.dumps(_CFG, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+        _LAST_SAVE_ERROR = ""
+        return True
+    except Exception as exc:
+        _LAST_SAVE_ERROR = f"{type(exc).__name__}: {exc}"
+        return False
+
+
+def _cfg_save_soon():
+    """Hen ghi settings sau _SAVE_DELAY giay, huy lan hen truoc do.
+
+    Dung cho duong `trace_add("write")` cua _bind_cfg: truoc day MOI ky tu user
+    go vao mot Entry deu serialize + ghi lai toan bo file JSON (hang tram key).
+    """
+    global _save_timer
+    with _save_lock:
+        if _save_timer is not None:
+            _save_timer.cancel()
+        _save_timer = threading.Timer(_SAVE_DELAY, _cfg_save)
+        _save_timer.daemon = True
+        _save_timer.start()
+
+
+def _cfg_flush():
+    """Ghi ngay phan dang cho (goi luc dong app)."""
+    global _save_timer
+    with _save_lock:
+        if _save_timer is not None:
+            _save_timer.cancel()
+            _save_timer = None
+    return _cfg_save()
 
 
 def _bind_cfg(key: str, var):
@@ -38,7 +83,7 @@ def _bind_cfg(key: str, var):
     def _cb(*_):
         try:
             _CFG[key] = var.get()
-            _cfg_save()
+            _cfg_save_soon()   # debounce — xem _cfg_save_soon()
         except Exception:
             pass
 

@@ -7,7 +7,7 @@
   "ip.max_per_hour": 15,
   "ip.parallel": 16,
   "yolo.interval": "0.5",
-  "yolo.line_width": 16,
+  "yolo.line_width": 8,
   "yolo.font_size": 32,
   "lpr.timeout": 10,
   "lpr.rotate": 0,

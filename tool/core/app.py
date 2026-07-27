@@ -5,14 +5,13 @@ from tkinter import ttk, messagebox
 from .imports import _DND_OK, _dnd_mod
 from .ui_helpers import _style_all
 from .constants import BG, CARD, ACCENT, ACCENT2, TEXT, DIM, F_MAIN, F_BOLD
-from .settings import _CFG, _cfg_save
+from .settings import _CFG, _cfg_save, _cfg_flush, last_save_error, _SETTINGS_FILE
 
 from ..features.dataset.tab_split        import SplitTab
 from ..features.dataset.tab_rename       import RenameTab
 from ..features.dataset.tab_crop         import CropByLabelTab
 from ..features.dataset.tab_labelnorm    import LabelNormTab
 from ..features.annotation.tab_bbox      import BBoxEditorTab
-from ..features.annotation.tab_bbox2     import BBoxEditorTab2
 from ..features.collection.tab_iparking_image import IParkingImageTab
 from ..features.collection.tab_web_image     import WebImageTab
 from ..features.annotation.tab_segment   import SegmentTab
@@ -29,15 +28,16 @@ from ..features.detection.tab_classifier_tester import ClassifierTesterTab
 _AppBase = _dnd_mod.Tk if _DND_OK else Tk
 
 
-def _wrap_scrollable(nb_parent, TabClass, root_ref, *extra_args):
-    """Tạo outer Frame có Canvas+Scrollbar, đặt TabClass bên trong.
+def _fill_scrollable(outer, TabClass, root_ref, *extra_args):
+    """Đổ Canvas+Scrollbar + TabClass vào một outer Frame đã có sẵn.
 
     Khi nội dung nhỏ hơn canvas thì frame tự co giãn theo canvas
     (giữ layout side=BOTTOM và expand=True hoạt động đúng).
     Khi nội dung cao hơn canvas thì scrollbar xuất hiện.
-    """
-    outer = Frame(nb_parent, bg=BG)
 
+    Tách khỏi việc tạo `outer` để `App` có thể add tab rỗng vào Notebook trước
+    (rẻ), rồi mới dựng nội dung ở lần user mở tab đó lần đầu — xem `_ensure_built`.
+    """
     canvas = Canvas(outer, bg=BG, highlightthickness=0)
     vsb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
     canvas.configure(yscrollcommand=vsb.set)
@@ -73,7 +73,7 @@ def _wrap_scrollable(nb_parent, TabClass, root_ref, *extra_args):
     canvas.bind("<Enter>", _on_enter)
     canvas.bind("<Leave>", _on_leave)
 
-    return outer, tab
+    return tab
 
 
 class App(_AppBase):
@@ -118,7 +118,6 @@ class App(_AppBase):
             ("🖼 Crop",           CropByLabelTab,    ()),
             ("⚙ LabelNorm",      LabelNormTab,      ()),
             ("🖊 BBox Editor",    BBoxEditorTab,     ()),
-            ("🖊 BBox v2",        BBoxEditorTab2,    ()),
             ("✂️ Segment",        SegmentTab,        ()),
             ("📷 iParking Image", IParkingImageTab,  ()),
             ("🌐 Web Image",      WebImageTab,       ()),
@@ -134,32 +133,65 @@ class App(_AppBase):
         ]
 
         # Khởi tạo lookup structures
-        self._all_tabs: list = []        # [(title, outer, tab_obj), ...]
+        self._tab_titles: list = []      # [title, ...] theo đúng thứ tự hiển thị
         self._tab_outers: dict = {}      # title -> outer Frame
-        self._outer_to_tab: dict = {}    # outer Frame -> tab_obj
+        self._outer_to_tab: dict = {}    # outer Frame -> tab_obj (CHỈ tab đã dựng)
         self._tab_shown: dict = {}       # title -> bool
+        self._tab_pending: dict = {}     # outer Frame -> (title, TabClass, extra)
 
         saved_enabled = _CFG.get("app.enabled_tabs", {})
 
+        # Chỉ add khung rỗng — nội dung tab được dựng ở lần mở đầu tiên
+        # (_ensure_built). Dựng đủ 17 tab ngay lúc này tốn ~4 giây và phần lớn
+        # là công vô ích: user thường chỉ dùng vài tab mỗi phiên.
         for title, TabClass, extra in _tab_defs:
-            outer, tab_obj = _wrap_scrollable(nb, TabClass, self, *extra)
-            self._all_tabs.append((title, outer, tab_obj))
+            outer = Frame(nb, bg=BG)
+            self._tab_titles.append(title)
             self._tab_outers[title] = outer
-            self._outer_to_tab[outer] = tab_obj
-            enabled = bool(saved_enabled.get(title, True))
-            self._tab_shown[title] = enabled
+            self._tab_pending[outer] = (title, TabClass, extra)
+            self._tab_shown[title] = bool(saved_enabled.get(title, True))
             nb.add(outer, text=f"  {title}  ")
 
         # Ẩn các tab bị tắt sau khi đã add tất cả
-        for title, outer, _ in self._all_tabs:
+        for title in self._tab_titles:
             if not self._tab_shown[title]:
-                nb.tab(outer, state="hidden")
+                nb.tab(self._tab_outers[title], state="hidden")
 
-        # Compat list (dùng ở một số nơi còn lại)
-        self._tab_objects = [t for _, _, t in self._all_tabs]
+        nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         self._bind_shortcuts()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Dựng ngay tab đang được chọn (tab đầu tiên đang hiển thị) — sự kiện
+        # <<NotebookTabChanged>> đầu tiên có thể đã bắn trước khi bind ở trên.
+        self.after_idle(self._on_tab_changed)
+
+    # ── Dựng tab lười ─────────────────────────────────────────────────────────
+
+    def _ensure_built(self, outer):
+        """Dựng nội dung của một tab nếu chưa dựng. Trả về tab object."""
+        tab = self._outer_to_tab.get(outer)
+        if tab is not None:
+            return tab
+        pending = self._tab_pending.pop(outer, None)
+        if pending is None:
+            return None
+        _title, TabClass, extra = pending
+        tab = _fill_scrollable(outer, TabClass, self, *extra)
+        self._outer_to_tab[outer] = tab
+        return tab
+
+    def _on_tab_changed(self, _event=None):
+        try:
+            outer = self.nametowidget(self._nb.select())
+        except Exception:
+            return
+        self._ensure_built(outer)
+
+    @property
+    def _tab_objects(self):
+        """Danh sách tab ĐÃ dựng (giữ tương thích với code cũ)."""
+        return list(self._outer_to_tab.values())
 
     # ── Config Tab Dialog ─────────────────────────────────────────────────────
 
@@ -191,7 +223,7 @@ class App(_AppBase):
               bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor=W, pady=(0, 10))
 
         chk_vars: dict = {}
-        for title, _, _ in self._all_tabs:
+        for title in self._tab_titles:
             var = BooleanVar(value=self._tab_shown.get(title, True))
             chk_vars[title] = var
             row = Frame(body, bg=BG)
@@ -262,7 +294,7 @@ class App(_AppBase):
         self.update_idletasks()
         x = self.winfo_x() + (self.winfo_width() - 380) // 2
         y = self.winfo_y() + (self.winfo_height() - 520) // 2
-        win.geometry(f"380x{12 + 40 + 32 + len(self._all_tabs) * 30 + 120}+{x}+{y}")
+        win.geometry(f"380x{12 + 40 + 32 + len(self._tab_titles) * 30 + 120}+{x}+{y}")
         win.lift()
         win.focus_set()
 
@@ -289,7 +321,9 @@ class App(_AppBase):
         try:
             selected_path = self._nb.select()
             outer = self.nametowidget(selected_path)
-            return self._outer_to_tab.get(outer)
+            # _ensure_built thay vì .get(): phím tắt có thể bắn trước khi
+            # <<NotebookTabChanged>> kịp dựng tab đang chọn.
+            return self._ensure_built(outer)
         except Exception:
             return None
 
@@ -488,9 +522,16 @@ class App(_AppBase):
     # ── Đóng ──────────────────────────────────────────────────────────────
 
     def _on_close(self):
-        try:
-            _cfg_save()
-        except Exception:
-            pass
+        # _cfg_flush: ghi ngay ca phan dang cho debounce (xem core/settings.py)
+        if not _cfg_flush():
+            # Truoc day loi ghi settings bi nuot im lang — user mat toan bo cau
+            # hinh ma khong biet ly do. Bao ro va cho user co hoi huy thoat.
+            if not messagebox.askokcancel(
+                    "Không lưu được cài đặt",
+                    f"Không ghi được file cài đặt:\n{_SETTINGS_FILE}\n\n"
+                    f"Lý do: {last_save_error()}\n\n"
+                    "Nhấn OK để thoát và mất các thay đổi, "
+                    "hoặc Cancel để quay lại."):
+                return
         self.destroy()
         sys.exit(0)

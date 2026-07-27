@@ -1,4 +1,11 @@
 # Optional dependency flags — centralised so each module can just import what it needs.
+#
+# Quy ước: thư viện NHẸ thì import thẳng; thư viện NẶNG (paddleocr kéo theo torch +
+# transformers + matplotlib, gtts/ddgs gọi mạng) chỉ khai báo cờ khả dụng ở đây và
+# nạp thật ở lần dùng đầu tiên — xem `tool/shared/lazy_import.py`. Trước đây
+# paddleocr được import ở mức module nên MỞ APP là phải chờ nạp torch, dù user
+# không hề dùng tab OCR.
+from ..shared.lazy_import import module_available, lazy_callable
 
 try:
     import requests as _req_mod
@@ -23,12 +30,8 @@ try:
 except ImportError:
     _TTS_OK = False
 
-try:
-    from gtts import gTTS as _gTTS
-    _GTTS_OK = True
-except ImportError:
-    _gTTS    = None
-    _GTTS_OK = False
+_GTTS_OK = module_available("gtts")
+_gTTS    = lazy_callable("gtts", "gTTS")
 
 try:
     import tkinterdnd2 as _dnd_mod
@@ -37,16 +40,8 @@ except ImportError:
     _dnd_mod = None
     _DND_OK  = False
 
-try:
-    from paddleocr import PaddleOCR as _PaddleOCR
-    _PADDLE_OK = True
-except Exception:
-    _PaddleOCR = None
-    _PADDLE_OK = False
+_PADDLE_OK = module_available("paddleocr")
+_PaddleOCR = lazy_callable("paddleocr", "PaddleOCR")
 
-try:
-    from ddgs import DDGS as _DDGS
-    _DDGS_OK = True
-except ImportError:
-    _DDGS    = None
-    _DDGS_OK = False
+_DDGS_OK = module_available("ddgs")
+_DDGS    = lazy_callable("ddgs", "DDGS")

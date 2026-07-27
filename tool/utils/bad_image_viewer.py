@@ -3,6 +3,7 @@ import base64
 import csv
 import difflib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -1327,9 +1328,10 @@ class BadImageViewer(Toplevel):
             menu.add_command(label="Mở vị trí trong Explorer",
                              command=lambda p=path: subprocess.Popen(
                                  ["explorer", "/select,", p]))
+            # os.startfile thay cho Popen(["start", "", p], shell=True): khong
+            # qua cmd.exe nen ten file chua & | " khong bi dien giai thanh lenh.
             menu.add_command(label="Mở bằng ứng dụng mặc định",
-                             command=lambda p=path: subprocess.Popen(
-                                 ["start", "", p], shell=True))
+                             command=lambda p=path: os.startfile(p))
             menu.add_separator()
         menu.add_command(label="Đặt zoom về 100%",
                          command=lambda s=slot_idx: self._reset_zoom(s))

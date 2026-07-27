@@ -1,0 +1,36 @@
+# KZTEK Image Tools — dependency trực tiếp
+# Cài: pip install -r requirements.txt
+#
+# LƯU Ý torch/CUDA: bản cu121 KHÔNG có trên PyPI mặc định. Cài trước bằng:
+#   pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121 \
+#       --index-url https://download.pytorch.org/whl/cu121
+# rồi mới chạy `pip install -r requirements.txt`.
+# Đổi CUDA/torch version dễ làm vỡ paddleocr/onnxruntime — xem ERRORS.md trước khi nâng.
+
+# ── Bắt buộc ──────────────────────────────────────────────────────────────────
+numpy==2.2.6
+pillow==12.1.1
+requests==2.33.1
+
+# Chỉ giữ MỘT biến thể opencv. `opencv-python` đã đủ cho tool này;
+# cài kèm -headless / -contrib cùng lúc gây xung đột binding khó lần.
+opencv-python==4.13.0.92
+
+# ── Machine learning (nạp lazy — xem tool/shared/lazy_import.py) ──────────────
+ultralytics==8.4.42
+# torch/torchvision/torchaudio: cài riêng theo hướng dẫn CUDA ở trên
+
+# ── Tùy chọn — thiếu thì tab tương ứng tự tắt, app vẫn chạy ───────────────────
+matplotlib          # biểu đồ tab Train / Classifier
+paddleocr           # tab OCR (kéo theo paddlepaddle)
+paddlepaddle        # backend cho paddleocr
+rfdetr              # model RF-DETR trong tab YOLO Detect / BBox Editor
+onnxruntime         # chạy model .onnx
+tkinterdnd2         # kéo-thả file vào cửa sổ
+gtts                # đọc biển số tab Checker
+ddgs                # tìm ảnh web tab Web Image
+pillow-avif-plugin  # đọc ảnh .avif
+pywin32             # TTS bằng SAPI (Windows)
+
+# ── Dev ───────────────────────────────────────────────────────────────────────
+pytest

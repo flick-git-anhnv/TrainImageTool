@@ -16,17 +16,12 @@ try:
 except ImportError:
     _PIL_OK = False
 
-try:
-    from ultralytics import YOLO as _YOLO8
-    _YOLO8_OK = True
-except ImportError:
-    _YOLO8_OK = False
+from ...shared.lazy_import import module_available, lazy_callable
 
-try:
-    import torch as _torch
-    _TORCH_OK = True
-except ImportError:
-    _TORCH_OK = False
+# Lazy: torch (~8s) và ultralytics chỉ nạp khi user thật sự load model
+_YOLO8_OK = module_available("ultralytics")
+_TORCH_OK = module_available("torch")
+_YOLO8    = lazy_callable("ultralytics", "YOLO")
 
 try:
     from tkinterdnd2 import DND_FILES

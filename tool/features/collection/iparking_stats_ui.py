@@ -163,8 +163,11 @@ class IParkingStatsMixin:
 
     def _make_chart(self, parent, draw_fn):
         try:
-            from matplotlib.figure import Figure
-            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            # Qua helper chung để backend TkAgg chắc chắn được set trước khi
+            # import backend — trước đây phụ thuộc tab_train/tab_classifier đã
+            # gọi matplotlib.use() lúc khởi động, nay 2 tab đó đã lazy hóa.
+            from ...shared.lazy_import import matplotlib_tk
+            Figure, FigureCanvasTkAgg = matplotlib_tk()
             fig = Figure(figsize=(9, 3.8), dpi=96, facecolor="#1e1e2e")
             ax  = fig.add_subplot(111, facecolor="#16162a")
             for spine in ax.spines.values():
